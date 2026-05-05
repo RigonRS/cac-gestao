@@ -301,6 +301,29 @@ async function renderDashboard() {
       </div>
     </div>
 
+    <div class="card" style="margin-top:20px">
+      <div class="card-header">
+        <h3><i class="bi bi-person-lines-fill me-2"></i>Processos por Responsável</h3>
+        <span style="font-size:12px;color:var(--text-muted)">${processosAbertos.length} processo(s) em aberto</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr))">
+        ${RESPONSAVEIS.map(r => {
+          const count = processosAbertos.filter(p => p.Responsavel === r).length;
+          return `<div style="text-align:center;padding:20px 16px;border-right:1px solid var(--border)">
+            <div style="font-size:28px;font-weight:700;color:var(--accent)">${count}</div>
+            <div style="font-size:12px;color:var(--text-muted);margin-top:4px">${esc(r)}</div>
+          </div>`;
+        }).join('')}
+        ${(() => {
+          const semResp = processosAbertos.filter(p => !p.Responsavel).length;
+          return semResp > 0 ? `<div style="text-align:center;padding:20px 16px">
+            <div style="font-size:28px;font-weight:700;color:var(--text-muted)">${semResp}</div>
+            <div style="font-size:12px;color:var(--text-muted);margin-top:4px">Sem responsável</div>
+          </div>` : '';
+        })()}
+      </div>
+    </div>
+
     ${simafVencimentos.length > 0 ? `
     <div class="card" style="margin-top:20px">
       <div class="card-header">
@@ -366,6 +389,7 @@ const RESPONSAVEIS = ['Andrieli', 'Matheus', 'Priscila', 'Simone'];
 async function renderClientesList() {
   document.getElementById('page-title').textContent = 'Clientes';
   const clientes = await App.getClientes();
+  clientes.sort((a, b) => (a.Title || '').localeCompare(b.Title || '', 'pt-BR'));
 
   const el = document.getElementById('page-content');
   el.innerHTML = `
@@ -390,7 +414,7 @@ async function renderClientesList() {
 function renderClientesRows(lista) {
   if (!lista.length) return `<tr><td colspan="7"><div class="empty-state"><i class="bi bi-people"></i><p>Nenhum cliente encontrado.</p><button class="btn btn-primary" onclick="navigate('clientes/novo')">Cadastrar primeiro cliente</button></div></td></tr>`;
   return lista.map(c => {
-    const s = validadeStatus(c.DataValidadeCR || null);
+    const s = validadeStatus(c.DataValidadeCR ? c.DataValidadeCR.split('T')[0] : null);
     const cats = (c.Categoria || '').split(',').filter(Boolean).map(ct => `<span class="badge badge-blue" style="margin-right:3px">${esc(ct.trim())}</span>`).join('');
     return `<tr>
       <td><a style="font-weight:600;cursor:pointer;color:var(--accent)" onclick="navigate('clientes/perfil',{id:'${c.id}'})">${esc(c.Title)}</a></td>
@@ -711,7 +735,7 @@ function renderPerfilDados(c) {
     <div class="form-section">
       <div class="form-section-title">CR e Categorias</div>
       <div class="form-body"><div class="info-grid">
-        ${row('N° CR', c.NumeroCR)} ${row('Validade CR', c.DataValidadeCR)}
+        ${row('N° CR', c.NumeroCR)} ${dateRow('Validade CR', 'DataValidadeCR')}
         ${row('Categorias', (c.Categoria||'').replace(/,/g,', '))}
       </div></div>
     </div>
@@ -719,11 +743,10 @@ function renderPerfilDados(c) {
     <div class="form-section">
       <div class="form-section-title">CTF — Caçador</div>
       <div class="form-body"><div class="info-grid">
-        ${dateRow('Data de Expedição CTF', 'DataExpedicaoCTF')}
         <div class="info-item"><label>Data de Validade CTF</label>
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <div class="value ${!c.DataValidadeCTF?'empty':''}">${c.DataValidadeCTF ? fmtDate(c.DataValidadeCTF.split('T')[0]) : 'Não informado'}</div>
-            ${c.DataExpedicaoCTF ? `<button class="btn btn-primary btn-sm" onclick="renovarCTF('${c.id}')"><i class="bi bi-arrow-clockwise"></i> Renovar +3m</button>` : ''}
+            <button class="btn btn-primary btn-sm" onclick="renovarCTF('${c.id}')"><i class="bi bi-arrow-clockwise"></i> Renovar +3m</button>
           </div>
         </div>
       </div></div>
@@ -2060,8 +2083,9 @@ async function renderValidades() {
     }
   });
 
-  itens.sort((a, b) => (a.dias ?? 9999) - (b.dias ?? 9999));
   window._validades_todos = itens;
+  window._validades_sortCol = 'data';
+  window._validades_sortDir = 1;
 
   const tiposUnicos = [...new Set(itens.map(i => i.tipo))].sort();
 
@@ -2100,7 +2124,13 @@ async function renderValidades() {
       </div>
       <div class="table-wrapper">
         <table>
-          <thead><tr><th>Cliente</th><th>Documento</th><th>Vencimento</th><th>Situação</th><th></th></tr></thead>
+          <thead><tr>
+            <th onclick="sortValidades('cliente')" style="cursor:pointer;user-select:none;white-space:nowrap">Cliente <span id="sort-icon-cliente"></span></th>
+            <th>Documento</th>
+            <th onclick="sortValidades('data')" style="cursor:pointer;user-select:none;white-space:nowrap">Vencimento <span id="sort-icon-data"></span></th>
+            <th onclick="sortValidades('dias')" style="cursor:pointer;user-select:none;white-space:nowrap">Situação <span id="sort-icon-dias"></span></th>
+            <th></th>
+          </tr></thead>
           <tbody id="validades-tbody"></tbody>
         </table>
       </div>
@@ -2138,6 +2168,21 @@ function filtrarValidades(limpar) {
       return true;
     });
   }
+
+  const sortCol = window._validades_sortCol || 'data';
+  const sortDir = window._validades_sortDir || 1;
+  itens.sort((a, b) => {
+    if (sortCol === 'cliente') return sortDir * (a.cliente || '').localeCompare(b.cliente || '', 'pt-BR');
+    return sortDir * ((a.dias ?? 9999) - (b.dias ?? 9999));
+  });
+  ['cliente', 'data', 'dias'].forEach(col => {
+    const sp = document.getElementById('sort-icon-' + col);
+    if (!sp) return;
+    const active = col === sortCol;
+    sp.innerHTML = active
+      ? `<i class="bi bi-sort-${sortDir === 1 ? 'up' : 'down'}" style="font-size:11px"></i>`
+      : `<i class="bi bi-sort-up" style="font-size:11px;opacity:0.2"></i>`;
+  });
 
   function cor(dias) {
     if (dias === null) return { bg:'badge-gray',   row:'' };
@@ -2178,6 +2223,16 @@ function filtrarValidades(limpar) {
       <td>${btnWa}</td>
     </tr>`;
   }).join('');
+}
+
+function sortValidades(col) {
+  if (window._validades_sortCol === col) {
+    window._validades_sortDir = -(window._validades_sortDir || 1);
+  } else {
+    window._validades_sortCol = col;
+    window._validades_sortDir = 1;
+  }
+  filtrarValidades();
 }
 
 // ============================================================
