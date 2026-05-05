@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CAC Gestão</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- ===================== TELA DE LOGIN ===================== -->
+  <div id="login-screen" style="display:flex">
+    <div class="login-card">
+      <div class="logo">🎯</div>
+      <h1>CAC Gestão</h1>
+      <p>Sistema de gestão de processos junto à Polícia Federal</p>
+      <button id="btn-login" class="btn-ms">
+        <svg width="20" height="20" viewBox="0 0 21 21" fill="none">
+          <rect x="1" y="1" width="9" height="9" fill="#F25022"/>
+          <rect x="11" y="1" width="9" height="9" fill="#7FBA00"/>
+          <rect x="1" y="11" width="9" height="9" fill="#00A4EF"/>
+          <rect x="11" y="11" width="9" height="9" fill="#FFB900"/>
+        </svg>
+        Entrar com conta Microsoft
+      </button>
+    </div>
+  </div>
+
+  <!-- ===================== TELA DE SETUP ===================== -->
+  <div id="setup-screen" style="display:none">
+    <div class="setup-card">
+      <div style="font-size:40px;margin-bottom:12px">⚙️</div>
+      <h2>Configurando o sistema</h2>
+      <p>Criando as listas de dados no SharePoint pela primeira vez.<br>Isso ocorre apenas uma vez e leva cerca de 1 minuto.</p>
+      <div class="spinner" style="margin:16px auto"></div>
+      <div id="setup-progress">Iniciando...</div>
+    </div>
+  </div>
+
+  <!-- ===================== APLICAÇÃO PRINCIPAL ===================== -->
+  <div id="app-shell" style="display:none">
+
+    <!-- SIDEBAR -->
+    <nav id="sidebar">
+      <div class="sidebar-header">
+        <div class="brand">🎯 CAC Gestão</div>
+        <div class="user-info" id="user-name"></div>
+      </div>
+
+      <nav>
+        <div class="nav-section">Principal</div>
+        <a class="nav-item" data-page="dashboard" onclick="navigate('dashboard')">
+          <i class="bi bi-speedometer2"></i> Dashboard
+        </a>
+        <a class="nav-item" data-page="clientes" onclick="navigate('clientes')">
+          <i class="bi bi-people-fill"></i> Clientes
+        </a>
+        <a class="nav-item" data-page="processos" onclick="navigate('processos')">
+          <i class="bi bi-folder2-open"></i> Processos
+        </a>
+        <div class="nav-section">Controle</div>
+        <a class="nav-item" data-page="validades" onclick="navigate('validades')">
+          <i class="bi bi-calendar-x"></i> Validades
+        </a>
+        <a class="nav-item" data-page="pagamentos" onclick="navigate('pagamentos')">
+          <i class="bi bi-cash-coin"></i> Pagamentos
+        </a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <button id="btn-logout" class="btn-logout">
+          <i class="bi bi-box-arrow-left"></i> Sair
+        </button>
+      </div>
+    </nav>
+
+    <!-- CONTEÚDO PRINCIPAL -->
+    <div id="main-content">
+      <header id="page-header">
+        <h2 id="page-title">Dashboard</h2>
+      </header>
+      <main id="page-content"></main>
+    </div>
+
+  </div><!-- /app-shell -->
+
+  <!-- OVERLAY DE LOADING -->
+  <div id="loading-overlay" style="display:none">
+    <div class="spinner"></div>
+  </div>
+
+  <!-- TOASTS (notificações) -->
+  <div id="toast-container"></div>
+
+  <!-- BIBLIOTECAS EXTERNAS -->
+  <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.20.0/lib/msal-browser.min.js"></script>
+
+  <!-- ARQUIVOS DO SISTEMA -->
+  <script src="config.js"></script>
+  <script src="data.js"></script>
+  <script src="graph.js"></script>
+  <script src="app.js"></script>
+
+</body>
+</html>
