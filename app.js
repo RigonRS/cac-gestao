@@ -2584,6 +2584,8 @@ if(!location.host.includes('pf.gov.br')){alert('Use este favorito na página do 
 var modal=document.querySelector('mat-dialog-container')||document.querySelector('[role="dialog"]')||document.querySelector('[class*="dialog"]')||document.body;
 function txt(el){
   if(!el)return '';
+  var pdl=el.querySelector('.ui-dropdown-label:not(.ui-placeholder)');
+  if(pdl){var pdv=pdl.textContent.trim();if(pdv)return pdv;}
   var ms=el.querySelector('[class*="select-value-text"],[class*="select-min-line"]');
   if(ms&&ms.textContent.trim())return ms.textContent.trim();
   var ns=el.querySelector('select:not([aria-hidden="true"])');
@@ -2601,7 +2603,7 @@ function find(ls,n){
     var t=(el.textContent||'').trim();
     if(arr.some(function(l){return t===l;})){
       if(count===(n||0)){
-        var mff=el.closest('mat-form-field,[class*="form-field"]');
+        var mff=el.closest('mat-form-field,[class*="form-field"],.labeled-dropdown,.md-inputfield');
         if(mff){var v=txt(mff);if(v&&v!==t)return v;}
         var node=el;
         for(var lvl=0;lvl<6;lvl++){node=node.parentElement;if(!node||node===modal)break;var v2=txt(node);if(v2&&v2!==t)return v2;}
