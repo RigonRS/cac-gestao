@@ -56,6 +56,15 @@ function addDays(isoDate, days) {
   d.setDate(d.getDate() + days);
   return d.toISOString().split('T')[0];
 }
+function addMonths(isoDate, months) {
+  const d = new Date(isoDate + 'T00:00:00');
+  d.setMonth(d.getMonth() + months);
+  return d.toISOString().split('T')[0];
+}
+function toTitleCase(s) {
+  if (!s) return '';
+  return s.trim().toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+}
 // Calcula quanto foi recebido e quanto está pendente num processo
 function calcPagamento(p) {
   const hoje = new Date(); hoje.setHours(0,0,0,0);
@@ -569,41 +578,41 @@ async function salvarCliente(e, id) {
   if (fd.get('cat_cacador'))      cats.push('Caçador');
 
   const fields = {
-    Title:            fd.get('NomeCompleto').trim(),
+    Title:            toTitleCase(fd.get('NomeCompleto')),
     CPF:              fd.get('CPF'),
     SenhaGOV:         fd.get('SenhaGOV'),
     NumeroCR:         fd.get('NumeroCR'),
     DataValidadeCR:   fd.get('DataValidadeCR'),
     RG:               fd.get('RG'),
-    OrgaoEmissor:     fd.get('OrgaoEmissor'),
+    OrgaoEmissor:     toTitleCase(fd.get('OrgaoEmissor')),
     UFDoc:            fd.get('UFDoc').toUpperCase(),
     DataNascimento:   fd.get('DataNascimento') || null,
     DataExpedicaoRG:  fd.get('DataExpedicaoRG') || null,
     DataValidadeRGouCNH: fd.get('DataValidadeRGouCNH') || null,
-    Nacionalidade:    fd.get('Nacionalidade'),
-    Naturalidade:     fd.get('Naturalidade'),
+    Nacionalidade:    toTitleCase(fd.get('Nacionalidade')),
+    Naturalidade:     toTitleCase(fd.get('Naturalidade')),
     UFNaturalidade:   fd.get('UFNaturalidade').toUpperCase(),
-    Profissao:        fd.get('Profissao'),
+    Profissao:        toTitleCase(fd.get('Profissao')),
     Celular:          fd.get('Celular'),
     Email:            fd.get('Email'),
-    NomeMae:          fd.get('NomeMae'),
-    NomePai:          fd.get('NomePai'),
+    NomeMae:          toTitleCase(fd.get('NomeMae')),
+    NomePai:          toTitleCase(fd.get('NomePai')),
     Categoria:        cats.join(','),
     DataExpedicaoCTF: fd.get('DataExpedicaoCTF') || null,
     DataValidadeCTF:  fd.get('DataValidadeCTF') || null,
     CEP1:             fd.get('CEP1'),
-    Endereco1:        fd.get('Endereco1'),
+    Endereco1:        toTitleCase(fd.get('Endereco1')),
     Numero1:          fd.get('Numero1'),
-    Complemento1:     fd.get('Complemento1'),
-    Bairro1:          fd.get('Bairro1'),
-    Cidade1:          fd.get('Cidade1'),
+    Complemento1:     toTitleCase(fd.get('Complemento1')),
+    Bairro1:          toTitleCase(fd.get('Bairro1')),
+    Cidade1:          toTitleCase(fd.get('Cidade1')),
     UF1Endereco:      fd.get('UF1Endereco').toUpperCase(),
     CEP2:             fd.get('CEP2'),
-    Endereco2:        fd.get('Endereco2'),
+    Endereco2:        toTitleCase(fd.get('Endereco2')),
     Numero2:          fd.get('Numero2'),
-    Complemento2:     fd.get('Complemento2'),
-    Bairro2:          fd.get('Bairro2'),
-    Cidade2:          fd.get('Cidade2'),
+    Complemento2:     toTitleCase(fd.get('Complemento2')),
+    Bairro2:          toTitleCase(fd.get('Bairro2')),
+    Cidade2:          toTitleCase(fd.get('Cidade2')),
     UF2Endereco:      fd.get('UF2Endereco').toUpperCase(),
   };
 
@@ -714,7 +723,7 @@ function renderPerfilDados(c) {
         <div class="info-item"><label>Data de Validade CTF</label>
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <div class="value ${!c.DataValidadeCTF?'empty':''}">${c.DataValidadeCTF ? fmtDate(c.DataValidadeCTF.split('T')[0]) : 'Não informado'}</div>
-            ${c.DataExpedicaoCTF ? `<button class="btn btn-outline btn-sm" onclick="renovarCTF('${c.id}')"><i class="bi bi-arrow-clockwise"></i> Renovar +90d</button>` : ''}
+            ${c.DataExpedicaoCTF ? `<button class="btn btn-primary btn-sm" onclick="renovarCTF('${c.id}')"><i class="bi bi-arrow-clockwise"></i> Renovar +3m</button>` : ''}
           </div>
         </div>
       </div></div>
@@ -741,7 +750,10 @@ function renderPerfilDados(c) {
         ${row('Complemento', c.Complemento2)} ${row('Bairro', c.Bairro2)}
         ${row('Cidade', c.Cidade2)} ${row('UF', c.UF2Endereco)}
       </div></div>
-    </div>` : ''}
+    </div>` : `<div class="form-section">
+      <div class="form-section-title">2° Endereço</div>
+      <div class="form-body"><p style="color:var(--text-muted);font-style:italic;margin:0">Não cadastrado</p></div>
+    </div>`}
     <div class="form-section" id="secao-simaf">
       <div class="form-section-title" style="display:flex;align-items:center;justify-content:space-between">
         <span>SIMAF</span>
@@ -2175,11 +2187,10 @@ async function renderPagamentos() {
   document.getElementById('page-title').textContent = 'Pagamentos Pendentes';
   const [clientes, processos] = await Promise.all([App.getClientes(), App.getProcessos()]);
 
-  // Mostra: processos Parcelado (sempre pendentes por natureza) OU processos sem data de pagamento
   const pendentes = processos.filter(p =>
     p.ValorProcesso &&
-    !STATUS_FECHADOS.includes(p.Status) &&
-    (p.TipoPagamento === 'Parcelado' || !p.DataPagamento)
+    p.TipoPagamento === 'Parcelado' &&
+    calcPagamento(p).pendente > 0
   );
 
   const porCliente = {};
@@ -2213,7 +2224,7 @@ async function renderPagamentos() {
       </div>
       <div class="card-body" style="padding:0">
         ${grupos.map(g => {
-          const total = g.processos.reduce((s, p) => s + (Number(p.ValorProcesso) || 0), 0);
+          const total = g.processos.reduce((s, p) => s + calcPagamento(p).pendente, 0);
           const dataVenc = g.processos.map(p => p.DataVencimentoParcelas || p.DataPrazo || '').filter(Boolean).sort()[0] || '';
           const celularLimpo = (g.celular || '').replace(/\D/g, '');
           const msgWa = `Olá ${esc(g.nome)}, verificamos em nosso sistema que constam valores em aberto referentes aos serviços prestados no valor de ${fmtMoeda(total)}${dataVenc ? ' com vencimento para ' + fmtDate(dataVenc) : ''}.`;
@@ -2231,7 +2242,7 @@ async function renderPagamentos() {
             <div style="padding-left:12px;border-left:3px solid var(--border)">
               ${g.processos.map(p => `<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:13px">
                 <a style="cursor:pointer;color:var(--accent)" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.TipoProcesso||'—')} ${p.NumeroProtocolo?'#'+p.NumeroProtocolo:''}</a>
-                <span style="font-weight:600">${fmtMoeda(p.ValorProcesso)}</span>
+                <span style="font-weight:600">${fmtMoeda(calcPagamento(p).pendente)}</span>
               </div>`).join('')}
             </div>
           </div>`;
@@ -2441,7 +2452,7 @@ async function renovarCTF(clienteId) {
   showLoading();
   try {
     const hoje = new Date().toISOString().split('T')[0];
-    const novaValidade = addDays(hoje, 90);
+    const novaValidade = addMonths(hoje, 3);
     await App.graph.updateItem(CONFIG.listas.clientes, clienteId, { DataValidadeCTF: novaValidade });
     App.invalidateCache('clientes');
     toast('CTF renovado! Nova validade: ' + fmtDate(novaValidade), 'success');
