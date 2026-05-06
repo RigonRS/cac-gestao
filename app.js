@@ -179,6 +179,7 @@ async function renderPage() {
       case 'processos/detalhe':    await renderProcessoDetalhe(params.id); break;
       case 'validades':            await renderValidades(); break;
       case 'pagamentos':           await renderPagamentos(); break;
+      case 'orcamento/novo':       await renderOrcamentoForm(params.clienteId); break;
       default:                     await renderDashboard();
     }
   } catch (e) {
@@ -388,6 +389,23 @@ const STATUS_PROCESSO = [
 ];
 const STATUS_FECHADOS = ['Deferido', 'Indeferido'];
 const RESPONSAVEIS = ['Andrieli', 'Matheus', 'Priscila', 'Simone'];
+const VALORES_PROCESSO = {
+  'Aquisição de Arma SIGMA':                   940.00,
+  'Aquisição de Arma PF':                      1117.00,
+  'Atualização de Documento de Identificação': 121.00,
+  'Concessão/Renovação de CR':                 1843.00,
+  'Guia de Tráfego':                           176.00,
+  'Alteração de Endereço':                     450.00,
+  'Inclusão de Atividade':                     567.00,
+  'Exclusão de Atividade':                     567.00,
+  'Mudança de Acervo':                         644.00,
+  'Renovação de CRAF':                         588.50,
+  'Segunda via de CRAF':                       412.50,
+  'Transferência de Arma SIGMA x SINARM':      1117.00,
+  'Transferência de Arma SINARM x SINARM':     1117.00,
+  'Transferência de Arma SIGMA x SIGMA':       1117.00,
+  'Transferência de Arma SINARM x SIGMA':      1117.00,
+};
 
 // ============================================================
 // CLIENTES — LISTA
@@ -726,6 +744,7 @@ async function renderClientePerfil(id, tab = 'dados') {
       <div class="btn-group" style="margin-left:auto">
         <button class="btn btn-outline btn-sm" onclick="navigate('clientes/editar',{id:'${id}'})"><i class="bi bi-pencil"></i> Editar</button>
         <button class="btn btn-primary btn-sm" onclick="navigate('processos/novo',{clienteId:'${id}'})"><i class="bi bi-plus-lg"></i> Novo Processo</button>
+        <button class="btn btn-sm" style="background:#f97316;color:#fff;border:1px solid #ea580c" onclick="navigate('orcamento/novo',{clienteId:'${id}'})"><i class="bi bi-calculator"></i> Novo Orçamento</button>
       </div>
     </div>
 
@@ -1963,12 +1982,6 @@ async function renderProcessoDetalhe(id) {
   const dadosEsp  = JSON.parse(processo.DadosEspecificosJSON || '{}');
   const b = statusBadge(processo.Status);
 
-  const showDataPagDetInic = (() => {
-    const tp = processo.TipoPagamento || 'À vista';
-    if (tp !== 'Parcelado') return true;
-    return !!(processo.ValorEntrada && Number(processo.ValorEntrada) > 0);
-  })();
-
   const progTotal    = checklist.length;
   const progConcluido = checklist.filter(i => i.concluido).length;
   const progPct = progTotal ? Math.round(progConcluido / progTotal * 100) : 0;
@@ -2035,7 +2048,6 @@ async function renderProcessoDetalhe(id) {
           </div>
         </div>` : ''}
 
-        <div id="dados-pagamento-wrapper">${renderDadosPagamento(processo)}</div>
       </div>
 
       <div>
@@ -2080,51 +2092,6 @@ async function renderProcessoDetalhe(id) {
                 <i class="bi bi-clock-history"></i> Registrar Status do Processo
               </button>
             </div>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-header"><h3><i class="bi bi-cash-coin me-2"></i>Pagamento</h3></div>
-          <div class="card-body">
-            <form onsubmit="salvarPagamento(event,'${id}')">
-              <label>Valor do Processo (R$)</label>
-              <input type="number" name="ValorProcesso" step="0.01" min="0" value="${processo.ValorProcesso||''}" style="margin-bottom:10px" oninput="calcularParcelasDetalhe()" placeholder="0,00" />
-              <label>Tipo de Pagamento</label>
-              <div class="checkbox-group" style="margin-bottom:10px">
-                <label class="checkbox-item"><input type="radio" name="TipoPagamento" value="À vista" ${(!processo.TipoPagamento||processo.TipoPagamento==='À vista')?'checked':''} onchange="onTipoPagamentoDetalheChange(this.value)" /> À vista</label>
-                <label class="checkbox-item"><input type="radio" name="TipoPagamento" value="Parcelado" ${processo.TipoPagamento==='Parcelado'?'checked':''} onchange="onTipoPagamentoDetalheChange(this.value)" /> Parcelado</label>
-              </div>
-              <label>Forma de Pagamento</label>
-              <select name="FormaPagamento" style="margin-bottom:8px" onchange="onFormaPagDetalhe(this.value)">
-                <option value="">Selecione...</option>
-                <option value="Pix" ${processo.FormaPagamento==='Pix'?'selected':''}>Pix</option>
-                <option value="Dinheiro" ${processo.FormaPagamento==='Dinheiro'?'selected':''}>Dinheiro</option>
-                <option value="Cartão" ${processo.FormaPagamento==='Cartão'?'selected':''}>Cartão</option>
-              </select>
-              <div id="pag-data-pag-det" style="display:${showDataPagDetInic?'':'none'};margin-bottom:10px">
-                <label>Data de Pagamento</label>
-                <input type="date" name="DataPagamento" value="${processo.DataPagamento?processo.DataPagamento.split('T')[0]:''}" style="margin-top:4px" />
-              </div>
-              <div id="campos-parcelado-detalhe" style="display:${processo.TipoPagamento==='Parcelado'?'block':'none'}">
-                <label>Quantas Vezes</label>
-                <select name="NumeroParcelas" style="margin-bottom:10px" onchange="calcularParcelasDetalhe()">
-                  <option value="">Selecione...</option>
-                  ${[1,2,3,4,5,6,7,8,9,10,11,12].map(n=>`<option value="${n}" ${processo.NumeroParcelas==n?'selected':''}>${n}x</option>`).join('')}
-                </select>
-                <label>Valor de Entrada (R$)</label>
-                <input type="number" name="ValorEntrada" step="0.01" min="0" value="${processo.ValorEntrada||''}" style="margin-bottom:10px" oninput="calcularParcelasDetalhe();onValorEntradaDetalheChange(this.value)" placeholder="0,00" />
-                <label>Valor das Parcelas (R$)</label>
-                <input type="text" id="valor-parcelas-display-det" readonly value="${processo.ValorParcelas ? fmtMoeda(processo.ValorParcelas) : ''}" style="margin-bottom:10px" placeholder="Calculado automaticamente" />
-                <input type="hidden" name="ValorParcelas" id="valor-parcelas-input-det" value="${processo.ValorParcelas||''}" />
-                <label>Data de Vencimento das Parcelas</label>
-                <input type="date" name="DataVencimentoParcelas" value="${processo.DataVencimentoParcelas?processo.DataVencimentoParcelas.split('T')[0]:''}" style="margin-bottom:10px" />
-              </div>
-              <button type="submit" class="btn btn-outline" style="width:100%"><i class="bi bi-floppy"></i> Salvar Pagamento</button>
-            </form>
-            ${processo.ValorProcesso ? `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);font-size:13px">
-              <div style="display:flex;justify-content:space-between"><span style="color:var(--text-muted)">Valor total:</span><strong>${fmtMoeda(processo.ValorProcesso)}</strong></div>
-              ${processo.TipoPagamento==='Parcelado' && processo.NumeroParcelas ? `<div style="display:flex;justify-content:space-between"><span style="color:var(--text-muted)">${processo.NumeroParcelas}x de:</span><strong>${fmtMoeda(processo.ValorParcelas)}</strong></div>` : ''}
-            </div>` : ''}
           </div>
         </div>
 
@@ -2641,13 +2608,14 @@ async function renderPagamentos() {
                 const itens = getItensPendentesProcesso(p);
                 const totalProc = itens.reduce((s, i) => s + i.valor, 0);
                 const hasMultiple = itens.length > 1;
+                const hasVencido = itens.some(i => i.vencido);
                 return `<div style="padding:6px 0;font-size:13px${pi < g.processos.length-1 ? ';border-bottom:1px solid var(--border)' : ''}">
                   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px">
                     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
                       <a style="cursor:pointer;color:var(--accent)" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.TipoProcesso||'—')}${modelo ? ` <span style="color:var(--text-muted);font-size:12px">· ${esc(modelo)}</span>` : ''}</a>
                       ${hasMultiple ? `<button id="toggle-parc-${p.id}" class="btn btn-ghost btn-sm" style="padding:0 6px;font-size:11px" onclick="toggleParcelasProcesso('${p.id}')"><i class="bi bi-chevron-down"></i> Ver parcelas</button>` : ''}
                     </div>
-                    <strong style="font-size:12px;color:var(--danger)">${fmtMoeda(totalProc)}</strong>
+                    <strong style="font-size:12px;color:${hasVencido ? 'var(--danger)' : '#1f2937'}">${fmtMoeda(totalProc)}</strong>
                   </div>
                   <div id="parcelas-${p.id}" style="display:${hasMultiple ? 'none' : ''}">
                     ${itens.map(i => `<div style="display:flex;justify-content:space-between;padding:1px 0 1px 8px;font-size:12px${i.vencido?';color:#dc2626':''}">
@@ -2662,6 +2630,34 @@ async function renderPagamentos() {
         }).join('')}
       </div>
     </div>`;
+
+  const gruPendentes = processos.filter(p => !p.GruPaga && !STATUS_FECHADOS.includes(p.Status));
+  if (gruPendentes.length > 0) {
+    const porClienteGru = {};
+    gruPendentes.forEach(p => {
+      const cid = String(p.ClienteId);
+      if (!porClienteGru[cid]) porClienteGru[cid] = { nome: p.ClienteNome, clienteId: cid, processos: [] };
+      porClienteGru[cid].processos.push(p);
+    });
+    const gruGrupos = Object.values(porClienteGru).sort((a,b) => (a.nome||'').localeCompare(b.nome||''));
+    el.innerHTML += `<div class="card" style="margin-top:20px">
+      <div class="card-header">
+        <h3><i class="bi bi-receipt me-2"></i>Pagamentos de GRU</h3>
+        <span style="font-size:12px;color:var(--text-muted)">${gruPendentes.length} processo(s)</span>
+      </div>
+      <div class="card-body" style="padding:0">
+        ${gruGrupos.map(g => `<div style="padding:12px 20px;border-bottom:1px solid var(--border)">
+          <a style="font-size:14px;font-weight:700;cursor:pointer;color:var(--accent)" onclick="navigate('clientes/perfil',{id:'${g.clienteId}'})">${esc(g.nome)}</a>
+          <div style="padding-left:12px;border-left:3px solid var(--border);margin-top:6px">
+            ${g.processos.map(p => `<div style="padding:3px 0;font-size:13px;display:flex;justify-content:space-between;align-items:center">
+              <a style="cursor:pointer;color:var(--accent)" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.TipoProcesso||'—')}</a>
+              <span class="badge badge-orange">GRU Pendente</span>
+            </div>`).join('')}
+          </div>
+        </div>`).join('')}
+      </div>
+    </div>`;
+  }
 }
 
 // ============================================================
@@ -3093,6 +3089,125 @@ async function fazerLogin() {
 
 function fazerLogout() {
   App.msal.logoutPopup({ account: App.account });
+}
+
+// ============================================================
+// ORÇAMENTO
+// ============================================================
+async function renderOrcamentoForm(clienteId = null) {
+  document.getElementById('page-title').textContent = 'Novo Orçamento';
+  const clientes = await App.getClientes();
+  const sorted = [...clientes].sort((a,b) => (a.Title||'').localeCompare(b.Title||''));
+
+  document.getElementById('page-content').innerHTML = `
+    <div class="card">
+      <div class="card-header"><h3><i class="bi bi-calculator me-2"></i>Novo Orçamento</h3></div>
+      <div class="card-body">
+        <div style="margin-bottom:16px">
+          <label>Cliente</label>
+          <select id="orc-cliente-sel" style="margin-top:4px" onchange="atualizarOrcamento()">
+            <option value="">Selecione o cliente...</option>
+            ${sorted.map(c => `<option value="${esc(c.id)}|${esc(c.Title)}|${esc(c.Celular||'')}" ${String(c.id)===String(clienteId)?'selected':''}>${esc(c.Title)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="card" style="margin-bottom:16px">
+          <div class="card-header"><h3>Serviços</h3></div>
+          <div class="card-body" style="padding:0">
+            ${TIPOS_PROCESSO.map((tipo, i) => {
+              const valor = VALORES_PROCESSO[tipo] || 0;
+              return `<div style="padding:10px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+                <label class="checkbox-item" style="flex:1;min-width:200px;margin:0;cursor:pointer">
+                  <input type="checkbox" id="orc-chk-${i}" onchange="onOrcItemChange(${i})" />
+                  ${esc(tipo)}
+                </label>
+                <div id="orc-qty-wrap-${i}" style="display:none;align-items:center;gap:8px">
+                  <select id="orc-qty-${i}" style="width:65px" onchange="atualizarOrcamento()">
+                    ${[...Array(20)].map((_,n) => `<option value="${n+1}">${n+1}x</option>`).join('')}
+                  </select>
+                  <span style="font-size:12px;color:var(--text-muted)">${fmtMoeda(valor)} / un.</span>
+                </div>
+                <span id="orc-sub-${i}" style="font-weight:600;font-size:13px;min-width:90px;text-align:right;color:var(--accent)"></span>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>
+        <div id="orc-total-div" style="display:none;background:#f9fafb;border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:16px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <span style="font-weight:700;font-size:15px">Total</span>
+            <strong id="orc-total-val" style="font-size:20px;color:var(--accent)"></strong>
+          </div>
+          <div style="font-size:13px;color:var(--text-muted)">
+            À vista (5% desconto): <strong id="orc-avista-val" style="color:var(--success)"></strong>
+            &nbsp;·&nbsp; Cartão: em até 10x com juros da máquina
+          </div>
+        </div>
+        <div style="text-align:right">
+          <a id="orc-wa-btn" class="btn btn-whatsapp" href="#" target="_blank" style="pointer-events:none;opacity:0.45">
+            <i class="bi bi-whatsapp"></i> Enviar Orçamento ao Cliente
+          </a>
+        </div>
+      </div>
+    </div>`;
+
+  atualizarOrcamento();
+}
+
+function onOrcItemChange(i) {
+  const wrap = document.getElementById(`orc-qty-wrap-${i}`);
+  const checked = document.getElementById(`orc-chk-${i}`)?.checked;
+  if (wrap) wrap.style.display = checked ? 'flex' : 'none';
+  if (!checked) { const sub = document.getElementById(`orc-sub-${i}`); if (sub) sub.textContent = ''; }
+  atualizarOrcamento();
+}
+
+function atualizarOrcamento() {
+  const sel = document.getElementById('orc-cliente-sel');
+  const parts = (sel?.value || '').split('|');
+  const celular = parts[2] || '';
+
+  let total = 0;
+  const linhas = [];
+
+  TIPOS_PROCESSO.forEach((tipo, i) => {
+    const chk = document.getElementById(`orc-chk-${i}`);
+    const sub = document.getElementById(`orc-sub-${i}`);
+    if (!chk?.checked) return;
+    const qtd = parseInt(document.getElementById(`orc-qty-${i}`)?.value || '1');
+    const valor = VALORES_PROCESSO[tipo] || 0;
+    const subtotal = qtd * valor;
+    total += subtotal;
+    if (sub) sub.textContent = fmtMoeda(subtotal);
+    linhas.push({ tipo, qtd, valor, subtotal });
+  });
+
+  const totalDiv  = document.getElementById('orc-total-div');
+  const totalVal  = document.getElementById('orc-total-val');
+  const avistaVal = document.getElementById('orc-avista-val');
+  const waBtn     = document.getElementById('orc-wa-btn');
+
+  if (linhas.length > 0) {
+    if (totalDiv)  totalDiv.style.display = '';
+    if (totalVal)  totalVal.textContent   = fmtMoeda(total);
+    if (avistaVal) avistaVal.textContent  = fmtMoeda(total * 0.95);
+  } else {
+    if (totalDiv) totalDiv.style.display = 'none';
+  }
+
+  const celularLimpo = celular.replace(/\D/g, '');
+  if (linhas.length > 0 && celularLimpo) {
+    const msg =
+      'Segue valores de orçamento referente aos serviços solicitados:\n\n' +
+      linhas.map(l => {
+        const unStr  = l.valor.toLocaleString('pt-BR', { style:'currency', currency:'BRL' });
+        const subStr = l.subtotal.toLocaleString('pt-BR', { style:'currency', currency:'BRL' });
+        return l.qtd > 1 ? `• ${l.tipo} (${l.qtd}x ${unStr}): ${subStr}` : `• ${l.tipo}: ${subStr}`;
+      }).join('\n') +
+      `\n\nTotal: ${total.toLocaleString('pt-BR', { style:'currency', currency:'BRL' })}` +
+      `\nFormas de pagamento: à vista com 5% de desconto (${(total*0.95).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}) ou cartão de crédito em até 10x com acréscimo dos juros da máquina.`;
+    if (waBtn) { waBtn.href = `https://wa.me/55${celularLimpo}?text=${encodeURIComponent(msg)}`; waBtn.style.pointerEvents = ''; waBtn.style.opacity = '1'; }
+  } else {
+    if (waBtn) { waBtn.href = '#'; waBtn.style.pointerEvents = 'none'; waBtn.style.opacity = '0.45'; }
+  }
 }
 
 // ============================================================
