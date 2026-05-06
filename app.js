@@ -407,6 +407,13 @@ const VALORES_PROCESSO = {
   'Transferência de Arma SINARM x SIGMA':      1117.00,
 };
 
+const CERTIDOES_CONFIG = [
+  { keyword: 'Federal',   label: 'Justiça Federal (TRF4)',   url: 'https://www2.trf4.jus.br/trf4/processos/certidao/index.php' },
+  { keyword: 'Estadual',  label: 'Justiça Estadual (TJRS)',  url: 'https://www.tjrs.jus.br/novo/processos-e-servicos/servicos-processuais/emissao-de-antecedentes-e-certidoes/' },
+  { keyword: 'Militar',   label: 'Justiça Militar (STM)',    url: 'https://www.stm.jus.br/servicos-ao-cidadao/atendimentoaocidadao/certidao-negativa' },
+  { keyword: 'Eleitoral', label: 'Crimes Eleitorais (TSE)',  url: 'https://www.tse.jus.br/servicos-eleitorais/autoatendimento-eleitoral#/' },
+];
+
 // ============================================================
 // CLIENTES — LISTA
 // ============================================================
@@ -1972,6 +1979,37 @@ async function salvarProcesso(e) {
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
+async function abrirCertidao(keyword) {
+  const cfg = CERTIDOES_CONFIG.find(c => c.keyword === keyword);
+  if (!cfg) return;
+  const p = window._processoDetalhe;
+  if (!p) return;
+  showLoading();
+  try {
+    const c = await App.graph.getItem(CONFIG.listas.clientes, p.ClienteId);
+    const data = {
+      cpf:            c.CPF || '',
+      nome:           c.Title || '',
+      dataNascimento: c.DataNascimento ? c.DataNascimento.split('T')[0] : '',
+      nomeMae:        c.NomeMae || '',
+      nomePai:        c.NomePai || '',
+      rg:             c.RG || '',
+      orgaoEmissor:   c.OrgaoEmissor || '',
+      ufRG:           c.UFDoc || '',
+      endereco:       c.Endereco1 || '',
+      numero:         c.Numero1 || '',
+      complemento:    c.Complemento1 || '',
+      bairro:         c.Bairro1 || '',
+      cidade:         c.Cidade1 || '',
+      uf:             c.UF1Endereco || '',
+      cep:            c.CEP1 || '',
+    };
+    try { await navigator.clipboard.writeText(JSON.stringify(data)); } catch(e) {}
+    window.open(cfg.url, '_blank');
+    toast(`Dados de ${data.nome || data.cpf} copiados. Use o bookmarklet no site.`, 'info');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
 // ============================================================
 // PROCESSOS — DETALHE
 // ============================================================
@@ -1985,6 +2023,7 @@ async function renderProcessoDetalhe(id) {
   const progTotal    = checklist.length;
   const progConcluido = checklist.filter(i => i.concluido).length;
   const progPct = progTotal ? Math.round(progConcluido / progTotal * 100) : 0;
+  const temCertidoes = checklist.some(item => CERTIDOES_CONFIG.some(c => item.nome.includes(c.keyword)));
 
   const statusOpts = STATUS_PROCESSO
     .map(s => `<option value="${s}" ${processo.Status===s?'selected':''}>${s}</option>`).join('');
@@ -2015,18 +2054,28 @@ async function renderProcessoDetalhe(id) {
       <div>
         ${checklist.length > 0 ? `
         <div class="card" style="margin-bottom:20px">
-          <div class="card-header"><h3><i class="bi bi-list-check me-2"></i>Checklist</h3></div>
+          <div class="card-header">
+            <h3><i class="bi bi-list-check me-2"></i>Checklist</h3>
+            ${temCertidoes ? `<button class="btn btn-ghost btn-sm" onclick="togglePainelCertidoes()" title="Instalar bookmarklet de certidões"><i class="bi bi-bookmark-plus"></i></button>` : ''}
+          </div>
+          ${temCertidoes ? `<div id="painel-certidoes" style="display:none;border-top:1px solid var(--border)"></div>` : ''}
           <div class="card-body">
             <div class="checklist-progress">
               <div class="progress-bar-wrap"><div class="progress-bar" style="width:${progPct}%"></div></div>
               <span class="progress-text">${progConcluido}/${progTotal}</span>
             </div>
-            ${checklist.map((item, i) => `
+            ${checklist.map((item, i) => {
+              const certCfg = CERTIDOES_CONFIG.find(c => item.nome.includes(c.keyword));
+              return `
               <div class="checklist-item ${item.concluido?'done':''}" id="clp-${i}">
                 <input type="checkbox" ${item.concluido?'checked':''} onchange="atualizarChecklistItem('${id}',${i},this.checked,document.getElementById('clpobs-${i}').value)" />
-                <div class="checklist-nome">${esc(item.nome)}</div>
+                <div class="checklist-nome" style="display:flex;align-items:center;gap:6px">
+                  <span>${esc(item.nome)}</span>
+                  ${certCfg ? `<button onclick="abrirCertidao('${certCfg.keyword}')" class="btn btn-ghost btn-xs" style="font-size:11px;padding:1px 7px;height:auto;white-space:nowrap" title="Abrir site e copiar dados do cliente"><i class="bi bi-box-arrow-up-right"></i> Emitir</button>` : ''}
+                </div>
                 <div class="checklist-obs"><input type="text" id="clpobs-${i}" value="${esc(item.observacao||'')}" placeholder="Observação..." onblur="atualizarChecklistItem('${id}',${i},document.querySelector('#clp-${i} input[type=checkbox]').checked,this.value)" /></div>
-              </div>`).join('')}
+              </div>`;
+            }).join('')}
           </div>
         </div>` : ''}
 
@@ -3367,6 +3416,113 @@ function togglePainelSINARM() {
         </div>
       </div>`;
     document.getElementById('bm-drag-link').href = getBookmarkletHref();
+    painel.style.display = '';
+  } else {
+    painel.style.display = 'none';
+  }
+}
+
+const _BM_CERTIDOES = `(async function(){
+  var d={};
+  try{var raw=(await navigator.clipboard.readText()).trim();var j=JSON.parse(raw);if(j.cpf)d=j;}catch(e){}
+  if(!d.cpf){var manual=prompt('CPF do cliente:');if(!manual)return;d={cpf:manual.trim()};}
+  var cpfD=(d.cpf||'').replace(/\\D/g,'');
+  function dateISO(iso){if(!iso)return'';var p=iso.split('-');return p[2]+'/'+p[1]+'/'+p[0];}
+  function fillInput(el,v){
+    try{Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set.call(el,v);}catch(e){el.value=v;}
+    ['input','change','blur'].forEach(function(ev){el.dispatchEvent(new Event(ev,{bubbles:true}));});el.focus();
+  }
+  function byAttr(k){
+    var inps=document.querySelectorAll('input:not([type=hidden]):not([type=checkbox]):not([type=radio]),textarea');
+    for(var el of inps){var a=[el.id,el.name,el.placeholder,el.getAttribute('ng-model')||'',el.getAttribute('formcontrolname')||'',el.getAttribute('aria-label')||''].join(' ').toLowerCase();if(a.includes(k))return el;}
+    return null;
+  }
+  function byLabel(k){
+    var nodes=document.querySelectorAll('label,th,td,span,div,p');
+    for(var nd of nodes){
+      if(nd.childElementCount===0&&nd.textContent.trim().toLowerCase().includes(k)){
+        var wrap=nd.closest('[class*="form"],[class*="field"],[class*="group"],[class*="col"],tr');
+        if(wrap){var i=wrap.querySelector('input:not([type=hidden]):not([type=checkbox]),textarea');if(i)return i;}
+        var sib=nd.nextElementSibling;
+        if(sib){var i=sib.tagName==='INPUT'?sib:sib.querySelector('input');if(i)return i;}
+      }
+    }
+    return null;
+  }
+  function tryFill(el,v,label){if(el&&v){fillInput(el,v);ok.push(label);}else if(!el)miss.push(label);}
+  var ok=[],miss=[];
+  var h=location.hostname;
+  if(h.includes('trf4')){
+    tryFill(byAttr('cpf')||byLabel('cpf'),d.cpf,'CPF');
+    tryFill(byAttr('nasc')||byLabel('nascimento'),dateISO(d.dataNascimento),'DataNasc');
+  }else if(h.includes('tjrs')){
+    tryFill(byAttr('nome')||byLabel('nome'),d.nome,'Nome');
+    tryFill(byAttr('cpf')||byLabel('cpf'),d.cpf,'CPF');
+    tryFill(byAttr('mae')||byLabel('m\\u00e3e')||byLabel('mae'),d.nomeMae,'NomeMae');
+    tryFill(byAttr('pai')||byLabel('pai'),d.nomePai,'NomePai');
+    tryFill(byAttr('nasc')||byLabel('nascimento'),dateISO(d.dataNascimento),'DataNasc');
+    tryFill(byAttr('rg')||byLabel('identidade')||byLabel('rg'),d.rg,'RG');
+    tryFill(byAttr('orgao')||byLabel('expedidor')||byLabel('emissor'),d.orgaoEmissor,'OrgaoEmissor');
+    tryFill(byAttr('endereco')||byAttr('logradouro')||byLabel('endere\\u00e7o')||byLabel('logradouro'),(d.endereco+(d.numero?' '+d.numero:'')+(d.complemento?' '+d.complemento:'')).trim(),'Endereco');
+    tryFill(byAttr('bairro')||byLabel('bairro'),d.bairro,'Bairro');
+    tryFill(byAttr('cidade')||byAttr('municipio')||byLabel('cidade')||byLabel('munic\\u00edpio'),d.cidade,'Cidade');
+  }else if(h.includes('stm')){
+    tryFill(byAttr('nome')||byLabel('nome'),d.nome,'Nome');
+    tryFill(byAttr('mae')||byLabel('m\\u00e3e')||byLabel('mae'),d.nomeMae,'NomeMae');
+    var cpfEl=byAttr('cpf')||byLabel('cpf');
+    if(cpfEl){
+      var row=cpfEl.closest('tr,[class*="row"],[class*="group"],[class*="field"]');
+      var cpfInps=row?Array.from(row.querySelectorAll('input:not([type=hidden])')):[];
+      if(cpfInps.length>=4){fillInput(cpfInps[0],cpfD.substring(0,3));fillInput(cpfInps[1],cpfD.substring(3,6));fillInput(cpfInps[2],cpfD.substring(6,9));fillInput(cpfInps[3],cpfD.substring(9,11));ok.push('CPF');}
+      else if(cpfInps.length===2){fillInput(cpfInps[0],cpfD.substring(0,9));fillInput(cpfInps[1],cpfD.substring(9,11));ok.push('CPF');}
+      else{fillInput(cpfEl,cpfD);ok.push('CPF');}
+    }else miss.push('CPF');
+    var dtEl=byAttr('nasc')||byLabel('nascimento');
+    if(dtEl){
+      var dp=dateISO(d.dataNascimento).split('/');
+      var dtRow=dtEl.closest('tr,[class*="row"],[class*="group"],[class*="field"]');
+      var dtInps=dtRow?Array.from(dtRow.querySelectorAll('input:not([type=hidden])')):[];
+      if(dtInps.length>=3){fillInput(dtInps[0],dp[0]);fillInput(dtInps[1],dp[1]);fillInput(dtInps[2],dp[2]);ok.push('DataNasc');}
+      else{fillInput(dtEl,dateISO(d.dataNascimento));ok.push('DataNasc');}
+    }else miss.push('DataNasc');
+  }else if(h.includes('tse')){
+    tryFill(byAttr('nome')||byLabel('nome'),d.nome,'Nome');
+    tryFill(byAttr('cpf')||byLabel('cpf'),d.cpf,'CPF');
+    tryFill(byAttr('nasc')||byLabel('nascimento'),dateISO(d.dataNascimento),'DataNasc');
+    tryFill(byAttr('mae')||byLabel('m\\u00e3e')||byLabel('mae'),d.nomeMae,'NomeMae');
+    tryFill(byAttr('pai')||byLabel('pai'),d.nomePai,'NomePai');
+  }else{
+    var cpfEl2=byAttr('cpf')||byLabel('cpf');tryFill(cpfEl2,d.cpf,'CPF');
+  }
+  var msg=ok.length+' campo(s) preenchido(s): '+ok.join(', ')+'.'+(miss.length?'\\n\\nNao encontrado(s): '+miss.join(', ')+'.':'');
+  alert(msg);
+})();`;
+
+function getCertidoesBookmarkletHref() {
+  return 'javascript:' + encodeURIComponent(_BM_CERTIDOES);
+}
+
+function togglePainelCertidoes() {
+  const painel = document.getElementById('painel-certidoes');
+  if (!painel) return;
+  if (painel.style.display === 'none') {
+    painel.innerHTML = `
+      <div class="card" style="border-color:#bfdbfe;background:#eff6ff;margin:0">
+        <div class="card-header" style="background:#dbeafe;border-bottom-color:#bfdbfe;padding:10px 16px">
+          <h3 style="font-size:13px;color:#1e40af"><i class="bi bi-bookmark-check me-1"></i>Bookmarklet — Certidões CAC</h3>
+          <button onclick="togglePainelCertidoes()" class="btn btn-ghost btn-sm"><i class="bi bi-x-lg"></i></button>
+        </div>
+        <div class="card-body" style="padding:12px 16px">
+          <p style="font-size:13px;margin:0 0 10px">Arraste o botão abaixo para a barra de favoritos (<kbd>Ctrl+Shift+B</kbd>). Ao clicar "Emitir", os dados do cliente são copiados — clique o favorito no site para preencher automaticamente.</p>
+          <div style="text-align:center;margin-bottom:8px">
+            <a id="bm-cert-link" class="btn btn-primary btn-sm" style="cursor:grab">
+              <i class="bi bi-bookmark-plus"></i> Certidão CAC
+            </a>
+          </div>
+          <p style="font-size:12px;color:var(--text-muted);margin:0">Funciona nos 4 sites: TRF4, TJRS, STM, TSE</p>
+        </div>
+      </div>`;
+    document.getElementById('bm-cert-link').href = getCertidoesBookmarkletHref();
     painel.style.display = '';
   } else {
     painel.style.display = 'none';
