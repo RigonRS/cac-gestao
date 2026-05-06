@@ -2004,7 +2004,7 @@ async function renderProcessoDetalhe(id) {
           </div>
         </div>` : ''}
 
-        ${renderDadosPagamento(processo)}
+        <div id="dados-pagamento-wrapper">${renderDadosPagamento(processo)}</div>
       </div>
 
       <div>
@@ -2194,6 +2194,9 @@ async function salvarPagamento(e, id) {
       DataVencimentoParcelas: fd.get('DataVencimentoParcelas') || null,
     });
     App.invalidateCache('processos');
+    const updatedProc = await App.graph.getItem(CONFIG.listas.processos, id);
+    const wrapper = document.getElementById('dados-pagamento-wrapper');
+    if (wrapper) wrapper.innerHTML = renderDadosPagamento(updatedProc);
     toast('Pagamento salvo!', 'success');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
@@ -2845,13 +2848,14 @@ function _atualizarDataPagDetalhe() {
 
 function renderDadosPagamento(p) {
   if (!p.ValorProcesso) return '';
-  const hoje = new Date(); hoje.setHours(0,0,0,0);
+  const pagamentos = JSON.parse(p.PagamentosJSON || '{}');
+  const pid = p.id;
   const linhas = [];
+
   if (p.TipoPagamento === 'Parcelado') {
     const entrada = Number(p.ValorEntrada) || 0;
     if (entrada > 0) {
-      const entradaPaga = !!(p.DataPagamento && new Date(p.DataPagamento.split('T')[0]+'T00:00:00') <= hoje);
-      linhas.push({ label: 'Entrada', valor: entrada, data: p.DataPagamento ? p.DataPagamento.split('T')[0] : null, pago: entradaPaga });
+      linhas.push({ key: 'entrada', label: 'Entrada', valor: entrada, dataVenc: null });
     }
     const nParcelas = Number(p.NumeroParcelas) || 0;
     const valorParcela = Number(p.ValorParcelas) || 0;
@@ -2859,29 +2863,92 @@ function renderDadosPagamento(p) {
       const base = new Date(p.DataVencimentoParcelas.split('T')[0]+'T00:00:00');
       for (let i = 0; i < nParcelas; i++) {
         const dp = new Date(base.getFullYear(), base.getMonth() + i, base.getDate());
-        linhas.push({ label: `Parcela ${i+1}/${nParcelas}`, valor: valorParcela, data: dp.toISOString().split('T')[0], pago: dp <= hoje });
+        linhas.push({ key: `p${i}`, label: `Parcela ${i+1}/${nParcelas}`, valor: valorParcela, dataVenc: dp.toISOString().split('T')[0] });
       }
     }
   } else {
-    const pago = !!(p.DataPagamento && new Date(p.DataPagamento.split('T')[0]+'T00:00:00') <= hoje);
-    linhas.push({ label: 'À vista', valor: Number(p.ValorProcesso), data: p.DataPagamento ? p.DataPagamento.split('T')[0] : null, pago });
+    linhas.push({ key: 'avista', label: 'À vista', valor: Number(p.ValorProcesso), dataVenc: null });
   }
   if (!linhas.length) return '';
+
+  function itemStatus(key, dataVenc) {
+    const item = pagamentos[key];
+    if (!item?.pago) return { cls: 'badge-gray', txt: 'Pendente' };
+    if (!dataVenc || !item.dataPagamento) return { cls: 'badge-green', txt: 'Pago' };
+    return new Date(item.dataPagamento+'T00:00:00') <= new Date(dataVenc+'T00:00:00')
+      ? { cls: 'badge-green', txt: 'Pago' }
+      : { cls: 'badge-orange', txt: 'Pago em atraso' };
+  }
+
   return `
     <div class="card" style="margin-top:20px">
       <div class="card-header"><h3><i class="bi bi-table me-2"></i>Dados de Pagamento</h3></div>
       <div class="card-body" style="padding:0">
-        ${linhas.map(l => `
-          <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 16px;border-bottom:1px solid var(--border);font-size:13px">
-            <div style="display:flex;align-items:center;gap:8px">
-              <span class="badge ${l.pago ? 'badge-green' : 'badge-gray'}" style="font-size:10px;min-width:56px;text-align:center">${l.pago ? 'Pago' : 'Pendente'}</span>
-              <span>${esc(l.label)}</span>
-              ${l.data ? `<span style="color:var(--text-muted);font-size:12px">${fmtDate(l.data)}</span>` : ''}
+        ${linhas.map(l => {
+          const item = pagamentos[l.key] || {};
+          const st = itemStatus(l.key, l.dataVenc);
+          const pago = !!item.pago;
+          const dataPag = item.dataPagamento || '';
+          return `
+          <div style="padding:8px 16px;border-bottom:1px solid var(--border);font-size:13px">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                <span class="badge ${st.cls}" style="font-size:10px;min-width:88px;text-align:center">${st.txt}</span>
+                <span>${esc(l.label)}</span>
+                ${l.dataVenc ? `<span style="color:var(--text-muted);font-size:12px">Venc: ${fmtDate(l.dataVenc)}</span>` : ''}
+              </div>
+              <div style="display:flex;align-items:center;gap:10px">
+                <strong>${fmtMoeda(l.valor)}</strong>
+                <label class="checkbox-item" style="margin:0;font-size:12px;white-space:nowrap">
+                  <input type="checkbox" id="chk-pag-${l.key}" ${pago ? 'checked' : ''}
+                    onchange="onPagItemCheck('${pid}','${l.key}','${l.dataVenc||''}',this.checked)" /> Pago
+                </label>
+              </div>
             </div>
-            <strong>${fmtMoeda(l.valor)}</strong>
-          </div>`).join('')}
+            <div id="pag-data-wrap-${l.key}" style="display:${pago ? '' : 'none'};margin-top:6px">
+              <label style="font-size:11px;color:var(--text-muted)">Data de Pagamento</label>
+              <input type="date" id="input-pag-data-${l.key}" value="${dataPag}"
+                style="margin-top:2px;font-size:12px;padding:4px 8px"
+                onchange="onPagItemData('${pid}','${l.key}','${l.dataVenc||''}')" />
+            </div>
+          </div>`;
+        }).join('')}
       </div>
     </div>`;
+}
+
+function onPagItemCheck(processoId, key, dataVenc, checked) {
+  const wrap = document.getElementById(`pag-data-wrap-${key}`);
+  if (wrap) wrap.style.display = checked ? '' : 'none';
+  if (checked) {
+    const inp = document.getElementById(`input-pag-data-${key}`);
+    if (inp && !inp.value) inp.value = new Date().toISOString().split('T')[0];
+  }
+  _salvarItemPagamento(processoId, key, dataVenc || null);
+}
+
+function onPagItemData(processoId, key, dataVenc) {
+  _salvarItemPagamento(processoId, key, dataVenc || null);
+}
+
+async function _salvarItemPagamento(processoId, key, dataVenc) {
+  showLoading();
+  try {
+    const proc = await App.graph.getItem(CONFIG.listas.processos, processoId);
+    const pagamentos = JSON.parse(proc.PagamentosJSON || '{}');
+    const chk = document.getElementById(`chk-pag-${key}`);
+    const inp = document.getElementById(`input-pag-data-${key}`);
+    pagamentos[key] = {
+      pago: chk?.checked || false,
+      dataPagamento: chk?.checked ? (inp?.value || null) : null
+    };
+    await App.graph.updateItem(CONFIG.listas.processos, processoId, { PagamentosJSON: JSON.stringify(pagamentos) });
+    App.invalidateCache('processos');
+    const updatedProc = await App.graph.getItem(CONFIG.listas.processos, processoId);
+    const wrapper = document.getElementById('dados-pagamento-wrapper');
+    if (wrapper) wrapper.innerHTML = renderDadosPagamento(updatedProc);
+    toast('Pagamento atualizado!', 'success');
+  } catch(err) { toast(err.message, 'error'); } finally { hideLoading(); }
 }
 
 function onTipoPagamentoEditChange(tipo) {
