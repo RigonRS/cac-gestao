@@ -425,13 +425,13 @@ function renderClientesRows(lista) {
     return `<tr>
       <td><a style="font-weight:600;cursor:pointer;color:var(--accent)" onclick="navigate('clientes/perfil',{id:'${c.id}'})">${esc(c.Title)}</a></td>
       <td>
-        <div style="display:flex;align-items:center;gap:4px">
+        <div class="copy-hover-wrap" style="display:flex;align-items:center;gap:4px">
           <span>${esc(c.CPF || '—')}</span>
           ${c.CPF ? `<button class="btn-copy" onclick="copiarCampo(this)" data-val="${esc(c.CPF)}" title="Copiar CPF"><i class="bi bi-clipboard"></i></button>` : ''}
         </div>
       </td>
       <td>
-        <div style="display:flex;align-items:center;gap:4px">
+        <div class="copy-hover-wrap" style="display:flex;align-items:center;gap:4px">
           <span>${esc(c.SenhaGOV || '—')}</span>
           ${c.SenhaGOV ? `<button class="btn-copy" onclick="copiarCampo(this)" data-val="${esc(c.SenhaGOV)}" title="Copiar Senha GOV"><i class="bi bi-clipboard"></i></button>` : ''}
         </div>
@@ -1489,7 +1489,11 @@ async function deletarProcesso(id, clienteNome) {
     await App.graph.deleteItem(CONFIG.listas.processos, id);
     App.invalidateCache('processos');
     toast('Processo excluído.', 'success');
-    navigate('processos');
+    if (getRoute().page === 'processos') {
+      await renderProcessosList();
+    } else {
+      navigate('processos');
+    }
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
@@ -1960,7 +1964,6 @@ async function renderProcessoDetalhe(id) {
   const b = statusBadge(processo.Status);
 
   const showDataPagDetInic = (() => {
-    if (['Pix','Dinheiro'].includes(processo.FormaPagamento)) return !!processo.DataPagamento;
     const tp = processo.TipoPagamento || 'À vista';
     if (tp !== 'Parcelado') return true;
     return !!(processo.ValorEntrada && Number(processo.ValorEntrada) > 0);
@@ -2098,12 +2101,6 @@ async function renderProcessoDetalhe(id) {
                 <option value="Dinheiro" ${processo.FormaPagamento==='Dinheiro'?'selected':''}>Dinheiro</option>
                 <option value="Cartão" ${processo.FormaPagamento==='Cartão'?'selected':''}>Cartão</option>
               </select>
-              <div id="pag-chk-pix-wrap" style="display:${processo.FormaPagamento==='Pix'?'':'none'};margin-bottom:8px">
-                <label class="checkbox-item"><input type="checkbox" id="chk-pix-det" ${processo.FormaPagamento==='Pix'&&processo.DataPagamento?'checked':''} onchange="onCheckPagDetalhe()" /> Pago via Pix</label>
-              </div>
-              <div id="pag-chk-din-wrap" style="display:${processo.FormaPagamento==='Dinheiro'?'':'none'};margin-bottom:8px">
-                <label class="checkbox-item"><input type="checkbox" id="chk-din-det" ${processo.FormaPagamento==='Dinheiro'&&processo.DataPagamento?'checked':''} onchange="onCheckPagDetalhe()" /> Pago em Dinheiro</label>
-              </div>
               <div id="pag-data-pag-det" style="display:${showDataPagDetInic?'':'none'};margin-bottom:10px">
                 <label>Data de Pagamento</label>
                 <input type="date" name="DataPagamento" value="${processo.DataPagamento?processo.DataPagamento.split('T')[0]:''}" style="margin-top:4px" />
@@ -2568,6 +2565,17 @@ function getItensPendentesProcesso(p) {
   return itens;
 }
 
+function toggleParcelasProcesso(pid) {
+  const d = document.getElementById('parcelas-' + pid);
+  const btn = document.getElementById('toggle-parc-' + pid);
+  if (!d || !btn) return;
+  const showing = d.style.display !== 'none';
+  d.style.display = showing ? 'none' : '';
+  btn.innerHTML = showing
+    ? `<i class="bi bi-chevron-down"></i> Ver parcelas`
+    : `<i class="bi bi-chevron-up"></i> Ocultar`;
+}
+
 async function renderPagamentos() {
   document.getElementById('page-title').textContent = 'Pagamentos Pendentes';
   const [clientes, processos] = await Promise.all([App.getClientes(), App.getProcessos()]);
@@ -2632,15 +2640,21 @@ async function renderPagamentos() {
                 const modelo = getArmaModeloProcesso(p);
                 const itens = getItensPendentesProcesso(p);
                 const totalProc = itens.reduce((s, i) => s + i.valor, 0);
+                const hasMultiple = itens.length > 1;
                 return `<div style="padding:6px 0;font-size:13px${pi < g.processos.length-1 ? ';border-bottom:1px solid var(--border)' : ''}">
                   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px">
-                    <a style="cursor:pointer;color:var(--accent)" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.TipoProcesso||'—')}${modelo ? ` <span style="color:var(--text-muted);font-size:12px">· ${esc(modelo)}</span>` : ''}</a>
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                      <a style="cursor:pointer;color:var(--accent)" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.TipoProcesso||'—')}${modelo ? ` <span style="color:var(--text-muted);font-size:12px">· ${esc(modelo)}</span>` : ''}</a>
+                      ${hasMultiple ? `<button id="toggle-parc-${p.id}" class="btn btn-ghost btn-sm" style="padding:0 6px;font-size:11px" onclick="toggleParcelasProcesso('${p.id}')"><i class="bi bi-chevron-down"></i> Ver parcelas</button>` : ''}
+                    </div>
                     <strong style="font-size:12px;color:var(--danger)">${fmtMoeda(totalProc)}</strong>
                   </div>
-                  ${itens.map(i => `<div style="display:flex;justify-content:space-between;padding:1px 0 1px 8px;font-size:12px${i.vencido?';color:#dc2626':''}">
-                    <span>${esc(i.label)}${i.data ? ` · ${fmtDate(i.data)}` : ''}</span>
-                    <span style="font-weight:600">${fmtMoeda(i.valor)}</span>
-                  </div>`).join('')}
+                  <div id="parcelas-${p.id}" style="display:${hasMultiple ? 'none' : ''}">
+                    ${itens.map(i => `<div style="display:flex;justify-content:space-between;padding:1px 0 1px 8px;font-size:12px${i.vencido?';color:#dc2626':''}">
+                      <span>${esc(i.label)}${i.data ? ` · ${fmtDate(i.data)}` : ''}</span>
+                      <span style="font-weight:600">${fmtMoeda(i.valor)}</span>
+                    </div>`).join('')}
+                  </div>
                 </div>`;
               }).join('')}
             </div>
@@ -2840,14 +2854,6 @@ function onTipoPagamentoDetalheChange(tipo) {
 }
 
 function onFormaPagDetalhe(forma) {
-  const pw = document.getElementById('pag-chk-pix-wrap');
-  const dw = document.getElementById('pag-chk-din-wrap');
-  if (pw) pw.style.display = forma === 'Pix' ? '' : 'none';
-  if (dw) dw.style.display = forma === 'Dinheiro' ? '' : 'none';
-  _atualizarDataPagDetalhe();
-}
-
-function onCheckPagDetalhe() {
   _atualizarDataPagDetalhe();
 }
 
@@ -2858,15 +2864,6 @@ function onValorEntradaDetalheChange(val) {
 function _atualizarDataPagDetalhe() {
   const elDataPag = document.getElementById('pag-data-pag-det');
   if (!elDataPag) return;
-  const forma = document.querySelector('[name="FormaPagamento"]')?.value || '';
-  if (forma === 'Pix') {
-    elDataPag.style.display = document.getElementById('chk-pix-det')?.checked ? '' : 'none';
-    return;
-  }
-  if (forma === 'Dinheiro') {
-    elDataPag.style.display = document.getElementById('chk-din-det')?.checked ? '' : 'none';
-    return;
-  }
   const tipo = document.querySelector('[name="TipoPagamento"]:checked')?.value || 'À vista';
   if (tipo !== 'Parcelado') {
     elDataPag.style.display = '';
@@ -2902,7 +2899,13 @@ function renderDadosPagamento(p) {
 
   function itemStatus(key, dataVenc) {
     const item = pagamentos[key];
-    if (!item?.pago) return { cls: 'badge-gray', txt: 'Pendente' };
+    if (!item?.pago) {
+      if (dataVenc) {
+        const hoje = new Date(); hoje.setHours(0,0,0,0);
+        if (new Date(dataVenc+'T00:00:00') < hoje) return { cls: 'badge-red', txt: 'Em Atraso' };
+      }
+      return { cls: 'badge-gray', txt: 'Pendente' };
+    }
     if (!dataVenc || !item.dataPagamento) return { cls: 'badge-green', txt: 'Pago' };
     return new Date(item.dataPagamento+'T00:00:00') <= new Date(dataVenc+'T00:00:00')
       ? { cls: 'badge-green', txt: 'Pago' }
