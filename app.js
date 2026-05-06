@@ -1428,7 +1428,10 @@ function renderProcessosRows(lista) {
       <td>${esc(p.NumeroProtocolo||'—')}</td>
       <td>${fmtDate(p.DataAbertura?p.DataAbertura.split('T')[0]:'')}</td>
       <td>${fmtDate(p.DataPrazo?p.DataPrazo.split('T')[0]:'')}</td>
-      <td><span class="badge ${b.cls}">${b.txt}</span></td>
+      <td>
+        <span class="badge ${b.cls}">${b.txt}</span>
+        ${p.Restituido ? '<span class="badge" style="background:#9333ea;color:#fff;margin-left:4px;font-size:11px"><i class="bi bi-arrow-return-left"></i> Restituído</span>' : ''}
+      </td>
       <td><div class="btn-group">
         <button class="btn btn-outline btn-sm" onclick="event.stopPropagation();navigate('processos/detalhe',{id:'${p.id}'})"><i class="bi bi-eye"></i></button>
         <button class="btn btn-outline btn-sm" onclick="event.stopPropagation();navigate('processos/editar',{id:'${p.id}'})"><i class="bi bi-pencil"></i></button>
@@ -2000,10 +2003,20 @@ async function renderProcessoDetalhe(id) {
           <div class="card-header"><h3><i class="bi bi-arrow-repeat me-2"></i>Status</h3></div>
           <div class="card-body">
             <label>Status Atual</label>
-            <select id="sel-status" onchange="atualizarStatus('${id}',this.value)" style="margin-bottom:12px">
+            <select id="sel-status" onchange="atualizarStatus('${id}',this.value)" style="margin-bottom:8px">
               ${statusOpts}
             </select>
             <span class="badge ${b.cls}" style="font-size:13px">${b.txt}</span>
+            <div style="margin-top:12px">
+              <label class="checkbox-item" style="font-size:13px;font-weight:600">
+                <input type="checkbox" id="chk-gru-paga" ${processo.GruPaga ? 'checked' : ''} onchange="onGruPagaChange('${id}',this.checked)" />
+                GRU Paga
+              </label>
+              <div id="campo-gru-data-pag" style="display:${processo.GruPaga ? '' : 'none'};margin-top:8px">
+                <label style="font-size:12px">Data de Pagamento GRU</label>
+                <input type="date" id="input-gru-data" value="${processo.DataPagamentoGRU ? processo.DataPagamentoGRU.split('T')[0] : ''}" style="margin-top:4px" onchange="salvarGRU('${id}',this.value)" />
+              </div>
+            </div>
             ${processo.Restituido ? `<div style="margin-top:12px;padding:12px;background:#fdf4ff;border:1px solid #d8b4fe;border-radius:8px">
               <div style="font-size:12px;font-weight:700;color:#9333ea;margin-bottom:8px"><i class="bi bi-arrow-return-left me-1"></i>Processo Restituído</div>
               <form onsubmit="salvarMotivoRestituicao(event,'${id}')">
@@ -2020,6 +2033,11 @@ async function renderProcessoDetalhe(id) {
             <div style="margin-top:8px">
               <button onclick="restituirProcesso('${id}')" style="background:#9333ea;color:#fff;border:none;width:100%;border-radius:6px;padding:8px 12px;cursor:pointer;font-size:13px;font-weight:500;display:flex;align-items:center;justify-content:center;gap:6px">
                 <i class="bi bi-arrow-return-left"></i> Restituído
+              </button>
+            </div>
+            <div style="margin-top:8px">
+              <button onclick="registrarStatusHistorico('${id}')" style="background:#ea580c;color:#fff;border:none;width:100%;border-radius:6px;padding:8px 12px;cursor:pointer;font-size:13px;font-weight:500;display:flex;align-items:center;justify-content:center;gap:6px">
+                <i class="bi bi-clock-history"></i> Registrar Status do Processo
               </button>
             </div>
           </div>
@@ -2073,11 +2091,16 @@ async function renderProcessoDetalhe(id) {
           <div class="card-body">
             <form onsubmit="salvarDatasProcesso(event,'${id}')">
               <label>Protocolo no Sistema</label>
-              <input type="date" name="DataProtocoloSistema" value="${processo.DataProtocoloSistema?processo.DataProtocoloSistema.split('T')[0]:''}" style="margin-bottom:10px" />
-              <label>Última Conferência</label>
-              <input type="date" name="DataUltimaConferencia" value="${processo.DataUltimaConferencia?processo.DataUltimaConferencia.split('T')[0]:''}" style="margin-bottom:14px" />
+              <input type="date" name="DataProtocoloSistema" value="${processo.DataProtocoloSistema?processo.DataProtocoloSistema.split('T')[0]:''}" style="margin-bottom:14px" />
               <button type="submit" class="btn btn-outline" style="width:100%"><i class="bi bi-floppy"></i> Salvar Datas</button>
             </form>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <div class="card-header"><h3><i class="bi bi-clock-history me-2"></i>Histórico de Status</h3></div>
+          <div class="card-body" id="historico-status-body" style="padding-top:4px">
+            ${renderHistoricoStatus(JSON.parse(processo.HistoricoStatus || '[]'))}
           </div>
         </div>
 
@@ -2131,8 +2154,7 @@ async function salvarDatasProcesso(e, id) {
   showLoading();
   try {
     await App.graph.updateItem(CONFIG.listas.processos, id, {
-      DataProtocoloSistema:  fd.get('DataProtocoloSistema') || null,
-      DataUltimaConferencia: fd.get('DataUltimaConferencia') || null,
+      DataProtocoloSistema: fd.get('DataProtocoloSistema') || null,
     });
     App.invalidateCache('processos');
     toast('Datas salvas!', 'success');
@@ -2185,11 +2207,83 @@ async function restituirProcesso(id) {
 async function salvarMotivoRestituicao(e, id) {
   e.preventDefault();
   const fd = new FormData(e.target);
+  const motivo = fd.get('MotivoRestituicao') || '';
   showLoading();
   try {
-    await App.graph.updateItem(CONFIG.listas.processos, id, { MotivoRestituicao: fd.get('MotivoRestituicao') || '' });
+    const proc = await App.graph.getItem(CONFIG.listas.processos, id);
+    const historico = JSON.parse(proc.HistoricoStatus || '[]');
+    const agora = new Date();
+    historico.push({
+      data:    agora.toLocaleDateString('pt-BR'),
+      hora:    agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+      status:  proc.Status || '',
+      usuario: App.account?.name || App.account?.username || 'Desconhecido',
+      motivo
+    });
+    await App.graph.updateItem(CONFIG.listas.processos, id, {
+      MotivoRestituicao: motivo,
+      HistoricoStatus:   JSON.stringify(historico)
+    });
     App.invalidateCache('processos');
+    const body = document.getElementById('historico-status-body');
+    if (body) body.innerHTML = renderHistoricoStatus(historico);
     toast('Motivo salvo!', 'success');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+function renderHistoricoStatus(historico) {
+  if (!historico.length) return '<p style="color:var(--text-muted);font-style:italic;font-size:13px;margin:0">Nenhum registro ainda.</p>';
+  return historico.slice().reverse().map(h => `
+    <div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:12px">
+      <div style="display:flex;justify-content:space-between;margin-bottom:2px">
+        <strong style="color:#1f2937">${esc(h.status||'—')}</strong>
+        <span style="color:var(--text-muted)">${esc(h.data||'')} ${esc(h.hora||'')}</span>
+      </div>
+      <div style="color:var(--text-muted)"><i class="bi bi-person me-1"></i>${esc(h.usuario||'—')}</div>
+      ${h.motivo ? `<div style="margin-top:4px;color:#9333ea;font-size:11px"><i class="bi bi-arrow-return-left me-1"></i>Motivo: ${esc(h.motivo)}</div>` : ''}
+    </div>`).join('');
+}
+
+async function registrarStatusHistorico(id) {
+  showLoading();
+  try {
+    const proc = await App.graph.getItem(CONFIG.listas.processos, id);
+    const historico = JSON.parse(proc.HistoricoStatus || '[]');
+    const agora = new Date();
+    const status = document.getElementById('sel-status')?.value || proc.Status || '';
+    historico.push({
+      data:    agora.toLocaleDateString('pt-BR'),
+      hora:    agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+      status,
+      usuario: App.account?.name || App.account?.username || 'Desconhecido'
+    });
+    await App.graph.updateItem(CONFIG.listas.processos, id, { HistoricoStatus: JSON.stringify(historico) });
+    App.invalidateCache('processos');
+    const body = document.getElementById('historico-status-body');
+    if (body) body.innerHTML = renderHistoricoStatus(historico);
+    toast('Status registrado no histórico!', 'success');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function onGruPagaChange(id, checked) {
+  document.getElementById('campo-gru-data-pag').style.display = checked ? '' : 'none';
+  showLoading();
+  try {
+    await App.graph.updateItem(CONFIG.listas.processos, id, {
+      GruPaga:         checked,
+      DataPagamentoGRU: checked ? (document.getElementById('input-gru-data')?.value || null) : null
+    });
+    App.invalidateCache('processos');
+    toast(checked ? 'GRU marcada como paga!' : 'GRU desmarcada.', 'success');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function salvarGRU(id, data) {
+  showLoading();
+  try {
+    await App.graph.updateItem(CONFIG.listas.processos, id, { DataPagamentoGRU: data || null });
+    App.invalidateCache('processos');
+    toast('Data de pagamento GRU salva!', 'success');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
