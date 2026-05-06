@@ -407,7 +407,7 @@ async function renderClientesList() {
       <div class="table-wrapper">
         <table>
           <thead><tr>
-            <th>Nome</th><th>CPF</th><th>Celular</th>
+            <th>Nome</th><th>CPF</th><th>Senha GOV</th><th>Celular</th>
             <th>N° CR</th><th>Val. CR</th><th>Categorias</th><th>Ações</th>
           </tr></thead>
           <tbody id="tbody-clientes">${renderClientesRows(clientes)}</tbody>
@@ -418,13 +418,24 @@ async function renderClientesList() {
 }
 
 function renderClientesRows(lista) {
-  if (!lista.length) return `<tr><td colspan="7"><div class="empty-state"><i class="bi bi-people"></i><p>Nenhum cliente encontrado.</p><button class="btn btn-primary" onclick="navigate('clientes/novo')">Cadastrar primeiro cliente</button></div></td></tr>`;
+  if (!lista.length) return `<tr><td colspan="8"><div class="empty-state"><i class="bi bi-people"></i><p>Nenhum cliente encontrado.</p><button class="btn btn-primary" onclick="navigate('clientes/novo')">Cadastrar primeiro cliente</button></div></td></tr>`;
   return lista.map(c => {
     const s = validadeStatus(normISO(c.DataValidadeCR) || null);
     const cats = (c.Categoria || '').split(',').filter(Boolean).map(ct => `<span class="badge badge-blue" style="margin-right:3px">${esc(ct.trim())}</span>`).join('');
     return `<tr>
       <td><a style="font-weight:600;cursor:pointer;color:var(--accent)" onclick="navigate('clientes/perfil',{id:'${c.id}'})">${esc(c.Title)}</a></td>
-      <td>${esc(c.CPF || '—')}</td>
+      <td>
+        <div style="display:flex;align-items:center;gap:4px">
+          <span>${esc(c.CPF || '—')}</span>
+          ${c.CPF ? `<button class="btn-copy" onclick="copiarCampo(this)" data-val="${esc(c.CPF)}" title="Copiar CPF"><i class="bi bi-clipboard"></i></button>` : ''}
+        </div>
+      </td>
+      <td>
+        <div style="display:flex;align-items:center;gap:4px">
+          <span>${esc(c.SenhaGOV || '—')}</span>
+          ${c.SenhaGOV ? `<button class="btn-copy" onclick="copiarCampo(this)" data-val="${esc(c.SenhaGOV)}" title="Copiar Senha GOV"><i class="bi bi-clipboard"></i></button>` : ''}
+        </div>
+      </td>
       <td>${esc(c.Celular || '—')}</td>
       <td>${esc(c.NumeroCR || '—')}</td>
       <td><span class="badge ${s.cls}">${s.txt}</span></td>
@@ -563,6 +574,17 @@ async function renderClienteForm(id = null, importParams = {}) {
     </div>
 
     <div class="form-section">
+      <div class="form-section-title">Filiação Clube de Tiro</div>
+      <div class="form-body">
+        <div class="form-grid">
+          <div style="grid-column:span 2"><label>Nome do Clube de Tiro</label><input name="NomeClubeAtiro" value="${val('NomeClubeAtiro')}" /></div>
+          <div><label>Cidade</label><input name="CidadeClubeAtiro" value="${val('CidadeClubeAtiro')}" /></div>
+          <div><label>UF</label><input name="UFClubeAtiro" value="${val('UFClubeAtiro')}" maxlength="2" style="text-transform:uppercase" /></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="form-section">
       <div class="form-section-title">1° Endereço</div>
       <div class="form-body">
         <div class="form-grid">
@@ -627,6 +649,9 @@ async function salvarCliente(e, id) {
     Email:            fd.get('Email'),
     NomeMae:          toTitleCase(fd.get('NomeMae')),
     NomePai:          toTitleCase(fd.get('NomePai')),
+    NomeClubeAtiro:   toTitleCase(fd.get('NomeClubeAtiro')),
+    CidadeClubeAtiro: toTitleCase(fd.get('CidadeClubeAtiro')),
+    UFClubeAtiro:     (fd.get('UFClubeAtiro') || '').toUpperCase(),
     Categoria:        cats.join(','),
     DataExpedicaoCTF: fd.get('DataExpedicaoCTF') || null,
     DataValidadeCTF:  fd.get('DataValidadeCTF') || null,
@@ -762,6 +787,13 @@ function renderPerfilDados(c) {
       <div class="form-body"><div class="info-grid">
         ${row('Celular', c.Celular)} ${row('E-mail', c.Email)}
         ${row('Nome da Mãe', c.NomeMae)} ${row('Nome do Pai', c.NomePai)}
+      </div></div>
+    </div>
+    <div class="form-section">
+      <div class="form-section-title">Filiação Clube de Tiro</div>
+      <div class="form-body"><div class="info-grid">
+        ${row('Nome do Clube de Tiro', c.NomeClubeAtiro)}
+        ${row('Cidade', c.CidadeClubeAtiro)} ${row('UF', c.UFClubeAtiro)}
       </div></div>
     </div>
     <div class="form-section">
@@ -1492,8 +1524,6 @@ async function renderProcessoForm(clienteId = null) {
               ${RESPONSAVEIS.map(r => `<option value="${r}">${r}</option>`).join('')}
             </select>
           </div>
-          <div><label>N° Protocolo</label><input name="NumeroProtocolo" /></div>
-          <div><label>Data de Protocolo no Sistema</label><input type="date" name="DataProtocoloSistema" value="${new Date().toISOString().split('T')[0]}" /></div>
           <div><label>Status</label>
             <select name="Status">
               ${STATUS_PROCESSO.map(s => `<option value="${s}" ${s==='Aguardando Documentos'?'selected':''}>${s}</option>`).join('')}
@@ -1893,8 +1923,6 @@ async function salvarProcesso(e) {
     ClienteNome:            cliente.Title,
     TipoProcesso:           tipoProc,
     Responsavel:            fd.get('Responsavel') || '',
-    NumeroProtocolo:        fd.get('NumeroProtocolo') || '',
-    DataProtocoloSistema:   fd.get('DataProtocoloSistema') || null,
     DataAbertura:           fd.get('DataAbertura') || null,
     DataPrazo:              fd.get('DataPrazo') || null,
     Status:                 fd.get('Status'),
@@ -2513,27 +2541,31 @@ function getArmaModeloProcesso(p) {
   return '';
 }
 
-function getParcelasProcesso(p) {
+function getItensPendentesProcesso(p) {
+  if (!p.ValorProcesso) return [];
   const hoje = new Date(); hoje.setHours(0,0,0,0);
-  if (p.TipoPagamento !== 'Parcelado' || !p.ValorProcesso) return [];
-  const items = [];
-  const entrada = Number(p.ValorEntrada) || 0;
-  const entradaPaga = !!(p.DataPagamento && new Date(p.DataPagamento.split('T')[0]+'T00:00:00') <= hoje);
-  if (entrada > 0 && !entradaPaga) {
-    items.push({ label: 'Entrada', valor: entrada, data: null, vencido: true });
-  }
-  const nParcelas = Number(p.NumeroParcelas) || 0;
-  const valorParcela = Number(p.ValorParcelas) || 0;
-  if (nParcelas > 0 && p.DataVencimentoParcelas) {
-    const base = new Date(p.DataVencimentoParcelas.split('T')[0]+'T00:00:00');
-    for (let i = 0; i < nParcelas; i++) {
-      const dp = new Date(base.getFullYear(), base.getMonth() + i, base.getDate());
-      if (dp > hoje) {
-        items.push({ label: `Parcela ${i+1}/${nParcelas}`, valor: valorParcela, data: dp.toISOString().split('T')[0], vencido: false });
+  const pagamentos = JSON.parse(p.PagamentosJSON || '{}');
+  const itens = [];
+  if (p.TipoPagamento === 'Parcelado') {
+    const entrada = Number(p.ValorEntrada) || 0;
+    if (entrada > 0 && !pagamentos['entrada']?.pago) {
+      itens.push({ label: 'Entrada', valor: entrada, data: null, vencido: false });
+    }
+    const nParcelas = Number(p.NumeroParcelas) || 0;
+    const valorParcela = Number(p.ValorParcelas) || 0;
+    if (nParcelas > 0 && p.DataVencimentoParcelas) {
+      const base = new Date(p.DataVencimentoParcelas.split('T')[0]+'T00:00:00');
+      for (let i = 0; i < nParcelas; i++) {
+        if (!pagamentos[`p${i}`]?.pago) {
+          const dp = new Date(base.getFullYear(), base.getMonth() + i, base.getDate());
+          itens.push({ label: `Parcela ${i+1}/${nParcelas}`, valor: valorParcela, data: dp.toISOString().split('T')[0], vencido: dp <= hoje });
+        }
       }
     }
+  } else if (!pagamentos['avista']?.pago) {
+    itens.push({ label: 'À vista', valor: Number(p.ValorProcesso), data: null, vencido: false });
   }
-  return items;
+  return itens;
 }
 
 async function renderPagamentos() {
@@ -2541,9 +2573,7 @@ async function renderPagamentos() {
   const [clientes, processos] = await Promise.all([App.getClientes(), App.getProcessos()]);
 
   const pendentes = processos.filter(p =>
-    p.ValorProcesso &&
-    p.TipoPagamento === 'Parcelado' &&
-    calcPagamento(p).pendente > 0
+    p.ValorProcesso && getItensPendentesProcesso(p).length > 0
   );
 
   const porCliente = {};
@@ -2565,13 +2595,8 @@ async function renderPagamentos() {
     return;
   }
 
-  const hoje = new Date(); hoje.setHours(0,0,0,0);
-  const totalPendente = pendentes.reduce((s, p) => s + calcPagamento(p).pendente, 0);
-  const totalVencido = pendentes.reduce((s, p) => {
-    const entrada = Number(p.ValorEntrada) || 0;
-    const entradaPaga = !!(p.DataPagamento && new Date(p.DataPagamento.split('T')[0]+'T00:00:00') <= hoje);
-    return s + (entrada > 0 && !entradaPaga ? entrada : 0);
-  }, 0);
+  const totalPendente = pendentes.reduce((s, p) => s + getItensPendentesProcesso(p).reduce((ss, i) => ss + i.valor, 0), 0);
+  const totalVencido  = pendentes.reduce((s, p) => s + getItensPendentesProcesso(p).filter(i => i.vencido).reduce((ss, i) => ss + i.valor, 0), 0);
 
   el.innerHTML = `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
@@ -2591,7 +2616,7 @@ async function renderPagamentos() {
       </div>
       <div class="card-body" style="padding:0">
         ${grupos.map(g => {
-          const total = g.processos.reduce((s, p) => s + calcPagamento(p).pendente, 0);
+          const total = g.processos.reduce((s, p) => s + getItensPendentesProcesso(p).reduce((ss, i) => ss + i.valor, 0), 0);
           const celularLimpo = (g.celular || '').replace(/\D/g, '');
           const msgWa = `Olá ${esc(g.nome)}, verificamos em nosso sistema que constam valores em aberto referentes aos serviços prestados no valor de ${fmtMoeda(total)}.`;
           return `<div style="padding:16px 20px;border-bottom:1px solid var(--border)">
@@ -2605,13 +2630,17 @@ async function renderPagamentos() {
             <div style="padding-left:12px;border-left:3px solid var(--border)">
               ${g.processos.map((p, pi) => {
                 const modelo = getArmaModeloProcesso(p);
-                const parcelas = getParcelasProcesso(p);
+                const itens = getItensPendentesProcesso(p);
+                const totalProc = itens.reduce((s, i) => s + i.valor, 0);
                 return `<div style="padding:6px 0;font-size:13px${pi < g.processos.length-1 ? ';border-bottom:1px solid var(--border)' : ''}">
-                  <a style="cursor:pointer;color:var(--accent);display:block;margin-bottom:3px" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.TipoProcesso||'—')}${modelo ? ` <span style="color:var(--text-muted);font-size:12px">· ${esc(modelo)}</span>` : ''}${p.NumeroProtocolo ? ` <span style="color:var(--text-muted);font-size:12px">#${esc(p.NumeroProtocolo)}</span>` : ''}</a>
-                  ${parcelas.length ? parcelas.map(parc => `<div style="display:flex;justify-content:space-between;padding:1px 0 1px 8px;font-size:12px${parc.vencido?';color:#dc2626':''}">
-                    <span>${esc(parc.label)}${parc.data ? ` · ${fmtDate(parc.data)}` : ''}</span>
-                    <span style="font-weight:600">${fmtMoeda(parc.valor)}</span>
-                  </div>`).join('') : `<div style="padding-left:8px;font-size:12px;color:var(--text-muted)">${fmtMoeda(calcPagamento(p).pendente)} pendente</div>`}
+                  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px">
+                    <a style="cursor:pointer;color:var(--accent)" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.TipoProcesso||'—')}${modelo ? ` <span style="color:var(--text-muted);font-size:12px">· ${esc(modelo)}</span>` : ''}</a>
+                    <strong style="font-size:12px;color:var(--danger)">${fmtMoeda(totalProc)}</strong>
+                  </div>
+                  ${itens.map(i => `<div style="display:flex;justify-content:space-between;padding:1px 0 1px 8px;font-size:12px${i.vencido?';color:#dc2626':''}">
+                    <span>${esc(i.label)}${i.data ? ` · ${fmtDate(i.data)}` : ''}</span>
+                    <span style="font-weight:600">${fmtMoeda(i.valor)}</span>
+                  </div>`).join('')}
                 </div>`;
               }).join('')}
             </div>
