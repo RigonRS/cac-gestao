@@ -51,6 +51,12 @@ function toISO(br) {
   const [d, m, y] = br.split('/');
   return y && m && d ? `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}` : '';
 }
+function normISO(v) {
+  if (!v) return '';
+  const s = v.split('T')[0].trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  return toISO(s);
+}
 function addDays(isoDate, days) {
   const d = new Date(isoDate + 'T00:00:00');
   d.setDate(d.getDate() + days);
@@ -212,7 +218,7 @@ async function renderDashboard() {
   const simafVencimentos = [];
   clientes.forEach(c => {
     if (c.DataValidadeCR) {
-      const iso = c.DataValidadeCR.length === 10 ? c.DataValidadeCR : c.DataValidadeCR.split('T')[0];
+      const iso = normISO(c.DataValidadeCR);
       const dias = daysBetween(iso);
       if (dias !== null && dias <= limite) {
         vencimentos.push({ tipo: 'CR', cliente: c.Title, data: iso, dias, clienteId: c.id });
@@ -414,7 +420,7 @@ async function renderClientesList() {
 function renderClientesRows(lista) {
   if (!lista.length) return `<tr><td colspan="7"><div class="empty-state"><i class="bi bi-people"></i><p>Nenhum cliente encontrado.</p><button class="btn btn-primary" onclick="navigate('clientes/novo')">Cadastrar primeiro cliente</button></div></td></tr>`;
   return lista.map(c => {
-    const s = validadeStatus(c.DataValidadeCR ? c.DataValidadeCR.split('T')[0] : null);
+    const s = validadeStatus(normISO(c.DataValidadeCR) || null);
     const cats = (c.Categoria || '').split(',').filter(Boolean).map(ct => `<span class="badge badge-blue" style="margin-right:3px">${esc(ct.trim())}</span>`).join('');
     return `<tr>
       <td><a style="font-weight:600;cursor:pointer;color:var(--accent)" onclick="navigate('clientes/perfil',{id:'${c.id}'})">${esc(c.Title)}</a></td>
@@ -519,7 +525,7 @@ async function renderClienteForm(id = null, importParams = {}) {
       <div class="form-body">
         <div class="form-grid">
           <div><label>Número do CR</label><input name="NumeroCR" value="${val('NumeroCR')}" /></div>
-          <div><label>Data de Validade do CR</label><input name="DataValidadeCR" value="${val('DataValidadeCR')}" placeholder="DD/MM/AAAA" /></div>
+          <div><label>Data de Validade do CR</label><input type="date" name="DataValidadeCR" value="${normISO(c.DataValidadeCR) || ''}" /></div>
         </div>
         <div style="margin-top:16px">
           <label>Categorias CAC</label>
@@ -716,7 +722,7 @@ function renderPerfilDados(c) {
       </div>
     </div>`;
   };
-  const dateRow = (label, f) => row(label, c[f] ? fmtDate(c[f].split('T')[0]) : '');
+  const dateRow = (label, f) => row(label, c[f] ? fmtDate(normISO(c[f])) : '');
   const isCacador = (c.Categoria || '').includes('Caçador');
   const simafList = JSON.parse(c.SIMAFs || '[]');
 
@@ -2061,7 +2067,7 @@ async function renderValidades() {
 
   clientes.forEach(c => {
     if (c.DataValidadeCR) {
-      const iso = c.DataValidadeCR.length === 10 ? c.DataValidadeCR : c.DataValidadeCR.split('T')[0];
+      const iso = normISO(c.DataValidadeCR);
       itens.push({ tipo: 'CR', cliente: c.Title, data: iso, dias: daysBetween(iso), clienteId: c.id, celular: c.Celular || '', tab: 'dados' });
     }
     if (c.DataValidadeRGouCNH) {
