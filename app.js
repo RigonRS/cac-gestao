@@ -2097,6 +2097,8 @@ async function renderProcessoDetalhe(id) {
           </div>
         </div>` : ''}
 
+        <div id="dados-pagamento-wrapper">${renderDadosPagamento(processo)}</div>
+
       </div>
 
       <div>
