@@ -1432,6 +1432,7 @@ function renderProcessosRows(lista) {
       <td><div class="btn-group">
         <button class="btn btn-outline btn-sm" onclick="event.stopPropagation();navigate('processos/detalhe',{id:'${p.id}'})"><i class="bi bi-eye"></i></button>
         <button class="btn btn-outline btn-sm" onclick="event.stopPropagation();navigate('processos/editar',{id:'${p.id}'})"><i class="bi bi-pencil"></i></button>
+        <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deletarProcesso('${p.id}','${esc(p.ClienteNome||'')}')" title="Excluir processo"><i class="bi bi-trash"></i></button>
       </div></td>
     </tr>`;
   }).join('');
@@ -1444,6 +1445,17 @@ function filtrarProcessos() {
   if (q) lista = lista.filter(p => (p.ClienteNome||'').toLowerCase().includes(q) || (p.TipoProcesso||'').toLowerCase().includes(q));
   if (s) lista = lista.filter(p => p.Status === s);
   document.getElementById('tbody-processos').innerHTML = renderProcessosRows(lista);
+}
+
+async function deletarProcesso(id, clienteNome) {
+  if (!confirm(`Excluir o processo de "${clienteNome}"?\n\nEsta ação não pode ser desfeita.`)) return;
+  showLoading();
+  try {
+    await App.graph.deleteItem(CONFIG.listas.processos, id);
+    App.invalidateCache('processos');
+    toast('Processo excluído.', 'success');
+    navigate('processos');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 // ============================================================
@@ -1484,9 +1496,7 @@ async function renderProcessoForm(clienteId = null) {
               ${STATUS_PROCESSO.map(s => `<option value="${s}" ${s==='Aguardando Documentos'?'selected':''}>${s}</option>`).join('')}
             </select>
           </div>
-          <div><label>Data de Última Conferência</label><input type="date" name="DataUltimaConferencia" /></div>
           <div><label>Data de Abertura</label><input type="date" name="DataAbertura" value="${new Date().toISOString().split('T')[0]}" /></div>
-          <div><label>Prazo</label><input type="date" name="DataPrazo" /></div>
         </div>
       </div>
     </div>
@@ -1511,7 +1521,7 @@ async function renderProcessoForm(clienteId = null) {
               <option value="Cartão">Cartão</option>
             </select>
           </div>
-          <div><label>Data de Pagamento</label><input type="date" name="DataPagamento" /></div>
+          <div id="campo-data-pag-novo"><label>Data de Pagamento</label><input type="date" name="DataPagamento" /></div>
         </div>
         <div id="campos-parcelado" style="display:none;margin-top:16px">
           <div class="form-grid">
@@ -1521,7 +1531,7 @@ async function renderProcessoForm(clienteId = null) {
                 ${[1,2,3,4,5,6,7,8,9,10,11,12].map(n=>`<option value="${n}">${n}x</option>`).join('')}
               </select>
             </div>
-            <div><label>Valor de Entrada (R$)</label><input type="number" name="ValorEntrada" step="0.01" min="0" placeholder="0,00" oninput="calcularParcelas()" /></div>
+            <div><label>Valor de Entrada (R$)</label><input type="number" name="ValorEntrada" step="0.01" min="0" placeholder="0,00" oninput="calcularParcelas();onValorEntradaChangeNovo(this.value)" /></div>
             <div><label>Valor das Parcelas (R$)</label><input type="text" id="valor-parcelas-display" readonly placeholder="Calculado automaticamente" /><input type="hidden" name="ValorParcelas" id="valor-parcelas-input" /></div>
             <div><label>Data de Vencimento das Parcelas</label><input type="date" name="DataVencimentoParcelas" /></div>
           </div>
@@ -1566,7 +1576,7 @@ function onTipoProcessoChange(tipo) {
   const secaoChecklist = document.getElementById('secao-checklist');
 
   camposEl.innerHTML = '';
-  const armasOpts = _processoArmasCache.map(a => `<option value="${a.id}|${esc(a.AtividadeCadastrada||'')}|${esc(a.NumeroSerie||'')} ${esc(a.Marca||'')} ${esc(a.Modelo||'')}">${esc(a.NumeroSerie||'')} — ${esc(a.Marca||'')} ${esc(a.Modelo||'')} (${esc(a.AtividadeCadastrada||'')})</option>`).join('');
+  const armasOpts = _processoArmasCache.map(a => `<option value="${a.id}|${esc(a.AtividadeCadastrada||'')}|${esc(a.Marca||'')}|${esc(a.Modelo||'')}">${esc(a.Marca||'')} ${esc(a.Modelo||'')}${a.NumeroSerie ? ' ('+esc(a.NumeroSerie)+')' : ''} — ${esc(a.AtividadeCadastrada||'')}</option>`).join('');
 
   if (tipo === 'Aquisição de Arma SIGMA' || tipo === 'Aquisição de Arma PF') {
     camposEl.innerHTML = buildCamposAquisicao();
@@ -1701,9 +1711,16 @@ function buildCamposInclusaoExclusaoAtividade(clienteId, exclusao) {
 function buildCamposArmaSelector(armasOpts) {
   return `<div class="form-section"><div class="form-section-title">Arma</div><div class="form-body">
     <div class="form-grid">
-      <div><label>Arma *</label><select name="proc_armaId" required><option value="">Selecione...</option>${armasOpts}</select></div>
+      <div><label>Arma *</label><select name="proc_armaId" required onchange="onArmaAcervoChange(this.value)"><option value="">Selecione...</option>${armasOpts}</select></div>
     </div>
   </div></div>`;
+}
+
+function onArmaAcervoChange(val) {
+  const parts = (val || '').split('|');
+  const atividade = parts[1] || '';
+  const input = document.querySelector('[name="proc_acervoAtual"]');
+  if (input) input.value = atividade;
 }
 
 function buildCamposMudancaAcervo() {
@@ -1714,28 +1731,114 @@ function buildCamposMudancaAcervo() {
 }
 
 function buildCamposTransferencia(armasOpts) {
+  const especieOpts = ['Pistola','Espingarda','Revólver','Carabina/Fuzil'].map(v=>`<option>${v}</option>`).join('');
+  const acabOpts    = ['Oxidado','Aço Inox','Niquelado','Outros'].map(v=>`<option>${v}</option>`).join('');
+  const funcOpts    = ['Repetição','Automático','Semiautomático','Outros'].map(v=>`<option>${v}</option>`).join('');
+  const almOpts     = ['Raiada','Lisa'].map(v=>`<option>${v}</option>`).join('');
+  const sentOpts    = ['Não tem','Direita','Esquerda'].map(v=>`<option>${v}</option>`).join('');
+  const sexoOpts    = ['Masculino','Feminino'].map(v=>`<option>${v}</option>`).join('');
+  const ecOpts      = ['Solteiro','Casado','Viúvo','Separado Jud.','Divorciado','União Estável','União Homoafetiva','Outros'].map(v=>`<option>${v}</option>`).join('');
+
   return `<div class="form-section"><div class="form-section-title">Transferência de Arma</div><div class="form-body">
     <div style="margin-bottom:16px">
-      <label class="checkbox-item" style="font-size:14px;font-weight:600">
-        <input type="checkbox" name="proc_clienteVende" onchange="onClienteVendeChange(this.checked)" /> O cliente está vendendo a arma?
-      </label>
+      <label style="font-size:14px;font-weight:600;display:block;margin-bottom:8px">O cliente está vendendo a arma?</label>
+      <div class="checkbox-group">
+        <label class="checkbox-item"><input type="radio" name="proc_clienteVende" value="sim" onchange="onClienteVendeRadio(this.value)" /> Sim</label>
+        <label class="checkbox-item"><input type="radio" name="proc_clienteVende" value="nao" onchange="onClienteVendeRadio(this.value)" /> Não</label>
+      </div>
     </div>
-    <div id="proc-vende" style="display:none"><div class="form-grid">
-      <div><label>Arma (do cliente)</label><select name="proc_armaId"><option value="">Selecione...</option>${armasOpts}</select></div>
-      <div><label>Nome do Comprador</label><input name="proc_nomeComprador" /></div>
-      <div><label>CPF do Comprador</label><input name="proc_cpfComprador" oninput="this.value=fmtCPF(this.value)" maxlength="14" /></div>
-    </div></div>
-    <div id="proc-compra" style="display:none"><div class="form-grid">
-      <div><label>Arma (descreva)</label><input name="proc_descricaoArma" /></div>
-      <div><label>Nome do Vendedor</label><input name="proc_nomeVendedor" /></div>
-      <div><label>CPF do Vendedor</label><input name="proc_cpfVendedor" oninput="this.value=fmtCPF(this.value)" maxlength="14" /></div>
-    </div></div>
+
+    <div id="proc-vende" style="display:none">
+      <div class="form-grid">
+        <div><label>Arma (do cliente)</label><select name="proc_armaId"><option value="">Selecione...</option>${armasOpts}</select></div>
+        <div><label>Nome do Comprador</label><input name="proc_nomeComprador" /></div>
+        <div><label>CPF do Comprador</label><input name="proc_cpfComprador" oninput="this.value=fmtCPF(this.value)" maxlength="14" /></div>
+        <div><label>RG — UF</label><input name="proc_rgUFComprador" /></div>
+        <div><label>Número do CR</label><input name="proc_crComprador" /></div>
+        <div style="grid-column:span 2">
+          <label>Atividades Habilitadas no CR</label>
+          <div class="checkbox-group" style="margin-top:6px">
+            <label class="checkbox-item"><input type="checkbox" name="proc_habCacador" value="Caçador" /> Caçador</label>
+            <label class="checkbox-item"><input type="checkbox" name="proc_habAtirador" value="Atirador" /> Atirador</label>
+            <label class="checkbox-item"><input type="checkbox" name="proc_habColecionador" value="Colecionador" /> Colecionador</label>
+          </div>
+        </div>
+        <div><label>Telefone</label><input name="proc_telefoneComprador" oninput="this.value=fmtCelular(this.value)" maxlength="15" /></div>
+        <div><label>Nome do Pai</label><input name="proc_nomePaiComprador" /></div>
+        <div><label>Nome da Mãe</label><input name="proc_nomeMaeComprador" /></div>
+        <div><label>Sexo</label><select name="proc_sexoComprador"><option value="">Selecione...</option>${sexoOpts}</select></div>
+        <div><label>Data de Nascimento</label><input type="date" name="proc_nascimentoComprador" /></div>
+        <div><label>País de Nascimento</label><input name="proc_paisNascComprador" /></div>
+        <div><label>UF de Nascimento</label><input name="proc_ufNascComprador" maxlength="2" style="text-transform:uppercase" /></div>
+        <div><label>Município de Nascimento</label><input name="proc_municipioNascComprador" /></div>
+        <div><label>Estado Civil</label><select name="proc_estadoCivilComprador"><option value="">Selecione...</option>${ecOpts}</select></div>
+        <div><label>Profissão</label><input name="proc_profissaoComprador" /></div>
+        <div><label>Empresa de Trabalho</label><input name="proc_empresaComprador" /></div>
+        <div><label>CNPJ</label><input name="proc_cnpjComprador" oninput="this.value=fmtCNPJ(this.value)" maxlength="18" /></div>
+        <div style="grid-column:span 2"><label>Endereço Comercial</label><input name="proc_endComercialComprador" /></div>
+        <div><label>Número</label><input name="proc_numComercialComprador" /></div>
+        <div><label>CEP</label><input name="proc_cepComercialComprador" oninput="this.value=fmtCEP(this.value)" maxlength="9" /></div>
+        <div><label>UF</label><input name="proc_ufComercialComprador" maxlength="2" style="text-transform:uppercase" /></div>
+        <div><label>Município</label><input name="proc_municipioComercialComprador" /></div>
+        <div><label>Bairro</label><input name="proc_bairroComercialComprador" /></div>
+      </div>
+    </div>
+
+    <div id="proc-compra" style="display:none">
+      <div style="margin-bottom:20px">
+        <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;padding-bottom:6px;border-bottom:1px solid var(--border)">Dados Da Arma</div>
+        <div class="form-grid">
+          <div><label>Acervo de Destino</label><select name="proc_acervoDestino"><option value="">Selecione...</option><option>Colecionador</option><option>Atirador</option><option>Caçador</option></select></div>
+          <div><label>Espécie</label><select name="proc_especie"><option value="">Selecione...</option>${especieOpts}</select></div>
+          <div><label>Calibre</label><input name="proc_calibre" /></div>
+          <div><label>Marca</label><input name="proc_marcaArma" /></div>
+          <div><label>Modelo</label><input name="proc_modeloArma" /></div>
+          <div><label>N° Série</label><input name="proc_serieArma" /></div>
+          <div><label>Cad. Sinarm</label><input name="proc_cadSinarm" /></div>
+          <div><label>N° Registro</label><input name="proc_numRegistro" /></div>
+          <div><label>País de Fabricação</label><input name="proc_paisFabricacao" /></div>
+          <div><label>Capacidade de Tiros</label><input type="number" min="0" name="proc_capacidadeTiros" /></div>
+          <div><label>N° de Canos</label><input type="number" min="0" name="proc_numeroCanos" /></div>
+          <div><label>N° SIGMA</label><input name="proc_numSigma" /></div>
+          <div><label>Alma</label><select name="proc_alma"><option value="">Selecione...</option>${almOpts}</select></div>
+          <div><label>N° Raias</label><input type="number" min="0" name="proc_numRaias" /></div>
+          <div><label>Sentido das Raias</label><select name="proc_sentidoRaias"><option value="">Selecione...</option>${sentOpts}</select></div>
+          <div><label>Compr. do Cano (mm)</label><input type="number" min="0" name="proc_comprCano" /></div>
+          <div><label>Acabamento</label><select name="proc_acabamento"><option value="">Selecione...</option>${acabOpts}</select></div>
+          <div><label>Funcionamento</label><select name="proc_funcionamento"><option value="">Selecione...</option>${funcOpts}</select></div>
+        </div>
+      </div>
+      <div>
+        <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;padding-bottom:6px;border-bottom:1px solid var(--border)">Dados do Vendedor</div>
+        <div class="form-grid">
+          <div style="grid-column:span 2"><label>Nome Completo</label><input name="proc_nomeVendedor" /></div>
+          <div><label>CPF</label><input name="proc_cpfVendedor" oninput="this.value=fmtCPF(this.value)" maxlength="14" /></div>
+          <div><label>RG</label><input name="proc_rgVendedor" /></div>
+          <div><label>CR</label><input name="proc_crVendedor" /></div>
+          <div style="grid-column:span 2">
+            <label>Atividades Habilitadas no CR</label>
+            <div class="checkbox-group" style="margin-top:6px">
+              <label class="checkbox-item"><input type="checkbox" name="proc_habCacadorVend" value="Caçador" /> Caçador</label>
+              <label class="checkbox-item"><input type="checkbox" name="proc_habAtiradorVend" value="Atirador" /> Atirador</label>
+              <label class="checkbox-item"><input type="checkbox" name="proc_habColecionadorVend" value="Colecionador" /> Colecionador</label>
+            </div>
+          </div>
+          <div><label>Telefone</label><input name="proc_telefoneVendedor" oninput="this.value=fmtCelular(this.value)" maxlength="15" /></div>
+          <div style="grid-column:span 2"><label>Endereço Residencial</label><input name="proc_endVendedor" /></div>
+          <div><label>N°</label><input name="proc_numVendedor" /></div>
+          <div><label>CEP</label><input name="proc_cepVendedor" oninput="this.value=fmtCEP(this.value)" maxlength="9" /></div>
+          <div><label>UF</label><input name="proc_ufVendedor" maxlength="2" style="text-transform:uppercase" /></div>
+          <div><label>Município</label><input name="proc_municipioVendedor" /></div>
+          <div><label>Bairro</label><input name="proc_bairroVendedor" /></div>
+        </div>
+      </div>
+    </div>
   </div></div>`;
 }
 
-function onClienteVendeChange(checked) {
-  document.getElementById('proc-vende').style.display  = checked ? '' : 'none';
-  document.getElementById('proc-compra').style.display = checked ? 'none' : '';
+function onClienteVendeRadio(value) {
+  document.getElementById('proc-vende').style.display  = value === 'sim' ? '' : 'none';
+  document.getElementById('proc-compra').style.display = value === 'nao' ? '' : 'none';
 }
 
 function renderChecklistForm(items) {
@@ -1838,7 +1941,7 @@ async function renderProcessoDetalhe(id) {
     <div class="card" style="margin-bottom:20px">
       <div class="card-body" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:16px">
         <div>
-          <div style="font-size:18px;font-weight:700;margin-bottom:4px">${esc(processo.TipoProcesso||'—')}</div>
+          <div style="font-size:18px;font-weight:700;margin-bottom:4px">${esc(processo.TipoProcesso||'—')}${processo.Restituido ? ' <span style="background:#9333ea;color:#fff;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:700;vertical-align:middle"><i class="bi bi-arrow-return-left"></i> Restituído</span>' : ''}</div>
           ${processo.Responsavel ? `<div style="font-size:12px;color:var(--text-muted);margin-bottom:4px"><i class="bi bi-person-check me-1"></i>Responsável: <strong style="color:#1f2937">${esc(processo.Responsavel)}</strong></div>` : ''}
           <div style="color:var(--text-muted);font-size:13px">
             <strong>${esc(processo.ClienteNome||'—')}</strong>
@@ -1878,9 +1981,15 @@ async function renderProcessoDetalhe(id) {
           <div class="card-header"><h3><i class="bi bi-info-circle me-2"></i>Dados do Processo</h3></div>
           <div class="card-body">
             <div class="info-grid">
-              ${Object.entries(dadosEsp).filter(([,v]) => v).map(([k,v]) =>
-                `<div class="info-item"><label>${esc(k.replace(/([A-Z])/g,' $1').trim())}</label><div class="value">${esc(v)}</div></div>`
-              ).join('')}
+              ${Object.entries(dadosEsp).filter(([,v]) => v).map(([k,v]) => {
+                let displayV = v;
+                if (k === 'armaId' && v && v.includes('|')) {
+                  const parts = v.split('|');
+                  displayV = parts.length >= 4 ? `${parts[2]} ${parts[3]}`.trim() : (parts[2] || v);
+                }
+                const label = k === 'armaId' ? 'Arma' : esc(k.replace(/([A-Z])/g,' $1').trim());
+                return `<div class="info-item"><label>${label}</label><div class="value">${esc(displayV)}</div></div>`;
+              }).join('')}
             </div>
           </div>
         </div>` : ''}
@@ -1895,9 +2004,22 @@ async function renderProcessoDetalhe(id) {
               ${statusOpts}
             </select>
             <span class="badge ${b.cls}" style="font-size:13px">${b.txt}</span>
-            <div style="margin-top:16px">
+            ${processo.Restituido ? `<div style="margin-top:12px;padding:12px;background:#fdf4ff;border:1px solid #d8b4fe;border-radius:8px">
+              <div style="font-size:12px;font-weight:700;color:#9333ea;margin-bottom:8px"><i class="bi bi-arrow-return-left me-1"></i>Processo Restituído</div>
+              <form onsubmit="salvarMotivoRestituicao(event,'${id}')">
+                <label style="font-size:12px">Motivo</label>
+                <textarea name="MotivoRestituicao" rows="2" style="margin-top:4px;border-color:#d8b4fe;font-size:13px" placeholder="Motivo da restituição...">${esc(processo.MotivoRestituicao||'')}</textarea>
+                <button type="submit" class="btn btn-sm" style="margin-top:6px;border:1px solid #9333ea;color:#9333ea;background:transparent;border-radius:6px;padding:4px 12px;cursor:pointer;font-size:12px"><i class="bi bi-floppy"></i> Salvar Motivo</button>
+              </form>
+            </div>` : ''}
+            <div style="margin-top:${processo.Restituido?'8':'16'}px">
               <button class="btn btn-whatsapp" style="width:100%" onclick="abrirWhatsApp('${id}')">
                 <i class="bi bi-whatsapp"></i> Avisar Cliente via WhatsApp
+              </button>
+            </div>
+            <div style="margin-top:8px">
+              <button onclick="restituirProcesso('${id}')" style="background:#9333ea;color:#fff;border:none;width:100%;border-radius:6px;padding:8px 12px;cursor:pointer;font-size:13px;font-weight:500;display:flex;align-items:center;justify-content:center;gap:6px">
+                <i class="bi bi-arrow-return-left"></i> Restituído
               </button>
             </div>
           </div>
@@ -2047,6 +2169,28 @@ async function abrirWhatsApp(processoId) {
   const status = p.Status || '';
   const msg = `Olá, ${cliente.Title}!\n\nInformamos que seu processo de *${p.TipoProcesso}* (Protocolo: ${p.NumeroProtocolo || 'N/A'}) teve seu status atualizado para: *${status}*.\n\nEm caso de dúvidas, entre em contato conosco.\n\n${CONFIG.nomeEscritorio}`;
   window.open(`https://wa.me/55${celular}?text=${encodeURIComponent(msg)}`, '_blank');
+}
+
+async function restituirProcesso(id) {
+  if (!confirm('Confirmar que este processo foi restituído?')) return;
+  showLoading();
+  try {
+    await App.graph.updateItem(CONFIG.listas.processos, id, { Restituido: true });
+    App.invalidateCache('processos');
+    toast('Processo marcado como restituído.', 'success');
+    await renderProcessoDetalhe(id);
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function salvarMotivoRestituicao(e, id) {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  showLoading();
+  try {
+    await App.graph.updateItem(CONFIG.listas.processos, id, { MotivoRestituicao: fd.get('MotivoRestituicao') || '' });
+    App.invalidateCache('processos');
+    toast('Motivo salvo!', 'success');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 // ============================================================
@@ -2392,6 +2536,7 @@ async function renderProcessoEditar(id) {
     <div class="btn-group" style="margin-top:8px">
       <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg"></i> Salvar Alterações</button>
       <button type="button" class="btn btn-outline" onclick="navigate('processos/detalhe',{id:'${id}'})">Cancelar</button>
+      <button type="button" class="btn btn-danger" onclick="deletarProcesso('${id}','${esc(processo.ClienteNome||'')}')"><i class="bi bi-trash"></i> Excluir Processo</button>
     </div>
   </form>`;
 }
@@ -2473,7 +2618,25 @@ function calcularParcelasEdit() {
 
 function onTipoPagamentoChange(tipo) {
   const el = document.getElementById('campos-parcelado');
+  const elDataPag = document.getElementById('campo-data-pag-novo');
   if (el) el.style.display = tipo === 'Parcelado' ? '' : 'none';
+  if (elDataPag) {
+    if (tipo === 'À vista') {
+      elDataPag.style.display = '';
+    } else {
+      const entrada = parseFloat(document.querySelector('[name="ValorEntrada"]')?.value) || 0;
+      elDataPag.style.display = entrada > 0 ? '' : 'none';
+    }
+  }
+}
+
+function onValorEntradaChangeNovo(val) {
+  const elDataPag = document.getElementById('campo-data-pag-novo');
+  if (!elDataPag) return;
+  const tipo = document.querySelector('[name="TipoPagamento"]:checked')?.value || 'À vista';
+  if (tipo === 'Parcelado') {
+    elDataPag.style.display = parseFloat(val) > 0 ? '' : 'none';
+  }
 }
 
 function onTipoPagamentoDetalheChange(tipo) {
