@@ -1931,6 +1931,13 @@ async function renderProcessoDetalhe(id) {
   const dadosEsp  = JSON.parse(processo.DadosEspecificosJSON || '{}');
   const b = statusBadge(processo.Status);
 
+  const showDataPagDetInic = (() => {
+    if (['Pix','Dinheiro'].includes(processo.FormaPagamento)) return !!processo.DataPagamento;
+    const tp = processo.TipoPagamento || 'À vista';
+    if (tp !== 'Parcelado') return true;
+    return !!(processo.ValorEntrada && Number(processo.ValorEntrada) > 0);
+  })();
+
   const progTotal    = checklist.length;
   const progConcluido = checklist.filter(i => i.concluido).length;
   const progPct = progTotal ? Math.round(progConcluido / progTotal * 100) : 0;
@@ -1996,6 +2003,8 @@ async function renderProcessoDetalhe(id) {
             </div>
           </div>
         </div>` : ''}
+
+        ${renderDadosPagamento(processo)}
       </div>
 
       <div>
@@ -2055,14 +2064,22 @@ async function renderProcessoDetalhe(id) {
                 <label class="checkbox-item"><input type="radio" name="TipoPagamento" value="Parcelado" ${processo.TipoPagamento==='Parcelado'?'checked':''} onchange="onTipoPagamentoDetalheChange(this.value)" /> Parcelado</label>
               </div>
               <label>Forma de Pagamento</label>
-              <select name="FormaPagamento" style="margin-bottom:10px">
+              <select name="FormaPagamento" style="margin-bottom:8px" onchange="onFormaPagDetalhe(this.value)">
                 <option value="">Selecione...</option>
                 <option value="Pix" ${processo.FormaPagamento==='Pix'?'selected':''}>Pix</option>
                 <option value="Dinheiro" ${processo.FormaPagamento==='Dinheiro'?'selected':''}>Dinheiro</option>
                 <option value="Cartão" ${processo.FormaPagamento==='Cartão'?'selected':''}>Cartão</option>
               </select>
-              <label>Data de Pagamento</label>
-              <input type="date" name="DataPagamento" value="${processo.DataPagamento?processo.DataPagamento.split('T')[0]:''}" style="margin-bottom:10px" />
+              <div id="pag-chk-pix-wrap" style="display:${processo.FormaPagamento==='Pix'?'':'none'};margin-bottom:8px">
+                <label class="checkbox-item"><input type="checkbox" id="chk-pix-det" ${processo.FormaPagamento==='Pix'&&processo.DataPagamento?'checked':''} onchange="onCheckPagDetalhe()" /> Pago via Pix</label>
+              </div>
+              <div id="pag-chk-din-wrap" style="display:${processo.FormaPagamento==='Dinheiro'?'':'none'};margin-bottom:8px">
+                <label class="checkbox-item"><input type="checkbox" id="chk-din-det" ${processo.FormaPagamento==='Dinheiro'&&processo.DataPagamento?'checked':''} onchange="onCheckPagDetalhe()" /> Pago em Dinheiro</label>
+              </div>
+              <div id="pag-data-pag-det" style="display:${showDataPagDetInic?'':'none'};margin-bottom:10px">
+                <label>Data de Pagamento</label>
+                <input type="date" name="DataPagamento" value="${processo.DataPagamento?processo.DataPagamento.split('T')[0]:''}" style="margin-top:4px" />
+              </div>
               <div id="campos-parcelado-detalhe" style="display:${processo.TipoPagamento==='Parcelado'?'block':'none'}">
                 <label>Quantas Vezes</label>
                 <select name="NumeroParcelas" style="margin-bottom:10px" onchange="calcularParcelasDetalhe()">
@@ -2070,7 +2087,7 @@ async function renderProcessoDetalhe(id) {
                   ${[1,2,3,4,5,6,7,8,9,10,11,12].map(n=>`<option value="${n}" ${processo.NumeroParcelas==n?'selected':''}>${n}x</option>`).join('')}
                 </select>
                 <label>Valor de Entrada (R$)</label>
-                <input type="number" name="ValorEntrada" step="0.01" min="0" value="${processo.ValorEntrada||''}" style="margin-bottom:10px" oninput="calcularParcelasDetalhe()" placeholder="0,00" />
+                <input type="number" name="ValorEntrada" step="0.01" min="0" value="${processo.ValorEntrada||''}" style="margin-bottom:10px" oninput="calcularParcelasDetalhe();onValorEntradaDetalheChange(this.value)" placeholder="0,00" />
                 <label>Valor das Parcelas (R$)</label>
                 <input type="text" id="valor-parcelas-display-det" readonly value="${processo.ValorParcelas ? fmtMoeda(processo.ValorParcelas) : ''}" style="margin-bottom:10px" placeholder="Calculado automaticamente" />
                 <input type="hidden" name="ValorParcelas" id="valor-parcelas-input-det" value="${processo.ValorParcelas||''}" />
@@ -2482,6 +2499,40 @@ function sortValidades(col) {
 // ============================================================
 // PAGAMENTOS — PÁGINA DE PENDENTES
 // ============================================================
+function getArmaModeloProcesso(p) {
+  try {
+    const d = JSON.parse(p.DadosEspecificosJSON || '{}');
+    if (d.armaId && typeof d.armaId === 'string' && d.armaId.includes('|')) {
+      const parts = d.armaId.split('|');
+      return parts.length >= 4 ? `${parts[2]} ${parts[3]}`.trim() : (parts[2] || '');
+    }
+  } catch(e) {}
+  return '';
+}
+
+function getParcelasProcesso(p) {
+  const hoje = new Date(); hoje.setHours(0,0,0,0);
+  if (p.TipoPagamento !== 'Parcelado' || !p.ValorProcesso) return [];
+  const items = [];
+  const entrada = Number(p.ValorEntrada) || 0;
+  const entradaPaga = !!(p.DataPagamento && new Date(p.DataPagamento.split('T')[0]+'T00:00:00') <= hoje);
+  if (entrada > 0 && !entradaPaga) {
+    items.push({ label: 'Entrada', valor: entrada, data: null, vencido: true });
+  }
+  const nParcelas = Number(p.NumeroParcelas) || 0;
+  const valorParcela = Number(p.ValorParcelas) || 0;
+  if (nParcelas > 0 && p.DataVencimentoParcelas) {
+    const base = new Date(p.DataVencimentoParcelas.split('T')[0]+'T00:00:00');
+    for (let i = 0; i < nParcelas; i++) {
+      const dp = new Date(base.getFullYear(), base.getMonth() + i, base.getDate());
+      if (dp > hoje) {
+        items.push({ label: `Parcela ${i+1}/${nParcelas}`, valor: valorParcela, data: dp.toISOString().split('T')[0], vencido: false });
+      }
+    }
+  }
+  return items;
+}
+
 async function renderPagamentos() {
   document.getElementById('page-title').textContent = 'Pagamentos Pendentes';
   const [clientes, processos] = await Promise.all([App.getClientes(), App.getProcessos()]);
@@ -2503,11 +2554,7 @@ async function renderPagamentos() {
     if (porCliente[cid]) porCliente[cid].celular = c.Celular || '';
   });
 
-  const grupos = Object.values(porCliente).sort((a, b) => {
-    const dataA = a.processos[0]?.DataVencimentoParcelas || a.processos[0]?.DataPrazo || '';
-    const dataB = b.processos[0]?.DataVencimentoParcelas || b.processos[0]?.DataPrazo || '';
-    return dataA.localeCompare(dataB);
-  });
+  const grupos = Object.values(porCliente).sort((a, b) => (a.nome||'').localeCompare(b.nome||''));
 
   const el = document.getElementById('page-content');
   if (grupos.length === 0) {
@@ -2515,7 +2562,25 @@ async function renderPagamentos() {
     return;
   }
 
+  const hoje = new Date(); hoje.setHours(0,0,0,0);
+  const totalPendente = pendentes.reduce((s, p) => s + calcPagamento(p).pendente, 0);
+  const totalVencido = pendentes.reduce((s, p) => {
+    const entrada = Number(p.ValorEntrada) || 0;
+    const entradaPaga = !!(p.DataPagamento && new Date(p.DataPagamento.split('T')[0]+'T00:00:00') <= hoje);
+    return s + (entrada > 0 && !entradaPaga ? entrada : 0);
+  }, 0);
+
   el.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+      <div class="card" style="padding:16px">
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">Total Pendente</div>
+        <div style="font-size:22px;font-weight:700;color:var(--danger)">${fmtMoeda(totalPendente)}</div>
+      </div>
+      <div class="card" style="padding:16px">
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">Total Vencido</div>
+        <div style="font-size:22px;font-weight:700;color:#dc2626">${fmtMoeda(totalVencido)}</div>
+      </div>
+    </div>
     <div class="card">
       <div class="card-header">
         <h3><i class="bi bi-cash-coin me-2"></i>Clientes com Pagamentos em Aberto</h3>
@@ -2524,25 +2589,28 @@ async function renderPagamentos() {
       <div class="card-body" style="padding:0">
         ${grupos.map(g => {
           const total = g.processos.reduce((s, p) => s + calcPagamento(p).pendente, 0);
-          const dataVenc = g.processos.map(p => p.DataVencimentoParcelas || p.DataPrazo || '').filter(Boolean).sort()[0] || '';
           const celularLimpo = (g.celular || '').replace(/\D/g, '');
-          const msgWa = `Olá ${esc(g.nome)}, verificamos em nosso sistema que constam valores em aberto referentes aos serviços prestados no valor de ${fmtMoeda(total)}${dataVenc ? ' com vencimento para ' + fmtDate(dataVenc) : ''}.`;
+          const msgWa = `Olá ${esc(g.nome)}, verificamos em nosso sistema que constam valores em aberto referentes aos serviços prestados no valor de ${fmtMoeda(total)}.`;
           return `<div style="padding:16px 20px;border-bottom:1px solid var(--border)">
-            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px">
-              <div>
-                <a style="font-size:15px;font-weight:700;cursor:pointer;color:var(--accent)" onclick="navigate('clientes/perfil',{id:'${g.clienteId}',tab:'pagamentos'})">${esc(g.nome)}</a>
-                ${dataVenc ? `<span style="font-size:12px;color:var(--text-muted);margin-left:8px">Venc.: ${fmtDate(dataVenc)}</span>` : ''}
-              </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+              <a style="font-size:15px;font-weight:700;cursor:pointer;color:var(--accent)" onclick="navigate('clientes/perfil',{id:'${g.clienteId}',tab:'pagamentos'})">${esc(g.nome)}</a>
               <div style="display:flex;align-items:center;gap:8px">
                 <strong style="font-size:15px;color:var(--danger)">${fmtMoeda(total)}</strong>
                 ${celularLimpo ? `<button class="btn btn-whatsapp btn-sm" onclick="window.open('https://wa.me/55${celularLimpo}?text=${encodeURIComponent(msgWa)}','_blank')"><i class="bi bi-whatsapp"></i> Avisar</button>` : ''}
               </div>
             </div>
             <div style="padding-left:12px;border-left:3px solid var(--border)">
-              ${g.processos.map(p => `<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:13px">
-                <a style="cursor:pointer;color:var(--accent)" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.TipoProcesso||'—')} ${p.NumeroProtocolo?'#'+p.NumeroProtocolo:''}</a>
-                <span style="font-weight:600">${fmtMoeda(calcPagamento(p).pendente)}</span>
-              </div>`).join('')}
+              ${g.processos.map((p, pi) => {
+                const modelo = getArmaModeloProcesso(p);
+                const parcelas = getParcelasProcesso(p);
+                return `<div style="padding:6px 0;font-size:13px${pi < g.processos.length-1 ? ';border-bottom:1px solid var(--border)' : ''}">
+                  <a style="cursor:pointer;color:var(--accent);display:block;margin-bottom:3px" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.TipoProcesso||'—')}${modelo ? ` <span style="color:var(--text-muted);font-size:12px">· ${esc(modelo)}</span>` : ''}${p.NumeroProtocolo ? ` <span style="color:var(--text-muted);font-size:12px">#${esc(p.NumeroProtocolo)}</span>` : ''}</a>
+                  ${parcelas.length ? parcelas.map(parc => `<div style="display:flex;justify-content:space-between;padding:1px 0 1px 8px;font-size:12px${parc.vencido?';color:#dc2626':''}">
+                    <span>${esc(parc.label)}${parc.data ? ` · ${fmtDate(parc.data)}` : ''}</span>
+                    <span style="font-weight:600">${fmtMoeda(parc.valor)}</span>
+                  </div>`).join('') : `<div style="padding-left:8px;font-size:12px;color:var(--text-muted)">${fmtMoeda(calcPagamento(p).pendente)} pendente</div>`}
+                </div>`;
+              }).join('')}
             </div>
           </div>`;
         }).join('')}
@@ -2736,6 +2804,84 @@ function onValorEntradaChangeNovo(val) {
 function onTipoPagamentoDetalheChange(tipo) {
   const el = document.getElementById('campos-parcelado-detalhe');
   if (el) el.style.display = tipo === 'Parcelado' ? '' : 'none';
+  _atualizarDataPagDetalhe();
+}
+
+function onFormaPagDetalhe(forma) {
+  const pw = document.getElementById('pag-chk-pix-wrap');
+  const dw = document.getElementById('pag-chk-din-wrap');
+  if (pw) pw.style.display = forma === 'Pix' ? '' : 'none';
+  if (dw) dw.style.display = forma === 'Dinheiro' ? '' : 'none';
+  _atualizarDataPagDetalhe();
+}
+
+function onCheckPagDetalhe() {
+  _atualizarDataPagDetalhe();
+}
+
+function onValorEntradaDetalheChange(val) {
+  _atualizarDataPagDetalhe();
+}
+
+function _atualizarDataPagDetalhe() {
+  const elDataPag = document.getElementById('pag-data-pag-det');
+  if (!elDataPag) return;
+  const forma = document.querySelector('[name="FormaPagamento"]')?.value || '';
+  if (forma === 'Pix') {
+    elDataPag.style.display = document.getElementById('chk-pix-det')?.checked ? '' : 'none';
+    return;
+  }
+  if (forma === 'Dinheiro') {
+    elDataPag.style.display = document.getElementById('chk-din-det')?.checked ? '' : 'none';
+    return;
+  }
+  const tipo = document.querySelector('[name="TipoPagamento"]:checked')?.value || 'À vista';
+  if (tipo !== 'Parcelado') {
+    elDataPag.style.display = '';
+  } else {
+    elDataPag.style.display = (parseFloat(document.querySelector('[name="ValorEntrada"]')?.value) || 0) > 0 ? '' : 'none';
+  }
+}
+
+function renderDadosPagamento(p) {
+  if (!p.ValorProcesso) return '';
+  const hoje = new Date(); hoje.setHours(0,0,0,0);
+  const linhas = [];
+  if (p.TipoPagamento === 'Parcelado') {
+    const entrada = Number(p.ValorEntrada) || 0;
+    if (entrada > 0) {
+      const entradaPaga = !!(p.DataPagamento && new Date(p.DataPagamento.split('T')[0]+'T00:00:00') <= hoje);
+      linhas.push({ label: 'Entrada', valor: entrada, data: p.DataPagamento ? p.DataPagamento.split('T')[0] : null, pago: entradaPaga });
+    }
+    const nParcelas = Number(p.NumeroParcelas) || 0;
+    const valorParcela = Number(p.ValorParcelas) || 0;
+    if (nParcelas > 0 && p.DataVencimentoParcelas) {
+      const base = new Date(p.DataVencimentoParcelas.split('T')[0]+'T00:00:00');
+      for (let i = 0; i < nParcelas; i++) {
+        const dp = new Date(base.getFullYear(), base.getMonth() + i, base.getDate());
+        linhas.push({ label: `Parcela ${i+1}/${nParcelas}`, valor: valorParcela, data: dp.toISOString().split('T')[0], pago: dp <= hoje });
+      }
+    }
+  } else {
+    const pago = !!(p.DataPagamento && new Date(p.DataPagamento.split('T')[0]+'T00:00:00') <= hoje);
+    linhas.push({ label: 'À vista', valor: Number(p.ValorProcesso), data: p.DataPagamento ? p.DataPagamento.split('T')[0] : null, pago });
+  }
+  if (!linhas.length) return '';
+  return `
+    <div class="card" style="margin-top:20px">
+      <div class="card-header"><h3><i class="bi bi-table me-2"></i>Dados de Pagamento</h3></div>
+      <div class="card-body" style="padding:0">
+        ${linhas.map(l => `
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 16px;border-bottom:1px solid var(--border);font-size:13px">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span class="badge ${l.pago ? 'badge-green' : 'badge-gray'}" style="font-size:10px;min-width:56px;text-align:center">${l.pago ? 'Pago' : 'Pendente'}</span>
+              <span>${esc(l.label)}</span>
+              ${l.data ? `<span style="color:var(--text-muted);font-size:12px">${fmtDate(l.data)}</span>` : ''}
+            </div>
+            <strong>${fmtMoeda(l.valor)}</strong>
+          </div>`).join('')}
+      </div>
+    </div>`;
 }
 
 function onTipoPagamentoEditChange(tipo) {
