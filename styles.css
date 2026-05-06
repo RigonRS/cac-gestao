@@ -370,7 +370,8 @@ select { cursor: pointer; }
   font-size: 12px; cursor: pointer; transition: all .15s;
   opacity: 0;
 }
-.info-item:hover .btn-copy { opacity: 1; }
+.info-item:hover .btn-copy,
+.copy-hover-wrap:hover .btn-copy { opacity: 1; }
 .btn-copy:hover { background: var(--bg-light); color: var(--accent); border-color: var(--accent); }
 .btn-copy.copied { background: #f0fdf4; color: var(--success); border-color: var(--success); opacity: 1; }
 
