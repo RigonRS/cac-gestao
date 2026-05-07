@@ -3426,8 +3426,33 @@ function togglePainelSINARM() {
 
 const _BM_CERTIDOES = `(async function(){
   var d={};
+  function cacBg(inner){
+    var o=document.createElement('div');
+    o.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.55);z-index:2147483647;display:flex;align-items:center;justify-content:center';
+    o.innerHTML='<div style="background:#fff;padding:20px;border-radius:8px;max-width:440px;width:90%;box-shadow:0 4px 24px rgba(0,0,0,.3);font-family:Arial,sans-serif;color:#111">'+inner+'</div>';
+    document.body.appendChild(o);return o;
+  }
+  function cacAlert(msg){
+    return new Promise(function(res){
+      var o=cacBg('<p style="margin:0 0 8px;font-size:14px;font-weight:700;color:#1e40af">CAC Gestao</p><p style="margin:0 0 14px;font-size:13px;white-space:pre-wrap">'+msg.replace(/</g,'&lt;')+'</p><div style="text-align:right"><button id="_cac_ok" style="padding:5px 16px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer">OK</button></div>');
+      o.querySelector('#_cac_ok').onclick=function(){document.body.removeChild(o);res();};
+    });
+  }
+  function cacInput(){
+    return new Promise(function(res){
+      var o=cacBg('<p style="margin:0 0 8px;font-size:14px;font-weight:700;color:#1e40af">CAC Gestao</p><p style="margin:0 0 8px;font-size:13px">Cole os dados do cliente abaixo (Ctrl+V):</p><textarea id="_cac_ta" style="width:100%;height:65px;border:1px solid #ccc;border-radius:4px;padding:6px;font-size:12px;box-sizing:border-box;margin-bottom:10px" placeholder="Cole aqui..."></textarea><div style="text-align:right"><button id="_cac_cancel" style="padding:5px 14px;border:1px solid #ccc;border-radius:4px;background:#f9f9f9;cursor:pointer;margin-right:8px">Cancelar</button><button id="_cac_ok" style="padding:5px 16px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer">OK</button></div>');
+      setTimeout(function(){var t=o.querySelector('#_cac_ta');if(t)t.focus();},30);
+      o.querySelector('#_cac_ok').onclick=function(){var v=o.querySelector('#_cac_ta').value;document.body.removeChild(o);res(v);};
+      o.querySelector('#_cac_cancel').onclick=function(){document.body.removeChild(o);res(null);};
+    });
+  }
   try{var raw=(await navigator.clipboard.readText()).trim();var j=JSON.parse(raw);if(j.cpf)d=j;}catch(e){}
-  if(!d.cpf){var manual=prompt('CPF do cliente:');if(!manual)return;d={cpf:manual.trim()};}
+  if(!d.cpf){
+    var pasted=await cacInput();
+    if(!pasted)return;
+    try{var j2=JSON.parse(pasted.trim());if(j2.cpf)d=j2;}catch(e){d={cpf:pasted.trim()};}
+    if(!d.cpf)return;
+  }
   var cpfD=(d.cpf||'').replace(/\\D/g,'');
   function dateISO(iso){if(!iso)return'';var p=iso.split('-');return p[2]+'/'+p[1]+'/'+p[0];}
   function fillInput(el,v){
@@ -3486,7 +3511,7 @@ const _BM_CERTIDOES = `(async function(){
     if(!D.querySelector('form[name="form_certidao"],input[name^="txt_"]')){
       var iframes=document.querySelectorAll('iframe');
       var srcs=Array.from(iframes).map(function(f){return f.src||f.getAttribute('src');}).filter(Boolean);
-      alert('O formulário do STM está num iframe bloqueado pelo navegador (segurança).\n\nAbra diretamente esta URL e clique o bookmarklet lá:\n\n'+(srcs.length?srcs.join('\n'):'(iframe sem src encontrado — inspecione o elemento iframe na página)'));
+      await cacAlert('O formulario do STM esta num iframe bloqueado pelo navegador.\\n\\nAbra diretamente esta URL e clique o bookmarklet la:\\n\\n'+(srcs.length?srcs.join('\\n'):'(nenhum iframe encontrado)'));
       return;
     }
     tryFill(byAttr('nome')||byLabel('nome')||D.querySelector('input[name*="nome"],input[name="txt_nome"]'),d.nome,'Nome');
@@ -3517,7 +3542,7 @@ const _BM_CERTIDOES = `(async function(){
     var cpfEl2=byAttr('cpf')||byLabel('cpf');tryFill(cpfEl2,d.cpf,'CPF');
   }
   var msg=ok.length+' campo(s) preenchido(s): '+ok.join(', ')+'.'+(miss.length?'\\n\\nNao encontrado(s): '+miss.join(', ')+'.':'');
-  alert(msg);
+  await cacAlert(msg);
 })();`;
 
 function getCertidoesBookmarkletHref() {
