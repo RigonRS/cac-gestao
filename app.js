@@ -2056,7 +2056,7 @@ async function renderProcessoDetalhe(id) {
         <div class="card" style="margin-bottom:20px">
           <div class="card-header">
             <h3><i class="bi bi-list-check me-2"></i>Checklist</h3>
-            ${temCertidoes ? `<button class="btn btn-ghost btn-sm" onclick="togglePainelCertidoes()" title="Instalar bookmarklet de certidões"><i class="bi bi-bookmark-plus"></i></button>` : ''}
+            ${temCertidoes ? `<button class="btn btn-sm" onclick="togglePainelCertidoes()" title="Instalar bookmarklet de certidões" style="background:#b45309;color:#fff;border-color:#b45309"><i class="bi bi-bookmark-plus me-1"></i>Certidões</button>` : ''}
           </div>
           ${temCertidoes ? `<div id="painel-certidoes" style="display:none;border-top:1px solid var(--border)"></div>` : ''}
           <div class="card-body">
@@ -3524,14 +3524,20 @@ const _BM_CERTIDOES = `(async function(){
       else if(cpfInps.length===2){fillInput(cpfInps[0],cpfD.substring(0,9));fillInput(cpfInps[1],cpfD.substring(9,11));ok.push('CPF');}
       else{fillInput(cpfEl,cpfD);ok.push('CPF');}
     }else miss.push('CPF');
-    var dtEl=byAttr('nasc')||byLabel('nascimento')||D.querySelector('input[name*="nasc"],input[name*="data"],input[name="dia"],input[name="txt_nascimento"]');
+    var dtEl=byAttr('nasc')||byLabel('nascimento')||byLabel('nasc')||D.querySelector('input[name="txt_dia"],input[name="dia"],input[name*="nasc"],input[name="txt_nascimento"],input[name="data_nasc"],input[name="dt_nasc"]');
     if(dtEl){
       var dp=dateISO(d.dataNascimento).split('/');
       var dtRow=dtEl.closest('tr,[class*="row"],[class*="group"],[class*="field"]');
       var dtInps=dtRow?Array.from(dtRow.querySelectorAll('input:not([type=hidden])')):[];
       if(dtInps.length>=3){fillInput(dtInps[0],dp[0]);fillInput(dtInps[1],dp[1]);fillInput(dtInps[2],dp[2]);ok.push('DataNasc');}
       else{fillInput(dtEl,dateISO(d.dataNascimento));ok.push('DataNasc');}
-    }else miss.push('DataNasc');
+    }else{
+      var diaEl=D.querySelector('input[name*="dia"]');
+      var mesEl=D.querySelector('input[name*="mes"]');
+      var anoEl=D.querySelector('input[name*="ano"]');
+      if(diaEl&&mesEl&&anoEl){var dp2=dateISO(d.dataNascimento).split('/');fillInput(diaEl,dp2[0]);fillInput(mesEl,dp2[1]);fillInput(anoEl,dp2[2]);ok.push('DataNasc');}
+      else miss.push('DataNasc');
+    }
   }else if(h.includes('tse')){
     tryFill(byAttr('nome')||byLabel('nome'),d.nome,'Nome');
     tryFill(byAttr('cpf')||byLabel('cpf'),d.cpf,'CPF');
