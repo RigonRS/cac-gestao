@@ -3483,7 +3483,7 @@ const _BM_CERTIDOES = `(async function(){
     }else{miss.push('RG');tryFill(byAttr('orgao',sc)||byLabel('expedidor',sc)||byLabel('emissor',sc),d.orgaoEmissor,'OrgaoEmissor');}
     tryFill(byAttr('endereco',sc)||byAttr('logradouro',sc)||byLabel('endere\\u00e7o',sc)||byLabel('logradouro',sc),[d.endereco,d.numero,d.complemento,d.bairro,d.cidade].filter(Boolean).join(', '),'Endereco');
   }else if(h.includes('stm')){
-    if(!D.querySelector('form,input[name*="txt_"],input[name*="nome"]')){
+    if(!D.querySelector('form[name="form_certidao"],input[name^="txt_"]')){
       var iframes=document.querySelectorAll('iframe');
       var srcs=Array.from(iframes).map(function(f){return f.src||f.getAttribute('src');}).filter(Boolean);
       alert('O formulário do STM está num iframe bloqueado pelo navegador (segurança).\n\nAbra diretamente esta URL e clique o bookmarklet lá:\n\n'+(srcs.length?srcs.join('\n'):'(iframe sem src encontrado — inspecione o elemento iframe na página)'));
