@@ -3469,7 +3469,7 @@ const _BM_CERTIDOES = `(async function(){
   }else if(h.includes('tjrs')){
     var sc=D.querySelector('form')||D;
     tryFill(byAttr('nome',sc)||byLabel('nome',sc),d.nome,'Nome');
-    tryFill(byAttr('cpf',sc)||byLabel('cpf',sc),d.cpf,'CPF');
+    tryFill(byAttr('cpf',sc)||byLabel('cpf',sc),cpfD,'CPF');
     tryFill(byAttr('mae',sc)||byLabel('m\\u00e3e',sc)||byLabel('mae',sc),d.nomeMae,'NomeMae');
     tryFill(byAttr('pai',sc)||byLabel('pai',sc),d.nomePai,'NomePai');
     tryFill(byAttr('nasc',sc)||byLabel('nasc',sc),dateISO(d.dataNascimento),'DataNasc');
@@ -3483,9 +3483,15 @@ const _BM_CERTIDOES = `(async function(){
     }else{miss.push('RG');tryFill(byAttr('orgao',sc)||byLabel('expedidor',sc)||byLabel('emissor',sc),d.orgaoEmissor,'OrgaoEmissor');}
     tryFill(byAttr('endereco',sc)||byAttr('logradouro',sc)||byLabel('endere\\u00e7o',sc)||byLabel('logradouro',sc),[d.endereco,d.numero,d.complemento,d.bairro,d.cidade].filter(Boolean).join(', '),'Endereco');
   }else if(h.includes('stm')){
-    tryFill(byAttr('nome')||byLabel('nome')||D.querySelector('input[name*="nome"]'),d.nome,'Nome');
-    tryFill(byAttr('mae')||byLabel('m\\u00e3e')||byLabel('mae')||D.querySelector('input[name*="mae"]'),d.nomeMae,'NomeMae');
-    var cpfEl=byAttr('cpf')||byLabel('cpf')||D.querySelector('input[name*="cpf"]');
+    if(!D.querySelector('form,input[name*="txt_"],input[name*="nome"]')){
+      var iframes=document.querySelectorAll('iframe');
+      var srcs=Array.from(iframes).map(function(f){return f.src||f.getAttribute('src');}).filter(Boolean);
+      alert('O formulário do STM está num iframe bloqueado pelo navegador (segurança).\n\nAbra diretamente esta URL e clique o bookmarklet lá:\n\n'+(srcs.length?srcs.join('\n'):'(iframe sem src encontrado — inspecione o elemento iframe na página)'));
+      return;
+    }
+    tryFill(byAttr('nome')||byLabel('nome')||D.querySelector('input[name*="nome"],input[name="txt_nome"]'),d.nome,'Nome');
+    tryFill(byAttr('mae')||byLabel('m\\u00e3e')||byLabel('mae')||D.querySelector('input[name*="mae"],input[name="txt_mae"]'),d.nomeMae,'NomeMae');
+    var cpfEl=byAttr('cpf')||byLabel('cpf')||D.querySelector('input[name*="cpf"],input[name="txt_cpf"]');
     if(cpfEl){
       var row=cpfEl.closest('tr,[class*="row"],[class*="group"],[class*="field"]');
       var cpfInps=row?Array.from(row.querySelectorAll('input:not([type=hidden])')):[];
@@ -3493,7 +3499,7 @@ const _BM_CERTIDOES = `(async function(){
       else if(cpfInps.length===2){fillInput(cpfInps[0],cpfD.substring(0,9));fillInput(cpfInps[1],cpfD.substring(9,11));ok.push('CPF');}
       else{fillInput(cpfEl,cpfD);ok.push('CPF');}
     }else miss.push('CPF');
-    var dtEl=byAttr('nasc')||byLabel('nascimento')||D.querySelector('input[name*="nasc"],input[name="dia"]');
+    var dtEl=byAttr('nasc')||byLabel('nascimento')||D.querySelector('input[name*="nasc"],input[name*="data"],input[name="dia"],input[name="txt_nascimento"]');
     if(dtEl){
       var dp=dateISO(d.dataNascimento).split('/');
       var dtRow=dtEl.closest('tr,[class*="row"],[class*="group"],[class*="field"]');
