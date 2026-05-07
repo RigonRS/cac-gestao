@@ -410,7 +410,7 @@ const VALORES_PROCESSO = {
 const CERTIDOES_CONFIG = [
   { keyword: 'Federal',   label: 'Justiça Federal (TRF4)',   url: 'https://www2.trf4.jus.br/trf4/processos/certidao/index.php' },
   { keyword: 'Estadual',  label: 'Justiça Estadual (TJRS)',  url: 'https://www.tjrs.jus.br/novo/processos-e-servicos/servicos-processuais/emissao-de-antecedentes-e-certidoes/' },
-  { keyword: 'Militar',   label: 'Justiça Militar (STM)',    url: 'https://www.stm.jus.br/servicos-ao-cidadao/atendimentoaocidadao/certidao-negativa' },
+  { keyword: 'Militar',   label: 'Justiça Militar (STM)',    url: 'https://www2.stm.jus.br/ceneg_internet/emitir/index.php' },
   { keyword: 'Eleitoral', label: 'Crimes Eleitorais (TSE)',  url: 'https://www.tse.jus.br/servicos-eleitorais/autoatendimento-eleitoral#/' },
 ];
 
@@ -3562,8 +3562,8 @@ function togglePainelCertidoes() {
         <div class="card-body" style="padding:12px 16px">
           <p style="font-size:13px;margin:0 0 10px">Arraste o botão abaixo para a barra de favoritos (<kbd>Ctrl+Shift+B</kbd>). Ao clicar "Emitir", os dados do cliente são copiados — clique o favorito no site para preencher automaticamente.</p>
           <div style="text-align:center;margin-bottom:8px">
-            <a id="bm-cert-link" class="btn btn-primary btn-sm" style="cursor:grab">
-              <i class="bi bi-bookmark-plus"></i> Certidão CAC
+            <a id="bm-cert-link" class="btn btn-sm" style="cursor:grab;background:#b45309;color:#fff;border-color:#b45309">
+              <i class="bi bi-bookmark-plus"></i> Copiador de Dados Certidões
             </a>
           </div>
           <p style="font-size:12px;color:var(--text-muted);margin:0">Funciona nos 4 sites: TRF4, TJRS, STM, TSE</p>
