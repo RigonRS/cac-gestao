@@ -3436,6 +3436,7 @@ const _BM_CERTIDOES = `(async function(){
   }
   function findDoc(){
     var frames=document.querySelectorAll('iframe');
+    for(var f of frames){try{var fd=f.contentDocument||f.contentWindow.document;if(fd&&fd.querySelector('form')){return fd;}}catch(e){}}
     for(var f of frames){try{var fd=f.contentDocument||f.contentWindow.document;if(fd&&fd.querySelector('input:not([type=hidden])')){return fd;}}catch(e){}}
     return document;
   }
@@ -3480,13 +3481,11 @@ const _BM_CERTIDOES = `(async function(){
       else if(rgInps.length===2){fillInput(rgInps[0],d.rg);fillInput(rgInps[1],d.orgaoEmissor);ok.push('RG');}
       else{fillInput(rgEl,d.rg);ok.push('RG');tryFill(byAttr('orgao',sc)||byLabel('expedidor',sc)||byLabel('emissor',sc),d.orgaoEmissor,'OrgaoEmissor');}
     }else{miss.push('RG');tryFill(byAttr('orgao',sc)||byLabel('expedidor',sc)||byLabel('emissor',sc),d.orgaoEmissor,'OrgaoEmissor');}
-    tryFill(byAttr('endereco',sc)||byAttr('logradouro',sc)||byLabel('endere\\u00e7o',sc)||byLabel('logradouro',sc),(d.endereco+(d.numero?' '+d.numero:'')+(d.complemento?' '+d.complemento:'')).trim(),'Endereco');
-    tryFill(byAttr('bairro',sc)||byLabel('bairro',sc),d.bairro,'Bairro');
-    tryFill(byAttr('cidade',sc)||byAttr('municipio',sc)||byLabel('cidade',sc)||byLabel('munic\\u00edpio',sc),d.cidade,'Cidade');
+    tryFill(byAttr('endereco',sc)||byAttr('logradouro',sc)||byLabel('endere\\u00e7o',sc)||byLabel('logradouro',sc),[d.endereco,d.numero,d.complemento,d.bairro,d.cidade].filter(Boolean).join(', '),'Endereco');
   }else if(h.includes('stm')){
-    tryFill(byAttr('nome')||byLabel('nome'),d.nome,'Nome');
-    tryFill(byAttr('mae')||byLabel('m\\u00e3e')||byLabel('mae'),d.nomeMae,'NomeMae');
-    var cpfEl=byAttr('cpf')||byLabel('cpf');
+    tryFill(byAttr('nome')||byLabel('nome')||D.querySelector('input[name*="nome"]'),d.nome,'Nome');
+    tryFill(byAttr('mae')||byLabel('m\\u00e3e')||byLabel('mae')||D.querySelector('input[name*="mae"]'),d.nomeMae,'NomeMae');
+    var cpfEl=byAttr('cpf')||byLabel('cpf')||D.querySelector('input[name*="cpf"]');
     if(cpfEl){
       var row=cpfEl.closest('tr,[class*="row"],[class*="group"],[class*="field"]');
       var cpfInps=row?Array.from(row.querySelectorAll('input:not([type=hidden])')):[];
@@ -3494,7 +3493,7 @@ const _BM_CERTIDOES = `(async function(){
       else if(cpfInps.length===2){fillInput(cpfInps[0],cpfD.substring(0,9));fillInput(cpfInps[1],cpfD.substring(9,11));ok.push('CPF');}
       else{fillInput(cpfEl,cpfD);ok.push('CPF');}
     }else miss.push('CPF');
-    var dtEl=byAttr('nasc')||byLabel('nascimento');
+    var dtEl=byAttr('nasc')||byLabel('nascimento')||D.querySelector('input[name*="nasc"],input[name="dia"]');
     if(dtEl){
       var dp=dateISO(d.dataNascimento).split('/');
       var dtRow=dtEl.closest('tr,[class*="row"],[class*="group"],[class*="field"]');
