@@ -3514,30 +3514,12 @@ const _BM_CERTIDOES = `(async function(){
       await cacAlert('O formulario do STM esta num iframe bloqueado pelo navegador.\\n\\nAbra diretamente esta URL e clique o bookmarklet la:\\n\\n'+(srcs.length?srcs.join('\\n'):'(nenhum iframe encontrado)'));
       return;
     }
-    tryFill(byAttr('nome')||byLabel('nome')||D.querySelector('input[name*="nome"],input[name="txt_nome"]'),d.nome,'Nome');
-    tryFill(byAttr('mae')||byLabel('m\\u00e3e')||byLabel('mae')||D.querySelector('input[name*="mae"],input[name="txt_mae"]'),d.nomeMae,'NomeMae');
-    var cpfEl=byAttr('cpf')||byLabel('cpf')||D.querySelector('input[name*="cpf"],input[name="txt_cpf"]');
-    if(cpfEl){
-      var row=cpfEl.closest('tr,[class*="row"],[class*="group"],[class*="field"]');
-      var cpfInps=row?Array.from(row.querySelectorAll('input:not([type=hidden])')):[];
-      if(cpfInps.length>=4){fillInput(cpfInps[0],cpfD.substring(0,3));fillInput(cpfInps[1],cpfD.substring(3,6));fillInput(cpfInps[2],cpfD.substring(6,9));fillInput(cpfInps[3],cpfD.substring(9,11));ok.push('CPF');}
-      else if(cpfInps.length===2){fillInput(cpfInps[0],cpfD.substring(0,9));fillInput(cpfInps[1],cpfD.substring(9,11));ok.push('CPF');}
-      else{fillInput(cpfEl,cpfD);ok.push('CPF');}
-    }else miss.push('CPF');
-    var dtEl=byAttr('nasc')||byLabel('nascimento')||byLabel('nasc')||D.querySelector('input[name="txt_dia"],input[name="dia"],input[name*="nasc"],input[name="txt_nascimento"],input[name="data_nasc"],input[name="dt_nasc"]');
-    if(dtEl){
-      var dp=dateISO(d.dataNascimento).split('/');
-      var dtRow=dtEl.closest('tr,[class*="row"],[class*="group"],[class*="field"]');
-      var dtInps=dtRow?Array.from(dtRow.querySelectorAll('input:not([type=hidden])')):[];
-      if(dtInps.length>=3){fillInput(dtInps[0],dp[0]);fillInput(dtInps[1],dp[1]);fillInput(dtInps[2],dp[2]);ok.push('DataNasc');}
-      else{fillInput(dtEl,dateISO(d.dataNascimento));ok.push('DataNasc');}
-    }else{
-      var diaEl=D.querySelector('input[name*="dia"]');
-      var mesEl=D.querySelector('input[name*="mes"]');
-      var anoEl=D.querySelector('input[name*="ano"]');
-      if(diaEl&&mesEl&&anoEl){var dp2=dateISO(d.dataNascimento).split('/');fillInput(diaEl,dp2[0]);fillInput(mesEl,dp2[1]);fillInput(anoEl,dp2[2]);ok.push('DataNasc');}
-      else miss.push('DataNasc');
-    }
+    tryFill(D.querySelector('input[name="txt_nome"]'),d.nome,'Nome');
+    tryFill(D.querySelector('input[name="txt_nome_mae"]'),d.nomeMae,'NomeMae');
+    var c1=D.querySelector('input[name="txt_cpf1"]'),c2=D.querySelector('input[name="txt_cpf2"]'),c3=D.querySelector('input[name="txt_cpf3"]'),c4=D.querySelector('input[name="txt_dv"]');
+    if(c1&&c2&&c3&&c4){fillInput(c1,cpfD.substring(0,3));fillInput(c2,cpfD.substring(3,6));fillInput(c3,cpfD.substring(6,9));fillInput(c4,cpfD.substring(9,11));ok.push('CPF');}else miss.push('CPF');
+    var da=D.querySelector('input[name="txt_dia"]'),dm=D.querySelector('input[name="txt_mes"]'),dy=D.querySelector('input[name="txt_ano"]');
+    if(da&&dm&&dy){var dp=dateISO(d.dataNascimento).split('/');fillInput(da,dp[0]);fillInput(dm,dp[1]);fillInput(dy,dp[2]);ok.push('DataNasc');}else miss.push('DataNasc');
   }else if(h.includes('tse')){
     tryFill(byAttr('nome')||byLabel('nome'),d.nome,'Nome');
     tryFill(byAttr('cpf')||byLabel('cpf'),d.cpf,'CPF');
