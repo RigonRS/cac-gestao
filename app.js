@@ -1165,6 +1165,23 @@ function renderPerfilPagamentos(processos, clienteId) {
 // ============================================================
 // ARMAS — FORMULÁRIO
 // ============================================================
+function toggleAlmaCano() {
+  const el = document.querySelector('[name="AlmaCano"]');
+  if (!el) return;
+  const v = el.value;
+  const divRaias   = document.getElementById('div-num-raias');
+  const divSentido = document.getElementById('div-sentido-raias');
+  const selSentido = document.querySelector('[name="SentidoRaias"]');
+  if (v === 'Raiada') {
+    if (divRaias)   divRaias.style.display   = '';
+    if (divSentido) divSentido.style.display = '';
+  } else {
+    if (divRaias)   divRaias.style.display   = 'none';
+    if (divSentido) divSentido.style.display = 'none';
+    if (selSentido && v === 'Lisa') selSentido.value = 'Não tem';
+  }
+}
+
 function toggleCamposOrgaoCadastro() {
   const el = document.querySelector('[name="OrgaoCadastro"]');
   if (!el) return;
@@ -1221,7 +1238,15 @@ async function renderArmaForm(clienteId, id = null) {
           </div>
           <div><label>Marca *</label><input name="Marca" value="${val('Marca')}" required /></div>
           <div><label>Modelo *</label><input name="Modelo" value="${val('Modelo')}" required /></div>
-          <div><label>Espécie</label><input name="Especie" value="${val('Especie')}" /></div>
+          <div><label>Espécie</label>
+            <select name="Especie">
+              <option value="">Selecione...</option>
+              <option value="Pistola"        ${sel('Especie','Pistola')}>Pistola</option>
+              <option value="Espingarda"     ${sel('Especie','Espingarda')}>Espingarda</option>
+              <option value="Revólver"       ${sel('Especie','Revólver')}>Revólver</option>
+              <option value="Carabina/Fuzil" ${sel('Especie','Carabina/Fuzil')}>Carabina/Fuzil</option>
+            </select>
+          </div>
           <div><label>Calibre</label><input name="Calibre" value="${val('Calibre')}" /></div>
           <div><label>Grupo Calibre *</label>
             <select name="GrupoCalibre" required>
@@ -1240,11 +1265,25 @@ async function renderArmaForm(clienteId, id = null) {
       <div class="form-body">
         <div class="form-grid">
           <div><label>Capacidade de Tiro</label><input name="CapacidadeTiro" value="${val('CapacidadeTiro')}" /></div>
-          <div><label>N° de Canos</label><input name="NumeroCanos" value="${val('NumeroCanos')}" /></div>
+          <div><label>N° de Canos</label>
+            <select name="NumeroCanos">
+              <option value="">Selecione...</option>
+              <option value="1" ${sel('NumeroCanos','1')}>1</option>
+              <option value="2" ${sel('NumeroCanos','2')}>2</option>
+              <option value="3" ${sel('NumeroCanos','3')}>3</option>
+              <option value="4" ${sel('NumeroCanos','4')}>4</option>
+            </select>
+          </div>
           <div><label>Comprimento do Cano (mm)</label><input name="ComprimentoCano" type="number" min="0" value="${val('ComprimentoCano')}" /></div>
-          <div><label>Alma do Cano</label><input name="AlmaCano" value="${val('AlmaCano')}" /></div>
-          <div><label>N° de Raias</label><input name="NumeroRaias" value="${val('NumeroRaias')}" /></div>
-          <div><label>Sentido das Raias</label>
+          <div><label>Alma do Cano</label>
+            <select name="AlmaCano" onchange="toggleAlmaCano()">
+              <option value="">Selecione...</option>
+              <option value="Raiada" ${sel('AlmaCano','Raiada')}>Raiada</option>
+              <option value="Lisa"   ${sel('AlmaCano','Lisa')}>Lisa</option>
+            </select>
+          </div>
+          <div id="div-num-raias" style="display:none"><label>N° de Raias</label><input name="NumeroRaias" value="${val('NumeroRaias')}" /></div>
+          <div id="div-sentido-raias" style="display:none"><label>Sentido das Raias</label>
             <select name="SentidoRaias">
               <option value="">Selecione...</option>
               <option value="Não tem" ${sel('SentidoRaias','Não tem')}>Não tem</option>
@@ -1279,7 +1318,7 @@ async function renderArmaForm(clienteId, id = null) {
       <button type="button" class="btn btn-outline" onclick="navigate('clientes/perfil',{id:'${clienteId}',tab:'armas'})">Cancelar</button>
     </div>
   </form>`;
-  setTimeout(toggleCamposOrgaoCadastro, 0);
+  setTimeout(() => { toggleCamposOrgaoCadastro(); toggleAlmaCano(); }, 0);
 }
 
 async function salvarArma(e, clienteId, id) {
