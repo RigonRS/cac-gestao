@@ -59,7 +59,7 @@ const CHECKLIST_TRANSFERENCIA = [
   'Anexo C','DSA 1° Endereço','Certidão Justiça Federal',
   'Certidão Justiça Estadual','Certidão Justiça Militar',
   'Certidão Justiça Eleitoral','Avaliação Psicológica','Teste de Tiro',
-  'CTF + SIMAF','Declaração de Habitualidade','Procuração','Requerimento','GRUs'
+  'CTF + SIMAF','Declaração de Habitualidade','Procuração','Requerimento','GRU R$88,00 (Estado do RS)'
 ];
 
 const CHECKLISTS = {
@@ -80,7 +80,7 @@ const CHECKLISTS = {
     'Certidão Justiça Estadual','Certidão Justiça Militar',
     'Certidão Justiça Eleitoral','Comprovante de Ocupação',
     'Comprovante de Residência','Anexo C','DSA','CTF + SIMAF',
-    'Declaração de Habitualidade','Requerimento','GRUs'
+    'Declaração de Habitualidade','Requerimento','GRU R$50,00 (Estado do RS)'
   ],
   'Renovação de CRAF':    CHECKLIST_CR_INCLUSAO_RENOVCRAF,
   'Segunda via de CRAF':  ['Documento de Identificação'],

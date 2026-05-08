@@ -72,6 +72,32 @@ function addMonths(isoDate, months) {
   d.setMonth(d.getMonth() + months);
   return d.toISOString().split('T')[0];
 }
+function dataPorExtenso(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr + 'T00:00:00');
+  const m = ['janeiro','fevereiro','março','abril','maio','junho',
+             'julho','agosto','setembro','outubro','novembro','dezembro'];
+  return `${d.getDate()} de ${m[d.getMonth()]} de ${d.getFullYear()}`;
+}
+function imprimirDocumento(html, titulo) {
+  const w = window.open('', '_blank', 'width=900,height=700');
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${titulo||'Documento'}</title>
+    <style>
+      body{font-family:Arial,sans-serif;font-size:12pt;margin:3cm 2.5cm;line-height:1.7}
+      h1,h2{text-align:center;font-size:13pt;text-transform:uppercase;margin-bottom:24px}
+      p{text-align:justify;margin-bottom:14px}
+      .assinatura{margin-top:60px;text-align:center}
+      .assinatura-linha{border-top:1px solid #000;width:300px;margin:0 auto 4px}
+      table{border-collapse:collapse;width:100%;font-size:10pt;margin-bottom:8px}
+      td,th{border:1px solid #000;padding:4px 6px;vertical-align:top}
+      .secao{background:#333;color:#fff;font-weight:bold;padding:4px 8px;font-size:10pt}
+      @media print{body{margin:2cm}}
+    </style>
+  </head><body>${html}</body></html>`);
+  w.document.close();
+  setTimeout(() => w.print(), 600);
+}
+function chk(v) { return v ? '(X)' : '(  )'; }
 function toTitleCase(s) {
   if (!s) return '';
   return s.trim().toLowerCase().replace(/(^|\s)(\S)/g, (_, sp, ch) => sp + ch.toUpperCase());
@@ -1162,6 +1188,8 @@ async function renderArmaForm(clienteId, id = null) {
         <div class="form-grid">
           <div><label>Número de Série *</label><input name="NumeroSerie" value="${val('NumeroSerie')}" required /></div>
           <div><label>Número SIGMA</label><input name="NumeroSIGMA" value="${val('NumeroSIGMA')}" /></div>
+          <div><label>Número SINARM</label><input name="NumeroSINARM" value="${val('NumeroSINARM')}" /></div>
+          <div><label>Número de Registro</label><input name="NumeroRegistro" value="${val('NumeroRegistro')}" /></div>
           <div><label>Atividade Cadastrada *</label>
             <select name="AtividadeCadastrada" required>
               <option value="">Selecione...</option>
@@ -1251,6 +1279,8 @@ async function salvarArma(e, clienteId, id) {
     ClienteNome:       cliente.Title,
     NumeroSerie:       fd.get('NumeroSerie'),
     NumeroSIGMA:       fd.get('NumeroSIGMA'),
+    NumeroSINARM:      fd.get('NumeroSINARM') || null,
+    NumeroRegistro:    fd.get('NumeroRegistro') || null,
     AtividadeCadastrada: atividade,
     Modelo:            fd.get('Modelo'),
     Calibre:           fd.get('Calibre'),
@@ -1893,6 +1923,18 @@ function buildCamposTransferencia(armasOpts) {
         <div><label>Município</label><input name="proc_municipioComercialComprador" /></div>
         <div><label>Bairro</label><input name="proc_bairroComercialComprador" /></div>
       </div>
+      <div style="margin-top:20px">
+        <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;padding-bottom:6px;border-bottom:1px solid var(--border)">Endereço Residencial do Comprador</div>
+        <div class="form-grid">
+          <div style="grid-column:span 2"><label>Logradouro</label><input name="proc_endResidComprador" /></div>
+          <div><label>Número</label><input name="proc_numResidComprador" /></div>
+          <div><label>Complemento</label><input name="proc_complResidComprador" /></div>
+          <div><label>CEP</label><input name="proc_cepResidComprador" oninput="this.value=fmtCEP(this.value)" maxlength="9" /></div>
+          <div><label>UF</label><input name="proc_ufResidComprador" maxlength="2" style="text-transform:uppercase" /></div>
+          <div><label>Município</label><input name="proc_municipioResidComprador" /></div>
+          <div><label>Bairro</label><input name="proc_bairroResidComprador" /></div>
+        </div>
+      </div>
     </div>
 
     <div id="proc-compra" style="display:none">
@@ -2071,6 +2113,359 @@ async function abrirCertidao(keyword) {
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
+async function abrirGRU(tipo) {
+  const p = window._processoDetalhe;
+  if (!p) return;
+  showLoading();
+  try {
+    const dados = p.DadosEspecificosJSON ? JSON.parse(p.DadosEspecificosJSON) : {};
+    let cpf = '', nome = '';
+    const numRef    = tipo === '88' ? '20371' : '20324';
+    const valorPrin = tipo === '88' ? '8800'  : '5000';
+    const eTransf = TIPOS_TRANSFERENCIA.includes(p.TipoProcesso);
+    if (eTransf && dados.clienteVende === 'sim') {
+      cpf  = dados.cpfComprador  || '';
+      nome = dados.nomeComprador || '';
+    } else {
+      const c = window._clienteDetalhe || {};
+      cpf  = c.CPF   || '';
+      nome = c.Title || '';
+    }
+    const texto = `CPF: ${cpf}\nNome Contribuinte: ${nome}\nN° Referência: ${numRef}\nValor Principal: ${valorPrin}\n(Emitir no formato Boleto)`;
+    try { await navigator.clipboard.writeText(texto); } catch(e) {}
+    window.open('https://pagtesouro.tesouro.gov.br/portal-gru/#/pagamento-gru/formulario?servico=000835', '_blank');
+    toast(`Dados copiados. Preencha: CPF ${cpf}, Ref ${numRef}, Valor R$ ${tipo === '88' ? '88,00' : '50,00'}.`, 'info');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+function _dadosComprador(c, dados, usaComp) {
+  if (usaComp) {
+    return {
+      nome: dados.nomeComprador||'', cpf: dados.cpfComprador||'',
+      nat: dados.municipioNascComprador||'', ufNat: dados.ufNascComprador||'',
+      dataNasc: dados.nascimentoComprador ? fmtDate(dados.nascimentoComprador) : '',
+      profissao: dados.profissaoComprador||'',
+      rg: (dados.rgUFComprador||'').split('/')[0]?.trim()||'',
+      orgao: (dados.rgUFComprador||'').split('/')[1]?.trim()||'',
+      ufRG: '',
+      end: dados.endResidComprador || dados.endComercialComprador || '',
+      num: dados.numResidComprador || dados.numComercialComprador || '',
+      compl: dados.complResidComprador || '',
+      bairro: dados.bairroResidComprador || dados.bairroComercialComprador || '',
+      cidade: dados.municipioResidComprador || dados.municipioComercialComprador || '',
+      uf: dados.ufResidComprador || dados.ufComercialComprador || '',
+      cep: dados.cepResidComprador || dados.cepComercialComprador || '',
+    };
+  }
+  return {
+    nome: c.Title||'', cpf: c.CPF||'',
+    nat: c.Naturalidade||'', ufNat: c.UFNaturalidade||'',
+    dataNasc: c.DataNascimento ? fmtDate(c.DataNascimento) : '',
+    profissao: c.Profissao||'',
+    rg: c.RG||'', orgao: c.OrgaoEmissor||'', ufRG: c.UFDoc||'',
+    end: c.Endereco1||'', num: c.Numero1||'', compl: c.Complemento1||'',
+    bairro: c.Bairro1||'', cidade: c.Cidade1||'',
+    uf: c.UF1Endereco||'', cep: c.CEP1||'',
+  };
+}
+
+async function gerarAnexoC() {
+  const p = window._processoDetalhe;
+  if (!p) return;
+  showLoading();
+  try {
+    const dados = p.DadosEspecificosJSON ? JSON.parse(p.DadosEspecificosJSON) : {};
+    const eTransf  = TIPOS_TRANSFERENCIA.includes(p.TipoProcesso);
+    const usaComp  = eTransf && dados.clienteVende === 'sim';
+    const c = window._clienteDetalhe || {};
+    const d = _dadosComprador(c, dados, usaComp);
+    const endFmt = [d.end, d.num ? `n° ${d.num}` : '', d.compl, d.bairro, d.cidade, d.uf, d.cep ? `CEP ${d.cep}` : ''].filter(Boolean).join(', ');
+    const hoje = new Date().toISOString().split('T')[0];
+    const html = `
+      <h2>DECLARAÇÃO DE INEXISTÊNCIA DE INQUÉRITOS POLICIAIS<br>OU PROCESSOS CRIMINAIS</h2>
+      <p>Eu, <strong>${esc(d.nome)}</strong>, ${esc(usaComp ? 'Brasileiro(a)' : (c.Nacionalidade||''))}, ${esc(d.profissao)}, natural de
+      ${esc(d.nat)}${d.ufNat ? '/' + esc(d.ufNat) : ''}, nascido em ${esc(d.dataNasc)}, com endereço em
+      ${esc(endFmt)}, portador do RG ${esc(d.rg)}${d.orgao ? ' ' + esc(d.orgao) : ''}${d.ufRG ? '/' + esc(d.ufRG) : ''} e CPF nº ${esc(d.cpf)},
+      declaro que não existem inquéritos policiais ou processos criminais em meu nome, tanto no estado de domicílio quanto nos demais entes federativos.</p>
+      <p style="text-align:center;margin-top:48px">${esc(d.cidade)}${d.uf ? '/' + esc(d.uf) : ''}, ${dataPorExtenso(hoje)}</p>
+      <div class="assinatura"><div class="assinatura-linha"></div><div><strong>${esc(d.nome)}</strong></div><div>REQUERENTE</div></div>`;
+    imprimirDocumento(html, 'Anexo C — Declaração');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function gerarDSA(usarComprador) {
+  const p = window._processoDetalhe;
+  if (!p) return;
+  showLoading();
+  try {
+    const dados = p.DadosEspecificosJSON ? JSON.parse(p.DadosEspecificosJSON) : {};
+    const eTransf  = TIPOS_TRANSFERENCIA.includes(p.TipoProcesso);
+    const usaComp  = usarComprador && eTransf && dados.clienteVende === 'sim';
+    const c = window._clienteDetalhe || {};
+    const d = _dadosComprador(c, dados, usaComp);
+    const categorias = usaComp
+      ? [dados.habCacador, dados.habAtirador, dados.habColecionador].filter(Boolean).join(', ') || 'CAC'
+      : (c.Categoria || 'CAC').split(',').map(s => s.trim()).join(', ');
+    const endFmt = [d.end, d.num ? `n° ${d.num}` : '', d.compl, d.bairro, d.cidade, d.uf, d.cep ? `CEP ${d.cep}` : ''].filter(Boolean).join(', ');
+    const hoje = new Date().toISOString().split('T')[0];
+    const html = `
+      <h2>DECLARAÇÃO DE SEGURANÇA DO ACERVO (DSA) — ENDEREÇO DE ACERVO</h2>
+      <p>Eu, <strong>${esc(d.nome)}</strong>, ${esc(usaComp ? 'Brasileiro(a)' : (c.Nacionalidade||''))}, ${esc(d.profissao)}, natural de
+      ${esc(d.nat)}${d.ufNat ? '/' + esc(d.ufNat) : ''}, nascido em ${esc(d.dataNasc)}, com endereço em
+      ${esc(endFmt)}, portador do RG ${esc(d.rg)}${d.orgao ? ' ' + esc(d.orgao) : ''}${d.ufRG ? '/' + esc(d.ufRG) : ''} e CPF nº ${esc(d.cpf)},
+      DECLARO, para fins de <strong>${esc(p.TipoProcesso)} NA POLÍCIA FEDERAL</strong> que o local de guarda do meu acervo de
+      <strong>${esc(categorias)}</strong> possui cofre ou lugar seguro, com tranca, para armazenamento das armas de fogo desmuniciadas de que sou proprietário,
+      e de que adotarei as medidas necessárias para impedir que menor de dezoito anos de idade ou pessoa civilmente incapaz se apodere de arma de fogo sob
+      minha posse ou de minha propriedade, observado o disposto no art. 13 da Lei nº 10.826, de 2003.</p>
+      <p style="text-align:center;margin-top:48px">${esc(d.cidade)}${d.uf ? '/' + esc(d.uf) : ''}, ${dataPorExtenso(hoje)}</p>
+      <div class="assinatura"><div class="assinatura-linha"></div><div><strong>${esc(d.nome)}</strong></div><div>REQUERENTE</div></div>`;
+    imprimirDocumento(html, 'DSA — Declaração de Segurança do Acervo');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function gerarProcuracao() {
+  const p = window._processoDetalhe;
+  if (!p) return;
+  showLoading();
+  try {
+    const dados = p.DadosEspecificosJSON ? JSON.parse(p.DadosEspecificosJSON) : {};
+    const eTransf  = TIPOS_TRANSFERENCIA.includes(p.TipoProcesso);
+    const usaComp  = eTransf && dados.clienteVende === 'sim';
+    const c = window._clienteDetalhe || {};
+    const d = _dadosComprador(c, dados, usaComp);
+    const endFmt = [d.end, d.num ? `n° ${d.num}` : '', d.compl, d.bairro, d.cidade, d.uf, d.cep ? `CEP ${d.cep}` : ''].filter(Boolean).join(', ');
+    const hoje = new Date().toISOString().split('T')[0];
+    const html = `
+      <h1>PROCURAÇÃO</h1>
+      <p><strong>Outorgante</strong> Eu, <strong>${esc(d.nome)}</strong>, ${esc(usaComp ? 'Brasileiro(a)' : (c.Nacionalidade||''))}, ${esc(d.profissao)},
+      natural de ${esc(d.nat)}${d.ufNat ? '/' + esc(d.ufNat) : ''}, nascido em ${esc(d.dataNasc)},
+      com endereço em ${esc(endFmt)},
+      portador do RG ${esc(d.rg)}${d.orgao ? ' ' + esc(d.orgao) : ''}${d.ufRG ? '/' + esc(d.ufRG) : ''} e CPF nº ${esc(d.cpf)}.</p>
+      <p><strong>Outorgado:</strong> SIMONE BARP PEGORARO, brasileira, solteira, Contadora, portadora do RG 1085506374 SSP/RS
+      e CPF de nº 018.699.740-00, com endereço comercial na rua Itararé, 18, sala 101, Petrópolis, Vacaria-RS, CEP 95211-101.</p>
+      <p>Pelo presente instrumento particular de mandato a parte que assina, denominada outorgante, nomeia e constitui como procurador o outorgado
+      acima qualificado, outorgando-lhe os poderes necessários para representá-lo junto aos seguintes órgãos: Comando da 3ª Região Militar e
+      Polícia Federal-SINARM, em seu Serviço de Fiscalização de Produtos Controlados, para promoção da entrega dos documentos de solicitação de
+      concessão de alteração, apostilamento em Certificado de Registro, da promoção e da entrega da concessão de guia de tráfego dos produtos
+      controlados constantes dos acervos por esse órgão controlado, bem como a retirada dos despachos (e/ou documentos) referentes às concessões
+      elencadas, exclusivamente, sendo vedado seu substabelecimento.</p>
+      <p style="text-align:center;margin-top:48px">${esc(d.cidade)}${d.uf ? '/' + esc(d.uf) : ''}, ${dataPorExtenso(hoje)}</p>
+      <div class="assinatura"><div class="assinatura-linha"></div><div><strong>${esc(d.nome)}</strong></div></div>`;
+    imprimirDocumento(html, 'Procuração');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function gerarRequerimento() {
+  const p = window._processoDetalhe;
+  if (!p) return;
+  showLoading();
+  try {
+    const dados = p.DadosEspecificosJSON ? JSON.parse(p.DadosEspecificosJSON) : {};
+    const isTransf  = TIPOS_TRANSFERENCIA.includes(p.TipoProcesso);
+    const isMudanca = p.TipoProcesso === 'Mudança de Acervo';
+    const c = window._clienteDetalhe || {};
+
+    let t = 0, tOutros = '';
+    if (p.TipoProcesso === 'Transferência de Arma SINARM x SIGMA')  t = 1;
+    if (p.TipoProcesso === 'Transferência de Arma SINARM x SINARM') { t = 8; tOutros = p.TipoProcesso; }
+    if (p.TipoProcesso === 'Transferência de Arma SIGMA x SINARM')  t = 6;
+    if (p.TipoProcesso === 'Transferência de Arma SIGMA x SIGMA')   t = 4;
+    if (isMudanca)                                                   t = 5;
+
+    const clienteHabs = (c.Categoria||'').split(',').map(s=>s.trim()).filter(Boolean);
+    let v = {}, cp = {}, vendHabs = [], compHabs = [], vendEmail = '', compEmail = '';
+
+    if (isMudanca || (isTransf && dados.clienteVende === 'sim')) {
+      v = { nome:c.Title||'', cpf:c.CPF||'',
+        rg:`${c.RG||''}${c.OrgaoEmissor?' '+c.OrgaoEmissor:''}${c.UFDoc?'/'+c.UFDoc:''}`,
+        cr:c.NumeroCR||'', telefone:c.Celular||'',
+        end:c.Endereco1||'', num:c.Numero1||'', cep:c.CEP1||'',
+        uf:c.UF1Endereco||'', municipio:c.Cidade1||'', bairro:c.Bairro1||'' };
+      vendHabs = clienteHabs;
+      vendEmail = c.Email||'';
+    } else if (isTransf) {
+      v = { nome:dados.nomeVendedor||'', cpf:dados.cpfVendedor||'',
+        rg:dados.rgVendedor||'', cr:dados.crVendedor||'', telefone:dados.telefoneVendedor||'',
+        end:dados.endVendedor||'', num:dados.numVendedor||'', cep:dados.cepVendedor||'',
+        uf:dados.ufVendedor||'', municipio:dados.municipioVendedor||'', bairro:dados.bairroVendedor||'' };
+      vendHabs = [dados.habCacadorVend, dados.habAtiradorVend, dados.habColecionadorVend].filter(Boolean);
+    }
+
+    if (isMudanca) {
+      cp = { nome:c.Title||'', cpf:c.CPF||'',
+        rgUF:`${c.RG||''}${c.OrgaoEmissor?' '+c.OrgaoEmissor:''}${c.UFDoc?'/'+c.UFDoc:''}`,
+        cr:c.NumeroCR||'', telefone:c.Celular||'',
+        nomePai:c.NomePai||'', nomeMae:c.NomeMae||'',
+        sexo:c.Sexo||'', nascimento:c.DataNascimento?fmtDate(c.DataNascimento):'',
+        paisNasc:'Brasil', ufNasc:c.UFNaturalidade||'', municipioNasc:c.Naturalidade||'',
+        estadoCivil:c.EstadoCivil||'', profissao:c.Profissao||'',
+        empresa:'', cnpj:'',
+        endResid:c.Endereco1||'', numResid:c.Numero1||'',
+        municipioResid:c.Cidade1||'', bairroResid:c.Bairro1||'',
+        ufResid:c.UF1Endereco||'', cepResid:c.CEP1||'',
+        endCom:'', numCom:'', municipioCom:'', bairroCom:'', ufCom:'', cepCom:'' };
+      compHabs = clienteHabs;
+      compEmail = c.Email||'';
+    } else if (isTransf && dados.clienteVende === 'sim') {
+      cp = { nome:dados.nomeComprador||'', cpf:dados.cpfComprador||'',
+        rgUF:dados.rgUFComprador||'', cr:dados.crComprador||'', telefone:dados.telefoneComprador||'',
+        nomePai:dados.nomePaiComprador||'', nomeMae:dados.nomeMaeComprador||'',
+        sexo:dados.sexoComprador||'', nascimento:dados.nascimentoComprador?fmtDate(dados.nascimentoComprador):'',
+        paisNasc:dados.paisNascComprador||'', ufNasc:dados.ufNascComprador||'', municipioNasc:dados.municipioNascComprador||'',
+        estadoCivil:dados.estadoCivilComprador||'', profissao:dados.profissaoComprador||'',
+        empresa:dados.empresaComprador||'', cnpj:dados.cnpjComprador||'',
+        endResid:dados.endResidComprador||'', numResid:dados.numResidComprador||'',
+        municipioResid:dados.municipioResidComprador||'', bairroResid:dados.bairroResidComprador||'',
+        ufResid:dados.ufResidComprador||'', cepResid:dados.cepResidComprador||'',
+        endCom:dados.endComercialComprador||'', numCom:dados.numComercialComprador||'',
+        municipioCom:dados.municipioComercialComprador||'', bairroCom:dados.bairroComercialComprador||'',
+        ufCom:dados.ufComercialComprador||'', cepCom:dados.cepComercialComprador||'' };
+      compHabs = [dados.habCacador, dados.habAtirador, dados.habColecionador].filter(Boolean);
+    } else if (isTransf) {
+      cp = { nome:c.Title||'', cpf:c.CPF||'',
+        rgUF:`${c.RG||''}${c.OrgaoEmissor?' '+c.OrgaoEmissor:''}${c.UFDoc?'/'+c.UFDoc:''}`,
+        cr:c.NumeroCR||'', telefone:c.Celular||'',
+        nomePai:c.NomePai||'', nomeMae:c.NomeMae||'',
+        sexo:c.Sexo||'', nascimento:c.DataNascimento?fmtDate(c.DataNascimento):'',
+        paisNasc:'Brasil', ufNasc:c.UFNaturalidade||'', municipioNasc:c.Naturalidade||'',
+        estadoCivil:c.EstadoCivil||'', profissao:c.Profissao||'',
+        empresa:dados.empresaAdicional||'', cnpj:dados.cnpjCpfAdicional||'',
+        endResid:c.Endereco1||'', numResid:c.Numero1||'',
+        municipioResid:c.Cidade1||'', bairroResid:c.Bairro1||'',
+        ufResid:c.UF1Endereco||'', cepResid:c.CEP1||'',
+        endCom:dados.endComercialAdicional||'', numCom:dados.numComercialAdicional||'',
+        municipioCom:dados.municipioComercialAdicional||'', bairroCom:dados.bairroComercialAdicional||'',
+        ufCom:dados.ufComercialAdicional||'', cepCom:dados.cepComercialAdicional||'' };
+      compHabs = clienteHabs;
+      compEmail = c.Email||'';
+    }
+
+    let arm = {};
+    try {
+      const armaIdRaw = (dados.armaId||'').split('|')[0];
+      if (armaIdRaw && (isMudanca || dados.clienteVende === 'sim')) {
+        const arma = await App.graph.getItem(CONFIG.listas.armas, armaIdRaw);
+        arm = { acervoOrigem:arma.AtividadeCadastrada||'', especie:arma.Especie||'',
+          calibre:arma.Calibre||'', marca:arma.Marca||'', modelo:arma.Modelo||'',
+          serie:arma.NumeroSerie||'', cadSinarm:arma.NumeroSINARM||'',
+          numReg:arma.NumeroRegistro||'', paisFab:arma.PaisFabricacao||'',
+          capTiros:arma.CapacidadeTiro||'', numCanos:arma.NumeroCanos||'',
+          numSigma:arma.NumeroSIGMA||'', alma:arma.AlmaCano||'',
+          numRaias:arma.NumeroRaias||'', sentido:arma.SentidoRaias||'',
+          comprCano:'', acabamento:arma.Acabamento||'', funcionamento:arma.Funcionamento||'' };
+      } else if (isTransf) {
+        arm = { acervoOrigem:'', especie:dados.especie||'', calibre:dados.calibre||'',
+          marca:dados.marcaArma||'', modelo:dados.modeloArma||'',
+          serie:dados.serieArma||'', cadSinarm:dados.cadSinarm||'',
+          numReg:dados.numRegistro||'', paisFab:dados.paisFabricacao||'',
+          capTiros:dados.capacidadeTiros||'', numCanos:dados.numeroCanos||'',
+          numSigma:dados.numSigma||'', alma:dados.alma||'',
+          numRaias:dados.numRaias||'', sentido:dados.sentidoRaias||'',
+          comprCano:dados.comprCano||'', acabamento:dados.acabamento||'',
+          funcionamento:dados.funcionamento||'' };
+      }
+    } catch(err) {}
+
+    const acervoDestino = dados.acervoDestinoVenda || dados.acervoDestino || '';
+    const hoje = new Date().toISOString().split('T')[0];
+    const cidadeReq = v.municipio || c.Cidade1 || '';
+    const ufReq = v.uf || c.UF1Endereco || '';
+    const habsChk = (arr) => {
+      return `${chk(arr.includes('Caçador'))} Caçador &nbsp;&nbsp; ${chk(arr.includes('Atirador'))} Atirador &nbsp;&nbsp; ${chk(arr.includes('Colecionador'))} Colecionador`;
+    };
+    const ecChk = (ec) => `1-Solteiro ${chk(ec==='Solteiro')} &nbsp; 3-Viúvo ${chk(ec==='Viúvo')} &nbsp; 5-Divorciado ${chk(ec==='Divorciado')} &nbsp; 7-União Homoafetiva ${chk(ec==='União Homoafetiva')}<br>
+      2-Casado ${chk(ec==='Casado')} &nbsp; 4-Separado Jud. ${chk(ec==='Separado Jud.')} &nbsp; 6-União Estável ${chk(ec==='União Estável')} &nbsp; 8-Outros ${chk(ec==='Outros')}`;
+    const ac = arm.acabamento||'';
+    const fn = arm.funcionamento||'';
+
+    const html = `
+      <h2 style="font-size:11pt">SERVIÇO PÚBLICO FEDERAL — MINISTÉRIO DA JUSTIÇA E SEGURANÇA PÚBLICA — POLÍCIA FEDERAL<br>
+      REQUERIMENTO PADRÃO DE TRANSFERÊNCIA – SINARM CAC</h2>
+      <table>
+        <tr><td colspan="2" class="secao">1 – TIPO DE REQUERIMENTO</td></tr>
+        <tr><td colspan="2" style="font-style:italic">PEDIDO DE AUTORIZAÇÃO DE TRANSFERÊNCIA (solicitado pelo Alienante):</td></tr>
+        <tr><td colspan="2">1 - ${chk(t===1)} AUTORIZAÇÃO para transferir arma de fogo do SINARM-CAC para SIGMA.</td></tr>
+        <tr><td colspan="2">2 - ${chk(false)} AUTORIZAÇÃO para transferir arma de fogo do SINARM-CAC para SINARM-Defesa Pessoal.</td></tr>
+        <tr><td colspan="2">3 - ${chk(false)} OUTROS (Especificar): </td></tr>
+        <tr><td colspan="2" style="font-style:italic">PEDIDO DE TRANSFERÊNCIA (solicitado pelo Adquirente):</td></tr>
+        <tr><td colspan="2">4 - ${chk(t===4)} TRANSFERIR arma de fogo entre proprietários CACs distintos.</td></tr>
+        <tr><td colspan="2">5 - ${chk(t===5)} TRANSFERIR arma de fogo entre acervos de mesmo proprietário.</td></tr>
+        <tr><td colspan="2">6 - ${chk(t===6)} TRANSFERIR arma de fogo do SIGMA para o SINARM-CAC (autorização necessária).</td></tr>
+        <tr><td colspan="2">7 - ${chk(false)} TRANSFERIR arma de fogo do SINARM-Defesa Pessoal para o SINARM-CAC.</td></tr>
+        <tr><td colspan="2">8 - ${chk(t===8)} OUTROS (Especificar): ${t===8?esc(tOutros):''}</td></tr>
+      </table>
+      <table style="margin-top:6px">
+        <tr><td colspan="4" class="secao">2 – DADOS DO VENDEDOR/DOADOR</td></tr>
+        <tr><td colspan="4">Nome Completo/Razão Social: ${esc(v.nome)}</td></tr>
+        <tr><td colspan="2">CPF/CNPJ: ${esc(v.cpf)}</td><td>RG: ${esc(v.rg)}</td><td>CR: ${esc(v.cr)}</td></tr>
+        <tr><td colspan="4">Atividades habilitadas no CR: ${habsChk(vendHabs)}</td></tr>
+        <tr><td colspan="2">E-mail: ${esc(vendEmail)}</td><td colspan="2">Telefone: ${esc(v.telefone)}</td></tr>
+        <tr><td colspan="3">Endereço Residencial: ${esc(v.end)} &nbsp; Nº: ${esc(v.num)} &nbsp; CEP: ${esc(v.cep)}</td><td>UF: ${esc(v.uf)}</td></tr>
+        <tr><td colspan="2">Município: ${esc(v.municipio)}</td><td colspan="2">Bairro: ${esc(v.bairro)}</td></tr>
+      </table>
+      <table style="margin-top:6px">
+        <tr><td colspan="4" class="secao">3 – DADOS DO COMPRADOR/RECEBEDOR</td></tr>
+        <tr><td colspan="4">Nome Completo/Razão Social: ${esc(cp.nome)}</td></tr>
+        <tr><td colspan="2">CPF/CNPJ: ${esc(cp.cpf)}</td><td>RG-UF: ${esc(cp.rgUF)}</td><td>CR: ${esc(cp.cr)}</td></tr>
+        <tr><td colspan="4">Atividades habilitadas no CR: ${habsChk(compHabs)}</td></tr>
+        <tr><td colspan="2">E-mail: ${esc(compEmail)}</td><td colspan="2">Telefone: ${esc(cp.telefone)}</td></tr>
+        <tr><td colspan="4">Categoria: 1 ${chk(true)} Cidadão &nbsp; 3 ${chk(false)} Militar &nbsp; 4 ${chk(false)} Forças Policiais Civis &nbsp; 5 ${chk(false)} Guarda Municipal &nbsp; 6 ${chk(false)} Judiciário/MP &nbsp; 7 ${chk(false)} Outros</td></tr>
+        <tr><td colspan="2">Nome do Pai: ${esc(cp.nomePai)}</td><td colspan="2">Nome da Mãe: ${esc(cp.nomeMae)}</td></tr>
+        <tr><td colspan="2">Sexo: ${esc(cp.sexo)}</td><td colspan="2">Data de Nascimento: ${esc(cp.nascimento)}</td></tr>
+        <tr><td>País de Nascimento: ${esc(cp.paisNasc)}</td><td>UF de Nasc.: ${esc(cp.ufNasc)}</td><td colspan="2">Município Nasc.: ${esc(cp.municipioNasc)}</td></tr>
+        <tr><td colspan="4">Estado Civil: ${ecChk(cp.estadoCivil)}</td></tr>
+        <tr><td colspan="2">Profissão: ${esc(cp.profissao)}</td><td colspan="2">Empresa/Órgão de Trabalho: ${esc(cp.empresa)}</td></tr>
+        <tr><td colspan="2">CNPJ: ${esc(cp.cnpj)}</td></tr>
+        <tr><td colspan="3">Endereço Residencial: ${esc(cp.endResid)} Nº: ${esc(cp.numResid)} CEP: ${esc(cp.cepResid)}</td><td>UF: ${esc(cp.ufResid)}</td></tr>
+        <tr><td colspan="2">Município: ${esc(cp.municipioResid)}</td><td colspan="2">Bairro: ${esc(cp.bairroResid)}</td></tr>
+        <tr><td colspan="3">Endereço Comercial: ${esc(cp.endCom)} Nº: ${esc(cp.numCom)} CEP: ${esc(cp.cepCom)}</td><td>UF: ${esc(cp.ufCom)}</td></tr>
+        <tr><td colspan="2">Município: ${esc(cp.municipioCom)}</td><td colspan="2">Bairro: ${esc(cp.bairroCom)}</td></tr>
+      </table>
+      <table style="margin-top:6px">
+        <tr><td colspan="4" class="secao">4 – DADOS DA ARMA</td></tr>
+        <tr><td colspan="2">Acervo de Origem: ${esc(arm.acervoOrigem)}</td><td colspan="2">Acervo de Destino: ${esc(acervoDestino)}</td></tr>
+        <tr><td>Espécie: ${esc(arm.especie)}</td><td>Calibre: ${esc(arm.calibre)}</td><td>Marca: ${esc(arm.marca)}</td><td>Modelo: ${esc(arm.modelo)}</td></tr>
+        <tr><td colspan="2">Número de Série: ${esc(arm.serie)}</td><td>Cad. Sinarm: ${esc(arm.cadSinarm)}</td><td>Nº Registro: ${esc(arm.numReg)}</td></tr>
+        <tr><td colspan="2">País de Fabricação: ${esc(arm.paisFab)}</td><td>Cap. de Tiros: ${esc(arm.capTiros)}</td><td>Nº Canos: ${esc(arm.numCanos)}</td></tr>
+        <tr><td colspan="4">Nº SIGMA (se houver): ${esc(arm.numSigma)}</td></tr>
+        <tr>
+          <td colspan="2">Alma: ${chk(arm.alma==='Raiada')} Raiada &nbsp; ${chk(arm.alma==='Lisa')} Lisa</td>
+          <td>Nº de Raias: ${esc(arm.numRaias)}</td>
+          <td>Sentido: ${chk(arm.sentido==='Direita')} Direita &nbsp; ${chk(arm.sentido==='Esquerda')} Esquerda</td>
+        </tr>
+        <tr>
+          <td>Compr. do Cano (mm): ${esc(arm.comprCano)}</td>
+          <td colspan="3">Acabamento: 1-${chk(ac==='Oxidado')} Oxidado &nbsp; 2-${chk(ac==='Aço Inox')} Aço Inox &nbsp; 3-${chk(ac==='Niquelado')} Niquelado &nbsp; 4-${chk(ac==='Outros'||(!ac&&false))} Outros</td>
+        </tr>
+        <tr>
+          <td colspan="4">Funcionamento: 1-${chk(fn==='Repetição')} Repetição &nbsp; 2-${chk(fn==='Automático')} Automático &nbsp; 3-${chk(fn==='Semiautomático'||fn==='Semi-Automático')} Semiautomático &nbsp; 4-${chk(fn==='Outros')} Outros</td>
+        </tr>
+      </table>
+      <table style="margin-top:6px">
+        <tr><td class="secao">5 – TERMOS DE ACEITE DE TRANSFERÊNCIA</td></tr>
+        <tr><td>(X) O adquirente e o alienante manifestam sua anuência à transferência da arma descrita neste requerimento.<br>
+        (X) Declaro serem verdadeiras as informações consignadas neste formulário.</td></tr>
+        <tr><td style="text-align:center;padding:12px">${esc(cidadeReq)}${ufReq?'/'+esc(ufReq):''}, ${dataPorExtenso(hoje)}</td></tr>
+        <tr><td>
+          <div style="display:flex;justify-content:space-around;margin:12px 0">
+            <div style="text-align:center;width:44%"><div style="border-top:1px solid #000;margin-bottom:4px"></div><strong>ALIENANTE:</strong><br>${esc(v.nome)}</div>
+            <div style="text-align:center;width:44%"><div style="border-top:1px solid #000;margin-bottom:4px"></div><strong>ADQUIRENTE:</strong><br>${esc(cp.nome)}</div>
+          </div>
+        </td></tr>
+      </table>
+      <table style="margin-top:6px">
+        <tr><td class="secao">6 – TERMO DE RESPONSABILIDADE (ADQUIRENTE)</td></tr>
+        <tr><td>(X) Declaro que não estou respondendo a inquérito policial ou a processo criminal.</td></tr>
+        <tr><td style="text-align:center;padding:12px">${esc(cidadeReq)}${ufReq?'/'+esc(ufReq):''}, ${dataPorExtenso(hoje)}</td></tr>
+        <tr><td style="text-align:center;padding:12px">
+          <div style="border-top:1px solid #000;width:300px;margin:0 auto 4px"></div>
+          <strong>ADQUIRENTE:</strong><br>${esc(cp.nome)}
+        </td></tr>
+      </table>`;
+    imprimirDocumento(html, 'Requerimento de Transferência');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
 // ============================================================
 // PROCESSOS — DETALHE
 // ============================================================
@@ -2136,18 +2531,33 @@ async function renderProcessoDetalhe(id) {
             </div>
             ${checklist.map((item, i) => {
               const certCfg = CERTIDOES_CONFIG.find(c => item.nome.includes(c.keyword));
-              const temFiliacao = item.nome.includes('Declaração de Filiação');
+              const temFiliacao    = item.nome.includes('Declaração de Filiação');
               const temHabitualidade = item.nome.includes('Declaração de Habitualidade');
-              const temCTF = item.nome.includes('CTF');
+              const temCTF         = item.nome.includes('CTF');
+              const temGRU88       = item.nome.includes('GRU R$88');
+              const temGRU50       = item.nome.includes('GRU R$50');
+              const temAnexoC      = item.nome === 'Anexo C';
+              const temDSA         = item.nome === 'DSA';
+              const temDSA1End     = item.nome.includes('DSA 1°');
+              const temProcuracao  = item.nome === 'Procuração';
+              const temReq         = item.nome === 'Requerimento';
+              const btnStyle       = 'class="btn btn-ghost btn-xs" style="font-size:11px;padding:1px 7px;height:auto;white-space:nowrap"';
               return `
               <div class="checklist-item ${item.concluido?'done':''}" id="clp-${i}">
                 <input type="checkbox" ${item.concluido?'checked':''} onchange="atualizarChecklistItem('${id}',${i},this.checked,document.getElementById('clpobs-${i}').value)" />
                 <div class="checklist-nome" style="display:flex;align-items:center;gap:6px">
                   <span>${esc(item.nome)}</span>
-                  ${certCfg ? `<button onclick="abrirCertidao('${certCfg.keyword}')" class="btn btn-ghost btn-xs" style="font-size:11px;padding:1px 7px;height:auto;white-space:nowrap" title="Abrir site e copiar dados do cliente"><i class="bi bi-box-arrow-up-right"></i> Emitir</button>` : ''}
-                  ${temFiliacao ? `<button onclick="solicitarDeclaracao('filiacao')" class="btn btn-ghost btn-xs" style="font-size:11px;padding:1px 7px;height:auto;white-space:nowrap" title="Solicitar via WhatsApp do Clube"><i class="bi bi-whatsapp"></i> Solicitar</button>` : ''}
-                  ${temHabitualidade ? `<button onclick="solicitarDeclaracao('habitualidade')" class="btn btn-ghost btn-xs" style="font-size:11px;padding:1px 7px;height:auto;white-space:nowrap" title="Solicitar via WhatsApp do Clube"><i class="bi bi-whatsapp"></i> Solicitar</button>` : ''}
-                  ${temCTF ? `<button onclick="window.open('https://servicos.ibama.gov.br/ctf/sistema.php','_blank')" class="btn btn-ghost btn-xs" style="font-size:11px;padding:1px 7px;height:auto;white-space:nowrap" title="Abrir site do IBAMA"><i class="bi bi-box-arrow-up-right"></i> Abrir site</button>` : ''}
+                  ${certCfg      ? `<button onclick="abrirCertidao('${certCfg.keyword}')" ${btnStyle} title="Abrir site e copiar dados"><i class="bi bi-box-arrow-up-right"></i> Emitir</button>` : ''}
+                  ${temFiliacao  ? `<button onclick="solicitarDeclaracao('filiacao')" ${btnStyle} title="Solicitar via WhatsApp do Clube"><i class="bi bi-whatsapp"></i> Solicitar</button>` : ''}
+                  ${temHabitualidade ? `<button onclick="solicitarDeclaracao('habitualidade')" ${btnStyle} title="Solicitar via WhatsApp do Clube"><i class="bi bi-whatsapp"></i> Solicitar</button>` : ''}
+                  ${temCTF       ? `<button onclick="window.open('https://servicos.ibama.gov.br/ctf/sistema.php','_blank')" ${btnStyle} title="Abrir site do IBAMA"><i class="bi bi-box-arrow-up-right"></i> Abrir site</button>` : ''}
+                  ${temGRU88     ? `<button onclick="abrirGRU('88')" ${btnStyle} title="Copiar dados e abrir pagtesouro.gov.br"><i class="bi bi-receipt"></i> Gerar GRU</button>` : ''}
+                  ${temGRU50     ? `<button onclick="abrirGRU('50')" ${btnStyle} title="Copiar dados e abrir pagtesouro.gov.br"><i class="bi bi-receipt"></i> Gerar GRU</button>` : ''}
+                  ${temAnexoC    ? `<button onclick="gerarAnexoC()" ${btnStyle} title="Gerar Anexo C preenchido"><i class="bi bi-file-earmark-text"></i> Gerar PDF</button>` : ''}
+                  ${temDSA       ? `<button onclick="gerarDSA(false)" ${btnStyle} title="Gerar DSA preenchido"><i class="bi bi-file-earmark-text"></i> Gerar PDF</button>` : ''}
+                  ${temDSA1End   ? `<button onclick="gerarDSA(true)" ${btnStyle} title="Gerar DSA 1° Endereço preenchido"><i class="bi bi-file-earmark-text"></i> Gerar PDF</button>` : ''}
+                  ${temProcuracao? `<button onclick="gerarProcuracao()" ${btnStyle} title="Gerar Procuração preenchida"><i class="bi bi-file-earmark-text"></i> Gerar PDF</button>` : ''}
+                  ${temReq       ? `<button onclick="gerarRequerimento()" ${btnStyle} title="Gerar Requerimento preenchido"><i class="bi bi-file-earmark-text"></i> Gerar PDF</button>` : ''}
                 </div>
                 <div class="checklist-obs"><input type="text" id="clpobs-${i}" value="${esc(item.observacao||'')}" placeholder="Observação..." onblur="atualizarChecklistItem('${id}',${i},document.querySelector('#clp-${i} input[type=checkbox]').checked,this.value)" /></div>
               </div>`;
