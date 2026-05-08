@@ -42,6 +42,10 @@ function fmtCNPJ(v) {
   const d = (v || '').replace(/\D/g, '').slice(0, 14);
   return d.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, '$1.$2.$3/$4-$5');
 }
+function fmtCNPJouCPF(v) {
+  const d = (v || '').replace(/\D/g, '').slice(0, 14);
+  return d.length <= 11 ? fmtCPF(d) : fmtCNPJ(d);
+}
 function fmtDate(iso) {
   if (!iso) return '—';
   const [y, m, d] = (iso.split('T')[0]).split('-');
@@ -70,7 +74,7 @@ function addMonths(isoDate, months) {
 }
 function toTitleCase(s) {
   if (!s) return '';
-  return s.trim().toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+  return s.trim().toLowerCase().replace(/(^|\s)(\S)/g, (_, sp, ch) => sp + ch.toUpperCase());
 }
 // Calcula quanto foi recebido e quanto está pendente num processo
 function calcPagamento(p) {
@@ -549,7 +553,7 @@ async function renderClienteForm(id = null, importParams = {}) {
           <div><label>CPF</label><input name="CPF" value="${val('CPF')}" oninput="this.value=fmtCPF(this.value)" maxlength="14" /></div>
           <div><label>Senha GOV</label><input name="SenhaGOV" value="${val('SenhaGOV')}" /></div>
           <div><label>RG</label><input name="RG" value="${val('RG')}" /></div>
-          <div><label>Órgão Emissor</label><input name="OrgaoEmissor" value="${val('OrgaoEmissor')}" /></div>
+          <div><label>Órgão Emissor</label><input name="OrgaoEmissor" value="${val('OrgaoEmissor')}" oninput="this.value=this.value.toUpperCase()" style="text-transform:uppercase" /></div>
           <div><label>UF (RG)</label><input name="UFDoc" value="${val('UFDoc')}" maxlength="2" style="text-transform:uppercase" /></div>
           <div><label>Data de Expedição (RG)</label><input type="date" name="DataExpedicaoRG" value="${dateVal('DataExpedicaoRG')}" /></div>
           <div><label>Data de Validade RG ou CNH</label><input type="date" name="DataValidadeRGouCNH" value="${dateVal('DataValidadeRGouCNH')}" /></div>
@@ -558,6 +562,8 @@ async function renderClienteForm(id = null, importParams = {}) {
           <div><label>Naturalidade</label><input name="Naturalidade" value="${val('Naturalidade')}" /></div>
           <div><label>UF Naturalidade</label><input name="UFNaturalidade" value="${val('UFNaturalidade')}" maxlength="2" style="text-transform:uppercase" /></div>
           <div><label>Profissão</label><input name="Profissao" value="${val('Profissao')}" /></div>
+          <div><label>Sexo</label><select name="Sexo"><option value="">Selecione...</option><option ${c.Sexo==='Masculino'?'selected':''}>Masculino</option><option ${c.Sexo==='Feminino'?'selected':''}>Feminino</option></select></div>
+          <div><label>Estado Civil</label><select name="EstadoCivil"><option value="">Selecione...</option>${['Solteiro','Casado','Divorciado','Viúvo','União Estável','Separado Jud.','Outros'].map(v=>`<option ${c.EstadoCivil===v?'selected':''}>${v}</option>`).join('')}</select></div>
         </div>
       </div>
     </div>
@@ -585,7 +591,6 @@ async function renderClienteForm(id = null, importParams = {}) {
       <div class="form-section-title">CTF — Caçador</div>
       <div class="form-body">
         <div class="form-grid">
-          <div><label>Data de Expedição CTF</label><input type="date" name="DataExpedicaoCTF" value="${dateVal('DataExpedicaoCTF')}" /></div>
           <div><label>Data de Validade CTF</label><input type="date" name="DataValidadeCTF" value="${dateVal('DataValidadeCTF')}" /></div>
         </div>
       </div>
@@ -614,6 +619,8 @@ async function renderClienteForm(id = null, importParams = {}) {
               ${clubes.map(cl => `<option value="${cl.id}" ${String(cl.id)===String(c.ClubeId)?'selected':''}>${esc(cl.Title)}</option>`).join('')}
             </select>
           </div>
+          <div><label>Número da Filiação</label><input name="NumeroFiliacao" value="${esc(c.NumeroFiliacao||'')}" oninput="this.value=this.value.replace(/\\D/g,'')" /></div>
+          <div><label>Data de Filiação</label><input type="date" name="DataFiliacao" value="${c.DataFiliacao ? c.DataFiliacao.split('T')[0] : ''}" /></div>
         </div>
       </div>
     </div>
@@ -670,7 +677,7 @@ async function salvarCliente(e, id) {
     NumeroCR:         fd.get('NumeroCR'),
     DataValidadeCR:   fd.get('DataValidadeCR'),
     RG:               fd.get('RG'),
-    OrgaoEmissor:     toTitleCase(fd.get('OrgaoEmissor')),
+    OrgaoEmissor:     (fd.get('OrgaoEmissor') || '').toUpperCase(),
     UFDoc:            fd.get('UFDoc').toUpperCase(),
     DataNascimento:   fd.get('DataNascimento') || null,
     DataExpedicaoRG:  fd.get('DataExpedicaoRG') || null,
@@ -679,14 +686,17 @@ async function salvarCliente(e, id) {
     Naturalidade:     toTitleCase(fd.get('Naturalidade')),
     UFNaturalidade:   fd.get('UFNaturalidade').toUpperCase(),
     Profissao:        toTitleCase(fd.get('Profissao')),
+    Sexo:             fd.get('Sexo') || null,
+    EstadoCivil:      fd.get('EstadoCivil') || null,
     Celular:          fmtCelular(fd.get('Celular')),
     Email:            fd.get('Email'),
     NomeMae:          toTitleCase(fd.get('NomeMae')),
     NomePai:          toTitleCase(fd.get('NomePai')),
     ClubeId:          fd.get('ClubeId') || null,
     ClubeNome:        (() => { const sel = e.target.querySelector('[name="ClubeId"]'); if (!sel || !sel.value) return ''; return sel.options[sel.selectedIndex]?.text || ''; })(),
+    NumeroFiliacao:   fd.get('NumeroFiliacao') || null,
+    DataFiliacao:     fd.get('DataFiliacao') || null,
     Categoria:        cats.join(','),
-    DataExpedicaoCTF: fd.get('DataExpedicaoCTF') || null,
     DataValidadeCTF:  fd.get('DataValidadeCTF') || null,
     CEP1:             fd.get('CEP1'),
     Endereco1:        toTitleCase(fd.get('Endereco1')),
@@ -792,7 +802,8 @@ function renderPerfilDados(c) {
         ${row('Nome Completo', c.Title)} ${row('CPF', c.CPF)} ${row('Senha GOV', c.SenhaGOV)}
         ${row('RG', c.RG)} ${row('Órgão Emissor', c.OrgaoEmissor)} ${row('UF (RG)', c.UFDoc)}
         ${dateRow('Data Expedição RG', 'DataExpedicaoRG')} ${dateRow('Validade RG/CNH', 'DataValidadeRGouCNH')}
-        ${dateRow('Data de Nascimento', 'DataNascimento')} ${row('Nacionalidade', c.Nacionalidade)}
+        ${dateRow('Data de Nascimento', 'DataNascimento')} ${row('Sexo', c.Sexo)} ${row('Estado Civil', c.EstadoCivil)}
+        ${row('Nacionalidade', c.Nacionalidade)}
         ${row('Naturalidade', c.Naturalidade)} ${row('UF Naturalidade', c.UFNaturalidade)}
         ${row('Profissão', c.Profissao)}
       </div></div>
@@ -827,6 +838,8 @@ function renderPerfilDados(c) {
       <div class="form-section-title">Filiação Clube de Tiro</div>
       <div class="form-body"><div class="info-grid">
         ${row('Clube de Tiro', c.ClubeNome || c.NomeClubeAtiro)}
+        ${row('Número da Filiação', c.NumeroFiliacao)}
+        ${row('Data de Filiação', fmtDate(c.DataFiliacao))}
       </div></div>
     </div>
     <div class="form-section">
@@ -1631,10 +1644,14 @@ async function renderProcessoForm(clienteId = null) {
 }
 
 let _processoArmasCache = [];
+let _processoClienteCategoria = [];
 
 async function onClienteProcessoChange(clienteId) {
   if (!clienteId) return;
   _processoArmasCache = (await App.getArmas()).filter(a => String(a.ClienteId) === String(clienteId));
+  const clientes = await App.getClientes();
+  const cliente = clientes.find(c => String(c.id) === String(clienteId));
+  _processoClienteCategoria = cliente ? (cliente.Categoria || '').split(',').map(s => s.trim()).filter(Boolean) : [];
   const tipo = document.querySelector('[name="TipoProcesso"]')?.value;
   if (tipo) onTipoProcessoChange(tipo);
 }
@@ -1668,7 +1685,7 @@ function onTipoProcessoChange(tipo) {
     camposEl.innerHTML = buildCamposInclusaoExclusaoAtividade(clienteId, true);
   } else if (tipo === 'Mudança de Acervo' || tipo === 'Renovação de CRAF' || tipo === 'Segunda via de CRAF') {
     camposEl.innerHTML = buildCamposArmaSelector(armasOpts);
-    if (tipo === 'Mudança de Acervo') camposEl.innerHTML += buildCamposMudancaAcervo();
+    if (tipo === 'Mudança de Acervo') camposEl.innerHTML += buildCamposMudancaAcervo(_processoClienteCategoria);
   } else if (TIPOS_TRANSFERENCIA.includes(tipo)) {
     camposEl.innerHTML = buildCamposTransferencia(armasOpts);
   }
@@ -1799,11 +1816,28 @@ function onArmaAcervoChange(val) {
   if (input) input.value = atividade;
 }
 
-function buildCamposMudancaAcervo() {
-  return `<div style="padding:0 20px 20px"><div class="form-grid">
-    <div><label>Acervo Atual</label><input name="proc_acervoAtual" placeholder="Preenchido automaticamente..." readonly /></div>
-    <div><label>Acervo de Destino</label><select name="proc_acervoDestino"><option value="">Selecione...</option><option>Colecionador</option><option>Atirador</option><option>Caçador</option></select></div>
-  </div></div>`;
+function buildCamposMudancaAcervo(categoriasCliente = []) {
+  const cats = categoriasCliente.length > 0 ? categoriasCliente : ['Colecionador', 'Atirador', 'Caçador'];
+  const acervoOpts = cats.map(v => `<option>${v}</option>`).join('');
+  return `<div style="padding:0 20px 20px">
+    <div class="form-grid">
+      <div><label>Acervo Atual</label><input name="proc_acervoAtual" placeholder="Preenchido automaticamente..." readonly /></div>
+      <div><label>Acervo de Destino</label><select name="proc_acervoDestino"><option value="">Selecione...</option>${acervoOpts}</select></div>
+    </div>
+    <div style="margin-top:20px">
+      <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;padding-bottom:6px;border-bottom:1px solid var(--border)">Dados Adicionais</div>
+      <div class="form-grid">
+        <div><label>Empresa/Órgão de Trabalho</label><input name="proc_empresaAdicional" /></div>
+        <div><label>CNPJ/CPF</label><input name="proc_cnpjCpfAdicional" oninput="this.value=fmtCNPJouCPF(this.value)" maxlength="18" /></div>
+        <div style="grid-column:span 2"><label>Endereço Comercial</label><input name="proc_endComercialAdicional" /></div>
+        <div><label>Número</label><input name="proc_numComercialAdicional" /></div>
+        <div><label>CEP</label><input name="proc_cepComercialAdicional" oninput="this.value=fmtCEP(this.value)" maxlength="9" /></div>
+        <div><label>UF</label><input name="proc_ufComercialAdicional" maxlength="2" style="text-transform:uppercase" /></div>
+        <div><label>Município</label><input name="proc_municipioComercialAdicional" /></div>
+        <div><label>Bairro</label><input name="proc_bairroComercialAdicional" /></div>
+      </div>
+    </div>
+  </div>`;
 }
 
 function buildCamposTransferencia(armasOpts) {
@@ -1827,6 +1861,7 @@ function buildCamposTransferencia(armasOpts) {
     <div id="proc-vende" style="display:none">
       <div class="form-grid">
         <div><label>Arma (do cliente)</label><select name="proc_armaId"><option value="">Selecione...</option>${armasOpts}</select></div>
+        <div><label>Acervo de Destino da Arma</label><select name="proc_acervoDestinoVenda"><option value="">Selecione...</option><option>Atirador</option><option>Caçador</option><option>Colecionador</option></select></div>
         <div><label>Nome do Comprador</label><input name="proc_nomeComprador" /></div>
         <div><label>CPF do Comprador</label><input name="proc_cpfComprador" oninput="this.value=fmtCPF(this.value)" maxlength="14" /></div>
         <div><label>RG — UF</label><input name="proc_rgUFComprador" /></div>
@@ -1906,6 +1941,19 @@ function buildCamposTransferencia(armasOpts) {
           <div><label>UF</label><input name="proc_ufVendedor" maxlength="2" style="text-transform:uppercase" /></div>
           <div><label>Município</label><input name="proc_municipioVendedor" /></div>
           <div><label>Bairro</label><input name="proc_bairroVendedor" /></div>
+        </div>
+      </div>
+      <div style="margin-top:20px">
+        <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;padding-bottom:6px;border-bottom:1px solid var(--border)">Dados Adicionais</div>
+        <div class="form-grid">
+          <div><label>Empresa/Órgão de Trabalho</label><input name="proc_empresaAdicional" /></div>
+          <div><label>CNPJ/CPF</label><input name="proc_cnpjCpfAdicional" oninput="this.value=fmtCNPJouCPF(this.value)" maxlength="18" /></div>
+          <div style="grid-column:span 2"><label>Endereço Comercial</label><input name="proc_endComercialAdicional" /></div>
+          <div><label>Número</label><input name="proc_numComercialAdicional" /></div>
+          <div><label>CEP</label><input name="proc_cepComercialAdicional" oninput="this.value=fmtCEP(this.value)" maxlength="9" /></div>
+          <div><label>UF</label><input name="proc_ufComercialAdicional" maxlength="2" style="text-transform:uppercase" /></div>
+          <div><label>Município</label><input name="proc_municipioComercialAdicional" /></div>
+          <div><label>Bairro</label><input name="proc_bairroComercialAdicional" /></div>
         </div>
       </div>
     </div>
@@ -2090,6 +2138,7 @@ async function renderProcessoDetalhe(id) {
               const certCfg = CERTIDOES_CONFIG.find(c => item.nome.includes(c.keyword));
               const temFiliacao = item.nome.includes('Declaração de Filiação');
               const temHabitualidade = item.nome.includes('Declaração de Habitualidade');
+              const temCTF = item.nome.includes('CTF');
               return `
               <div class="checklist-item ${item.concluido?'done':''}" id="clp-${i}">
                 <input type="checkbox" ${item.concluido?'checked':''} onchange="atualizarChecklistItem('${id}',${i},this.checked,document.getElementById('clpobs-${i}').value)" />
@@ -2098,6 +2147,7 @@ async function renderProcessoDetalhe(id) {
                   ${certCfg ? `<button onclick="abrirCertidao('${certCfg.keyword}')" class="btn btn-ghost btn-xs" style="font-size:11px;padding:1px 7px;height:auto;white-space:nowrap" title="Abrir site e copiar dados do cliente"><i class="bi bi-box-arrow-up-right"></i> Emitir</button>` : ''}
                   ${temFiliacao ? `<button onclick="solicitarDeclaracao('filiacao')" class="btn btn-ghost btn-xs" style="font-size:11px;padding:1px 7px;height:auto;white-space:nowrap" title="Solicitar via WhatsApp do Clube"><i class="bi bi-whatsapp"></i> Solicitar</button>` : ''}
                   ${temHabitualidade ? `<button onclick="solicitarDeclaracao('habitualidade')" class="btn btn-ghost btn-xs" style="font-size:11px;padding:1px 7px;height:auto;white-space:nowrap" title="Solicitar via WhatsApp do Clube"><i class="bi bi-whatsapp"></i> Solicitar</button>` : ''}
+                  ${temCTF ? `<button onclick="window.open('https://servicos.ibama.gov.br/ctf/sistema.php','_blank')" class="btn btn-ghost btn-xs" style="font-size:11px;padding:1px 7px;height:auto;white-space:nowrap" title="Abrir site do IBAMA"><i class="bi bi-box-arrow-up-right"></i> Abrir site</button>` : ''}
                 </div>
                 <div class="checklist-obs"><input type="text" id="clpobs-${i}" value="${esc(item.observacao||'')}" placeholder="Observação..." onblur="atualizarChecklistItem('${id}',${i},document.querySelector('#clp-${i} input[type=checkbox]').checked,this.value)" /></div>
               </div>`;
@@ -3262,10 +3312,10 @@ async function renderClubeForm(id = null) {
       <div class="form-section-title">Dados do Clube</div>
       <div class="form-body">
         <div class="form-grid">
-          <div style="grid-column:1/-1"><label>Nome do Clube *</label><input name="Title" value="${val('Title')}" required /></div>
+          <div style="grid-column:1/-1"><label>Nome do Clube *</label><input name="Title" value="${val('Title')}" required maxlength="80" /></div>
           <div><label>CNPJ</label><input name="CNPJ" value="${val('CNPJ')}" oninput="this.value=fmtCNPJ(this.value)" maxlength="18" /></div>
           <div><label>Certificado de Registro</label><input name="CertificadoRegistro" value="${val('CertificadoRegistro')}" oninput="this.value=this.value.replace(/\\D/g,'')" /></div>
-          <div style="grid-column:1/-1"><label>Endereço Completo</label><input name="Endereco" value="${val('Endereco')}" /></div>
+          <div style="grid-column:1/-1"><label>Endereço Completo</label><input name="Endereco" value="${val('Endereco')}" maxlength="80" /></div>
           <div><label>WhatsApp</label><input name="Whatsapp" value="${val('Whatsapp')}" oninput="this.value=fmtCelular(this.value)" maxlength="15" /></div>
         </div>
       </div>
