@@ -20,28 +20,55 @@ class GraphService {
     }
   }
 
-  // Lê um arquivo JSON do OneDrive
-  async _readFile(nome) {
-    const token = await this.getToken();
-    const url = `${this.BASE}/me/drive/root:/${CONFIG.dataFolderPath}/${nome}.json:/content`;
-    const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
-    if (res.status === 404) return [];
-    if (!res.ok) throw new Error(`Erro ao ler ${nome}: HTTP ${res.status}`);
-    try { return await res.json(); } catch { return []; }
+  // Aguarda N milissegundos
+  _sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+  // Lê um arquivo JSON do OneDrive (3 tentativas com backoff)
+  async _readFile(nome, tentativa = 1) {
+    try {
+      const token = await this.getToken();
+      const url = `${this.BASE}/me/drive/root:/${CONFIG.dataFolderPath}/${nome}.json:/content`;
+      const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
+      if (res.status === 404) return [];
+      if (res.status === 401 && tentativa < 3) {
+        await this._sleep(500 * tentativa);
+        return this._readFile(nome, tentativa + 1);
+      }
+      if (!res.ok) throw new Error(`Erro ao ler ${nome}: HTTP ${res.status}`);
+      try { return await res.json(); } catch { return []; }
+    } catch (e) {
+      if (e.name === 'TypeError' && tentativa < 3) {
+        await this._sleep(1000 * tentativa);
+        return this._readFile(nome, tentativa + 1);
+      }
+      throw e;
+    }
   }
 
-  // Salva um arquivo JSON no OneDrive
-  async _writeFile(nome, dados) {
-    const token = await this.getToken();
-    const url = `${this.BASE}/me/drive/root:/${CONFIG.dataFolderPath}/${nome}.json:/content`;
-    const res = await fetch(url, {
-      method: 'PUT',
-      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(dados)
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err?.error?.message || `Erro ao salvar ${nome}`);
+  // Salva um arquivo JSON no OneDrive (3 tentativas com backoff)
+  async _writeFile(nome, dados, tentativa = 1) {
+    try {
+      const token = await this.getToken();
+      const url = `${this.BASE}/me/drive/root:/${CONFIG.dataFolderPath}/${nome}.json:/content`;
+      const res = await fetch(url, {
+        method: 'PUT',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(dados)
+      });
+      if (!res.ok) {
+        if (res.status === 401 && tentativa < 3) {
+          await this._sleep(500 * tentativa);
+          return this._writeFile(nome, dados, tentativa + 1);
+        }
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.error?.message || `Erro ao salvar ${nome}`);
+      }
+    } catch (e) {
+      if (e.name === 'TypeError' && tentativa < 3) {
+        await this._sleep(1000 * tentativa);
+        return this._writeFile(nome, dados, tentativa + 1);
+      }
+      throw e;
     }
   }
 

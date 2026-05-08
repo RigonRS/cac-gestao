@@ -217,7 +217,7 @@ async function renderPage() {
       default:                     await renderDashboard();
     }
   } catch (e) {
-    document.getElementById('page-content').innerHTML = `<div class="empty-state"><i class="bi bi-exclamation-triangle"></i><p>Erro ao carregar a página: ${esc(e.message)}</p></div>`;
+    document.getElementById('page-content').innerHTML = `<div class="empty-state"><i class="bi bi-exclamation-triangle"></i><p>Erro ao carregar a página: ${esc(e.message)}</p><button class="btn btn-primary" style="margin-top:12px" onclick="navigate(window.location.hash.replace('#','').split('?')[0]||'dashboard')"><i class="bi bi-arrow-clockwise me-1"></i>Tentar novamente</button></div>`;
     console.error(e);
   } finally {
     hideLoading();
