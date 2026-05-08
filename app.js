@@ -1165,6 +1165,18 @@ function renderPerfilPagamentos(processos, clienteId) {
 // ============================================================
 // ARMAS — FORMULÁRIO
 // ============================================================
+function toggleCamposOrgaoCadastro() {
+  const el = document.querySelector('[name="OrgaoCadastro"]');
+  if (!el) return;
+  const v = el.value;
+  const sigma    = document.getElementById('div-sigma');
+  const sinarm   = document.getElementById('div-sinarm');
+  const registro = document.getElementById('div-registro');
+  if (sigma)    sigma.style.display    = v === 'PF - Exército'       ? '' : 'none';
+  if (sinarm)   sinarm.style.display   = v === 'PF - Defesa Pessoal' ? '' : 'none';
+  if (registro) registro.style.display = v === 'PF - Defesa Pessoal' ? '' : 'none';
+}
+
 async function renderArmaForm(clienteId, id = null) {
   document.getElementById('page-title').textContent = id ? 'Editar Arma' : 'Nova Arma';
   let a = {};
@@ -1179,6 +1191,10 @@ async function renderArmaForm(clienteId, id = null) {
   const catsDisponiveis = catsList.length > 0 ? catsList : todasCats;
   const atividadeOpts = catsDisponiveis.map(c => `<option value="${c}" ${sel('AtividadeCadastrada',c)}>${c}</option>`).join('');
 
+  // Inferir OrgaoCadastro de armas existentes que ainda não têm o campo
+  const orgaoVal = a.OrgaoCadastro || (a.NumeroSIGMA ? 'PF - Exército' : (a.NumeroSINARM ? 'PF - Defesa Pessoal' : ''));
+  const selOrgao = (v) => orgaoVal === v ? 'selected' : '';
+
   document.getElementById('page-content').innerHTML = `
   <div style="margin-bottom:12px"><span style="color:var(--text-muted);font-size:13px">Cliente: </span><strong>${esc(cliente.Title)}</strong></div>
   <form id="form-arma" onsubmit="salvarArma(event,'${clienteId}','${id||''}')">
@@ -1187,9 +1203,16 @@ async function renderArmaForm(clienteId, id = null) {
       <div class="form-body">
         <div class="form-grid">
           <div><label>Número de Série *</label><input name="NumeroSerie" value="${val('NumeroSerie')}" required /></div>
-          <div><label>Número SIGMA</label><input name="NumeroSIGMA" value="${val('NumeroSIGMA')}" /></div>
-          <div><label>Número SINARM</label><input name="NumeroSINARM" value="${val('NumeroSINARM')}" /></div>
-          <div><label>Número de Registro</label><input name="NumeroRegistro" value="${val('NumeroRegistro')}" /></div>
+          <div><label>Órgão de Cadastro</label>
+            <select name="OrgaoCadastro" onchange="toggleCamposOrgaoCadastro()">
+              <option value="">Selecione...</option>
+              <option value="PF - Exército"       ${selOrgao('PF - Exército')}>PF - Exército</option>
+              <option value="PF - Defesa Pessoal" ${selOrgao('PF - Defesa Pessoal')}>PF - Defesa Pessoal</option>
+            </select>
+          </div>
+          <div id="div-sigma" style="display:none"><label>Número SIGMA</label><input name="NumeroSIGMA" value="${val('NumeroSIGMA')}" /></div>
+          <div id="div-sinarm" style="display:none"><label>Número SINARM</label><input name="NumeroSINARM" value="${val('NumeroSINARM')}" /></div>
+          <div id="div-registro" style="display:none"><label>Número de Registro</label><input name="NumeroRegistro" value="${val('NumeroRegistro')}" /></div>
           <div><label>Atividade Cadastrada *</label>
             <select name="AtividadeCadastrada" required>
               <option value="">Selecione...</option>
@@ -1218,6 +1241,7 @@ async function renderArmaForm(clienteId, id = null) {
         <div class="form-grid">
           <div><label>Capacidade de Tiro</label><input name="CapacidadeTiro" value="${val('CapacidadeTiro')}" /></div>
           <div><label>N° de Canos</label><input name="NumeroCanos" value="${val('NumeroCanos')}" /></div>
+          <div><label>Comprimento do Cano (mm)</label><input name="ComprimentoCano" type="number" min="0" value="${val('ComprimentoCano')}" /></div>
           <div><label>Alma do Cano</label><input name="AlmaCano" value="${val('AlmaCano')}" /></div>
           <div><label>N° de Raias</label><input name="NumeroRaias" value="${val('NumeroRaias')}" /></div>
           <div><label>Sentido das Raias</label>
@@ -1228,7 +1252,15 @@ async function renderArmaForm(clienteId, id = null) {
               <option value="Esquerda" ${sel('SentidoRaias','Esquerda')}>Esquerda</option>
             </select>
           </div>
-          <div><label>Acabamento</label><input name="Acabamento" value="${val('Acabamento')}" /></div>
+          <div><label>Acabamento</label>
+            <select name="Acabamento">
+              <option value="">Selecione...</option>
+              <option value="Oxidado"   ${sel('Acabamento','Oxidado')}>Oxidado</option>
+              <option value="Aço Inox"  ${sel('Acabamento','Aço Inox')}>Aço Inox</option>
+              <option value="Niquelado" ${sel('Acabamento','Niquelado')}>Niquelado</option>
+              <option value="Outros"    ${sel('Acabamento','Outros')}>Outros</option>
+            </select>
+          </div>
           <div><label>Funcionamento</label>
             <select name="Funcionamento">
               <option value="">Selecione...</option>
@@ -1247,6 +1279,7 @@ async function renderArmaForm(clienteId, id = null) {
       <button type="button" class="btn btn-outline" onclick="navigate('clientes/perfil',{id:'${clienteId}',tab:'armas'})">Cancelar</button>
     </div>
   </form>`;
+  setTimeout(toggleCamposOrgaoCadastro, 0);
 }
 
 async function salvarArma(e, clienteId, id) {
@@ -1278,7 +1311,8 @@ async function salvarArma(e, clienteId, id) {
     ClienteId:         clienteId,
     ClienteNome:       cliente.Title,
     NumeroSerie:       fd.get('NumeroSerie'),
-    NumeroSIGMA:       fd.get('NumeroSIGMA'),
+    OrgaoCadastro:     fd.get('OrgaoCadastro') || null,
+    NumeroSIGMA:       fd.get('NumeroSIGMA') || null,
     NumeroSINARM:      fd.get('NumeroSINARM') || null,
     NumeroRegistro:    fd.get('NumeroRegistro') || null,
     AtividadeCadastrada: atividade,
@@ -1290,6 +1324,7 @@ async function salvarArma(e, clienteId, id) {
     PaisFabricacao:    fd.get('PaisFabricacao'),
     CapacidadeTiro:    fd.get('CapacidadeTiro'),
     NumeroCanos:       fd.get('NumeroCanos'),
+    ComprimentoCano:   fd.get('ComprimentoCano') || null,
     AlmaCano:          fd.get('AlmaCano'),
     NumeroRaias:       fd.get('NumeroRaias'),
     SentidoRaias:      fd.get('SentidoRaias'),
@@ -2352,7 +2387,7 @@ async function gerarRequerimento() {
           capTiros:arma.CapacidadeTiro||'', numCanos:arma.NumeroCanos||'',
           numSigma:arma.NumeroSIGMA||'', alma:arma.AlmaCano||'',
           numRaias:arma.NumeroRaias||'', sentido:arma.SentidoRaias||'',
-          comprCano:'', acabamento:arma.Acabamento||'', funcionamento:arma.Funcionamento||'' };
+          comprCano:arma.ComprimentoCano||'', acabamento:arma.Acabamento||'', funcionamento:arma.Funcionamento||'' };
       } else if (isTransf) {
         arm = { acervoOrigem:'', especie:dados.especie||'', calibre:dados.calibre||'',
           marca:dados.marcaArma||'', modelo:dados.modeloArma||'',
