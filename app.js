@@ -9,13 +9,14 @@ const App = {
   msal: null,
 
   // Cache de dados (evita recarregar a cada navegação)
-  _cache: { clientes: null, armas: null, documentos: null, processos: null },
-  invalidateCache(tipo) { if (tipo) this._cache[tipo] = null; else this._cache = { clientes: null, armas: null, documentos: null, processos: null }; },
+  _cache: { clientes: null, armas: null, documentos: null, processos: null, clubes: null },
+  invalidateCache(tipo) { if (tipo) this._cache[tipo] = null; else this._cache = { clientes: null, armas: null, documentos: null, processos: null, clubes: null }; },
 
   async getClientes()   { if (!this._cache.clientes)   this._cache.clientes   = await this.graph.getItems(CONFIG.listas.clientes);   return this._cache.clientes; },
   async getArmas()      { if (!this._cache.armas)      this._cache.armas      = await this.graph.getItems(CONFIG.listas.armas);      return this._cache.armas; },
   async getDocumentos() { if (!this._cache.documentos) this._cache.documentos = await this.graph.getItems(CONFIG.listas.documentos); return this._cache.documentos; },
   async getProcessos()  { if (!this._cache.processos)  this._cache.processos  = await this.graph.getItems(CONFIG.listas.processos);  return this._cache.processos; },
+  async getClubes()     { if (!this._cache.clubes)     this._cache.clubes     = await this.graph.getItems(CONFIG.listas.clubes);     return this._cache.clubes; },
 };
 
 // ---- UTILITÁRIOS ----
@@ -167,6 +168,9 @@ async function renderPage() {
       case 'dashboard':            await renderDashboard(); break;
       case 'clientes':             await renderClientesList(); break;
       case 'clientes/novo':        await renderClienteForm(null, params); break;
+      case 'clubes':               await renderClubesList(); break;
+      case 'clubes/novo':          await renderClubeForm(); break;
+      case 'clubes/editar':        await renderClubeForm(params.id); break;
       case 'clientes/editar':      await renderClienteForm(params.id); break;
       case 'clientes/perfil':      await renderClientePerfil(params.id, params.tab || 'dados'); break;
       case 'armas/novo':           await renderArmaForm(params.clienteId); break;
@@ -520,6 +524,8 @@ async function renderClienteForm(id = null, importParams = {}) {
     try { Object.assign(c, JSON.parse(importParams.importar)); } catch(e) {}
   }
 
+  const clubes = (await App.getClubes()).sort((a,b) => (a.Title||'').localeCompare(b.Title||'','pt-BR'));
+
   const val = (f) => esc(c[f] || '');
   const cats = (c.Categoria || '').split(',').map(s => s.trim());
   const checked = (v) => cats.includes(v) ? 'checked' : '';
@@ -602,9 +608,12 @@ async function renderClienteForm(id = null, importParams = {}) {
       <div class="form-section-title">Filiação Clube de Tiro</div>
       <div class="form-body">
         <div class="form-grid">
-          <div style="grid-column:span 2"><label>Nome do Clube de Tiro</label><input name="NomeClubeAtiro" value="${val('NomeClubeAtiro')}" /></div>
-          <div><label>Cidade</label><input name="CidadeClubeAtiro" value="${val('CidadeClubeAtiro')}" /></div>
-          <div><label>UF</label><input name="UFClubeAtiro" value="${val('UFClubeAtiro')}" maxlength="2" style="text-transform:uppercase" /></div>
+          <div style="grid-column:1/-1"><label>Selecionar Clube</label>
+            <select name="ClubeId">
+              <option value="">Nenhum</option>
+              ${clubes.map(cl => `<option value="${cl.id}" ${String(cl.id)===String(c.ClubeId)?'selected':''}>${esc(cl.Title)}</option>`).join('')}
+            </select>
+          </div>
         </div>
       </div>
     </div>
@@ -670,13 +679,12 @@ async function salvarCliente(e, id) {
     Naturalidade:     toTitleCase(fd.get('Naturalidade')),
     UFNaturalidade:   fd.get('UFNaturalidade').toUpperCase(),
     Profissao:        toTitleCase(fd.get('Profissao')),
-    Celular:          fd.get('Celular'),
+    Celular:          fmtCelular(fd.get('Celular')),
     Email:            fd.get('Email'),
     NomeMae:          toTitleCase(fd.get('NomeMae')),
     NomePai:          toTitleCase(fd.get('NomePai')),
-    NomeClubeAtiro:   toTitleCase(fd.get('NomeClubeAtiro')),
-    CidadeClubeAtiro: toTitleCase(fd.get('CidadeClubeAtiro')),
-    UFClubeAtiro:     (fd.get('UFClubeAtiro') || '').toUpperCase(),
+    ClubeId:          fd.get('ClubeId') || null,
+    ClubeNome:        (() => { const sel = e.target.querySelector('[name="ClubeId"]'); if (!sel || !sel.value) return ''; return sel.options[sel.selectedIndex]?.text || ''; })(),
     Categoria:        cats.join(','),
     DataExpedicaoCTF: fd.get('DataExpedicaoCTF') || null,
     DataValidadeCTF:  fd.get('DataValidadeCTF') || null,
@@ -818,8 +826,7 @@ function renderPerfilDados(c) {
     <div class="form-section">
       <div class="form-section-title">Filiação Clube de Tiro</div>
       <div class="form-body"><div class="info-grid">
-        ${row('Nome do Clube de Tiro', c.NomeClubeAtiro)}
-        ${row('Cidade', c.CidadeClubeAtiro)} ${row('UF', c.UFClubeAtiro)}
+        ${row('Clube de Tiro', c.ClubeNome || c.NomeClubeAtiro)}
       </div></div>
     </div>
     <div class="form-section">
@@ -1638,6 +1645,12 @@ function onTipoProcessoChange(tipo) {
   const checklistEl = document.getElementById('checklist-preview');
   const secaoChecklist = document.getElementById('secao-checklist');
 
+  const valorInput = document.querySelector('[name="ValorProcesso"]');
+  if (valorInput && tipo && VALORES_PROCESSO[tipo] !== undefined) {
+    valorInput.value = VALORES_PROCESSO[tipo].toFixed(2);
+    calcularParcelas();
+  }
+
   camposEl.innerHTML = '';
   const armasOpts = _processoArmasCache.map(a => `<option value="${a.id}|${esc(a.AtividadeCadastrada||'')}|${esc(a.Marca||'')}|${esc(a.Modelo||'')}">${esc(a.Marca||'')} ${esc(a.Modelo||'')}${a.NumeroSerie ? ' ('+esc(a.NumeroSerie)+')' : ''} — ${esc(a.AtividadeCadastrada||'')}</option>`).join('');
 
@@ -2017,6 +2030,15 @@ async function renderProcessoDetalhe(id) {
   document.getElementById('page-title').textContent = 'Detalhe do Processo';
   const processo = await App.graph.getItem(CONFIG.listas.processos, id);
   const checklist = JSON.parse(processo.ChecklistJSON || '[]');
+
+  let _clienteDetalhe = {};
+  let _clubeDetalhe = null;
+  try {
+    _clienteDetalhe = await App.graph.getItem(CONFIG.listas.clientes, processo.ClienteId);
+    if (_clienteDetalhe.ClubeId) {
+      try { _clubeDetalhe = await App.graph.getItem(CONFIG.listas.clubes, _clienteDetalhe.ClubeId); } catch(e) {}
+    }
+  } catch(e) {}
   const dadosEsp  = JSON.parse(processo.DadosEspecificosJSON || '{}');
   const b = statusBadge(processo.Status);
 
@@ -2066,12 +2088,16 @@ async function renderProcessoDetalhe(id) {
             </div>
             ${checklist.map((item, i) => {
               const certCfg = CERTIDOES_CONFIG.find(c => item.nome.includes(c.keyword));
+              const temFiliacao = item.nome.includes('Declaração de Filiação');
+              const temHabitualidade = item.nome.includes('Declaração de Habitualidade');
               return `
               <div class="checklist-item ${item.concluido?'done':''}" id="clp-${i}">
                 <input type="checkbox" ${item.concluido?'checked':''} onchange="atualizarChecklistItem('${id}',${i},this.checked,document.getElementById('clpobs-${i}').value)" />
                 <div class="checklist-nome" style="display:flex;align-items:center;gap:6px">
                   <span>${esc(item.nome)}</span>
                   ${certCfg ? `<button onclick="abrirCertidao('${certCfg.keyword}')" class="btn btn-ghost btn-xs" style="font-size:11px;padding:1px 7px;height:auto;white-space:nowrap" title="Abrir site e copiar dados do cliente"><i class="bi bi-box-arrow-up-right"></i> Emitir</button>` : ''}
+                  ${temFiliacao ? `<button onclick="solicitarDeclaracao('filiacao')" class="btn btn-ghost btn-xs" style="font-size:11px;padding:1px 7px;height:auto;white-space:nowrap" title="Solicitar via WhatsApp do Clube"><i class="bi bi-whatsapp"></i> Solicitar</button>` : ''}
+                  ${temHabitualidade ? `<button onclick="solicitarDeclaracao('habitualidade')" class="btn btn-ghost btn-xs" style="font-size:11px;padding:1px 7px;height:auto;white-space:nowrap" title="Solicitar via WhatsApp do Clube"><i class="bi bi-whatsapp"></i> Solicitar</button>` : ''}
                 </div>
                 <div class="checklist-obs"><input type="text" id="clpobs-${i}" value="${esc(item.observacao||'')}" placeholder="Observação..." onblur="atualizarChecklistItem('${id}',${i},document.querySelector('#clp-${i} input[type=checkbox]').checked,this.value)" /></div>
               </div>`;
@@ -2173,6 +2199,8 @@ async function renderProcessoDetalhe(id) {
     </div>`;
 
   window._processoDetalhe = processo;
+  window._clienteDetalhe  = _clienteDetalhe;
+  window._clubeDetalhe    = _clubeDetalhe;
 }
 
 async function atualizarStatus(id, novoStatus) {
@@ -2253,6 +2281,22 @@ async function abrirWhatsApp(processoId) {
 
   const status = p.Status || '';
   const msg = `Olá, ${cliente.Title}!\n\nInformamos que seu processo de *${p.TipoProcesso}* (Protocolo: ${p.NumeroProtocolo || 'N/A'}) teve seu status atualizado para: *${status}*.\n\nEm caso de dúvidas, entre em contato conosco.\n\n${CONFIG.nomeEscritorio}`;
+  window.open(`https://wa.me/55${celular}?text=${encodeURIComponent(msg)}`, '_blank');
+}
+
+function solicitarDeclaracao(tipo) {
+  const cliente = window._clienteDetalhe;
+  const clube   = window._clubeDetalhe;
+  if (!clube || !clube.Whatsapp) {
+    toast('Cliente sem clube de tiro cadastrado ou clube sem WhatsApp informado.', 'warning');
+    return;
+  }
+  const celular = (clube.Whatsapp || '').replace(/\D/g, '');
+  if (!celular) { toast('Clube de Tiro sem número de WhatsApp cadastrado.', 'warning'); return; }
+  const nome  = cliente?.Title || '—';
+  const cpf   = cliente?.CPF   || '—';
+  const decl  = tipo === 'filiacao' ? 'Filiação' : 'Habitualidade';
+  const msg   = `Solicito por gentileza a Declaração de ${decl} do ${nome}, ${cpf}`;
   window.open(`https://wa.me/55${celular}?text=${encodeURIComponent(msg)}`, '_blank');
 }
 
@@ -3140,6 +3184,120 @@ async function fazerLogin() {
 
 function fazerLogout() {
   App.msal.logoutPopup({ account: App.account });
+}
+
+// ============================================================
+// CLUBES DE TIRO — LISTA
+// ============================================================
+async function renderClubesList() {
+  document.getElementById('page-title').textContent = 'Clubes de Tiro';
+  const clubes = await App.getClubes();
+  clubes.sort((a, b) => (a.Title || '').localeCompare(b.Title || '', 'pt-BR'));
+
+  const el = document.getElementById('page-content');
+  el.innerHTML = `
+    <div class="toolbar">
+      <div class="search-bar"><i class="bi bi-search"></i><input id="busca-clube" placeholder="Buscar por nome..." oninput="filtrarClubes()" /></div>
+      <button class="btn btn-primary" onclick="navigate('clubes/novo')"><i class="bi bi-plus-lg"></i> Novo Clube</button>
+    </div>
+    <div class="card">
+      <div class="table-wrapper">
+        <table>
+          <thead><tr>
+            <th>Nome</th><th>CNPJ</th><th>Cert. de Registro</th><th>WhatsApp</th><th>Ações</th>
+          </tr></thead>
+          <tbody id="tbody-clubes">${renderClubesRows(clubes)}</tbody>
+        </table>
+      </div>
+    </div>`;
+  window._clubes_filtro = clubes;
+}
+
+function renderClubesRows(lista) {
+  if (!lista.length) return `<tr><td colspan="5"><div class="empty-state"><i class="bi bi-building"></i><p>Nenhum clube cadastrado.</p><button class="btn btn-primary" onclick="navigate('clubes/novo')">Cadastrar primeiro clube</button></div></td></tr>`;
+  return lista.map(cl => `<tr>
+    <td><strong>${esc(cl.Title || '—')}</strong></td>
+    <td>${esc(cl.CNPJ || '—')}</td>
+    <td>${esc(cl.CertificadoRegistro || '—')}</td>
+    <td>${esc(cl.Whatsapp || '—')}</td>
+    <td>
+      <div class="btn-group">
+        <button class="btn btn-outline btn-sm" onclick="navigate('clubes/editar',{id:'${cl.id}'})"><i class="bi bi-pencil"></i></button>
+        <button class="btn btn-ghost btn-sm" onclick="confirmarDeleteClube('${cl.id}','${esc(cl.Title)}')"><i class="bi bi-trash" style="color:var(--danger)"></i></button>
+      </div>
+    </td>
+  </tr>`).join('');
+}
+
+function filtrarClubes() {
+  const q = document.getElementById('busca-clube').value.toLowerCase();
+  const lista = q ? window._clubes_filtro.filter(cl => (cl.Title || '').toLowerCase().includes(q)) : window._clubes_filtro;
+  document.getElementById('tbody-clubes').innerHTML = renderClubesRows(lista);
+}
+
+async function confirmarDeleteClube(id, nome) {
+  if (!confirm(`Excluir o clube "${nome}"?`)) return;
+  showLoading();
+  try {
+    await App.graph.deleteItem(CONFIG.listas.clubes, id);
+    App.invalidateCache('clubes');
+    toast('Clube excluído.', 'success');
+    await renderClubesList();
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+// ============================================================
+// CLUBES DE TIRO — FORMULÁRIO
+// ============================================================
+async function renderClubeForm(id = null) {
+  document.getElementById('page-title').textContent = id ? 'Editar Clube' : 'Novo Clube de Tiro';
+  let cl = {};
+  if (id) cl = await App.graph.getItem(CONFIG.listas.clubes, id);
+
+  const val = (f) => esc(cl[f] || '');
+
+  document.getElementById('page-content').innerHTML = `
+  <form id="form-clube" onsubmit="salvarClube(event,'${id||''}')">
+    <div class="form-section">
+      <div class="form-section-title">Dados do Clube</div>
+      <div class="form-body">
+        <div class="form-grid">
+          <div style="grid-column:1/-1"><label>Nome do Clube *</label><input name="Title" value="${val('Title')}" required /></div>
+          <div><label>CNPJ</label><input name="CNPJ" value="${val('CNPJ')}" oninput="this.value=fmtCNPJ(this.value)" maxlength="18" /></div>
+          <div><label>Certificado de Registro</label><input name="CertificadoRegistro" value="${val('CertificadoRegistro')}" oninput="this.value=this.value.replace(/\\D/g,'')" /></div>
+          <div style="grid-column:1/-1"><label>Endereço Completo</label><input name="Endereco" value="${val('Endereco')}" /></div>
+          <div><label>WhatsApp</label><input name="Whatsapp" value="${val('Whatsapp')}" oninput="this.value=fmtCelular(this.value)" maxlength="15" /></div>
+        </div>
+      </div>
+    </div>
+    <div class="btn-group" style="margin-top:8px">
+      <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg"></i> Salvar</button>
+      <button type="button" class="btn btn-outline" onclick="history.back()">Cancelar</button>
+    </div>
+  </form>`;
+}
+
+async function salvarClube(e, id) {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const fields = {
+    Title:                toTitleCase(fd.get('Title')),
+    CNPJ:                 fd.get('CNPJ'),
+    CertificadoRegistro:  fd.get('CertificadoRegistro'),
+    Endereco:             toTitleCase(fd.get('Endereco')),
+    Whatsapp:             fmtCelular(fd.get('Whatsapp')),
+  };
+  showLoading();
+  try {
+    if (id) {
+      await App.graph.updateItem(CONFIG.listas.clubes, id, fields);
+    } else {
+      await App.graph.createItem(CONFIG.listas.clubes, fields);
+    }
+    App.invalidateCache('clubes');
+    toast(id ? 'Clube atualizado!' : 'Clube cadastrado!', 'success');
+    navigate('clubes');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 // ============================================================
