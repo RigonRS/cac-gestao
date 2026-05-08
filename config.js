@@ -45,6 +45,7 @@ const CONFIG = {
     clientes:   'clientes',
     armas:      'armas',
     documentos: 'documentos',
-    processos:  'processos'
+    processos:  'processos',
+    clubes:     'clubes'
   }
 };

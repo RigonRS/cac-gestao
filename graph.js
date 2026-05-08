@@ -100,7 +100,7 @@ class GraphService {
     if (!createRes.ok) throw new Error('Não foi possível criar a pasta de dados no OneDrive.');
 
     // Cria arquivos JSON vazios
-    for (const col of ['clientes', 'armas', 'documentos', 'processos']) {
+    for (const col of ['clientes', 'armas', 'documentos', 'processos', 'clubes']) {
       if (onProgress) onProgress(`Inicializando: ${col}...`);
       await this._writeFile(col, []);
     }
