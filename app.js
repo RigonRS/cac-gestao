@@ -3471,9 +3471,55 @@ function getProcessoDescExtra(p) {
   } catch(e) { return ''; }
 }
 
+function imprimirExtras(responsavel) {
+  const processos = window._extrasProcessos || [];
+  const filtroMes = window._extrasFilterMes || '';
+  const NOMES_MESES = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
+                       'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+  function mesLbl(ym) {
+    if (!ym) return '—';
+    const [y, m] = ym.split('-');
+    return `${NOMES_MESES[parseInt(m)-1]} ${y}`;
+  }
+
+  const meusDeferidos = processos.filter(p => {
+    if (p.Responsavel !== responsavel) return false;
+    const iso = getDataDeferido(p);
+    return iso && iso.startsWith(filtroMes);
+  });
+
+  const totalExtra = meusDeferidos.reduce((s, p) => s + (Number(p.ValorProcesso)||0) * 0.1, 0);
+
+  const itensHtml = meusDeferidos.map(p => {
+    const valor = Number(p.ValorProcesso) || 0;
+    const extra = valor * 0.1;
+    const desc = getProcessoDescExtra(p);
+    return `<tr>
+      <td>${esc(p.ClienteNome||'—')}</td>
+      <td>${esc(p.TipoProcesso||'—')}${desc ? ` · ${esc(desc)}` : ''}</td>
+      <td style="text-align:right">${fmtMoeda(valor)}</td>
+      <td style="text-align:right;font-weight:700;color:#166534">${fmtMoeda(extra)}</td>
+      <td style="text-align:center">${p.Restituido ? 'Restituído' : ''}</td>
+    </tr>`;
+  }).join('');
+
+  const html = `
+    <h2>Pagamentos de Extras — ${esc(responsavel)}</h2>
+    <p style="text-align:center;color:#555;margin-top:-10px;font-size:11pt">${esc(mesLbl(filtroMes))}</p>
+    <table>
+      <thead><tr><th>Cliente</th><th>Tipo de Processo</th><th style="text-align:right">Valor Total</th><th style="text-align:right">Extra (10%)</th><th style="text-align:center">Obs</th></tr></thead>
+      <tbody>${itensHtml}</tbody>
+    </table>
+    <div style="margin-top:20px;text-align:right;font-size:13pt;border-top:2px solid #000;padding-top:10px">
+      <strong>Total de Extras: ${fmtMoeda(totalExtra)}</strong>
+    </div>`;
+  imprimirDocumento(html, `Extras ${responsavel} — ${mesLbl(filtroMes)}`);
+}
+
 async function renderPagamentosExtras() {
   document.getElementById('page-title').textContent = 'Pagamentos de Extras';
   const processos = await App.getProcessos();
+  window._extrasProcessos = processos;
 
   const NOMES_MESES = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
                        'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
@@ -3549,14 +3595,20 @@ async function renderPagamentosExtras() {
       <div class="card">
         <div class="card-header" style="background:#fef3c7">
           <h3><i class="bi bi-person-badge me-2" style="color:#d97706"></i>Andrieli</h3>
-          <span style="font-size:12px;color:var(--text-muted)">${mesLabel(filtroMes)}</span>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:12px;color:var(--text-muted)">${mesLabel(filtroMes)}</span>
+            <button onclick="imprimirExtras('Andrieli')" class="btn btn-ghost btn-sm" title="Imprimir PDF"><i class="bi bi-printer"></i></button>
+          </div>
         </div>
         ${renderPainelExtra('Andrieli')}
       </div>
       <div class="card">
         <div class="card-header" style="background:#ede9fe">
           <h3><i class="bi bi-person-badge me-2" style="color:#7c3aed"></i>Priscila</h3>
-          <span style="font-size:12px;color:var(--text-muted)">${mesLabel(filtroMes)}</span>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:12px;color:var(--text-muted)">${mesLabel(filtroMes)}</span>
+            <button onclick="imprimirExtras('Priscila')" class="btn btn-ghost btn-sm" title="Imprimir PDF"><i class="bi bi-printer"></i></button>
+          </div>
         </div>
         ${renderPainelExtra('Priscila')}
       </div>
@@ -3573,29 +3625,30 @@ async function renderValoresProcessos() {
     return;
   }
 
-  const processos = await App.getProcessos();
-  processos.sort((a, b) => (a.ClienteNome||'').localeCompare(b.ClienteNome||'', 'pt-BR'));
+  showLoading();
+  let valoresPadrao = {};
+  try {
+    const raw = await App.graph._readFile('valores_padrao');
+    if (raw && !Array.isArray(raw)) valoresPadrao = raw;
+  } catch(e) {} finally { hideLoading(); }
 
   const el = document.getElementById('page-content');
   el.innerHTML = `
     <div class="card">
       <div class="card-header">
-        <h3><i class="bi bi-currency-dollar me-2"></i>Valores dos Processos</h3>
+        <h3><i class="bi bi-currency-dollar me-2"></i>Valores Padrão por Tipo de Processo</h3>
         <button class="btn btn-primary" onclick="salvarValoresProcessos()"><i class="bi bi-floppy me-1"></i>Salvar Alterações</button>
       </div>
       <div class="table-wrapper">
         <table>
-          <thead><tr><th>Cliente</th><th>Tipo de Processo</th><th>Responsável</th><th>Status</th><th>Valor Atual</th><th>Novo Valor</th></tr></thead>
+          <thead><tr><th>Tipo de Processo</th><th>Valor Atual</th><th>Novo Valor</th></tr></thead>
           <tbody>
-            ${processos.map(p => {
-              const b = statusBadge(p.Status);
+            ${TIPOS_PROCESSO.map(tipo => {
+              const atual = valoresPadrao[tipo];
               return `<tr>
-                <td><a style="cursor:pointer;color:var(--accent);font-weight:600" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.ClienteNome||'—')}</a></td>
-                <td style="font-size:13px">${esc(p.TipoProcesso||'—')}</td>
-                <td>${p.Responsavel ? `<span class="badge badge-blue">${esc(p.Responsavel)}</span>` : '<span style="color:var(--text-muted)">—</span>'}</td>
-                <td><span class="badge ${b.cls}">${b.txt}</span></td>
-                <td style="font-weight:600">${fmtMoeda(p.ValorProcesso)}</td>
-                <td><input type="number" step="0.01" min="0" class="val-proc-input" data-id="${p.id}" placeholder="Novo valor..." style="padding:5px 8px;border:1px solid var(--border);border-radius:4px;width:130px;font-size:13px" /></td>
+                <td style="font-weight:600">${esc(tipo)}</td>
+                <td>${atual != null ? `<span style="font-weight:600">${fmtMoeda(atual)}</span>` : '<span style="color:var(--text-muted)">—</span>'}</td>
+                <td><input type="number" step="0.01" min="0" class="val-proc-input" data-tipo="${esc(tipo)}" placeholder="${atual != null ? 'Alterar...' : 'Definir valor...'}" style="padding:5px 8px;border:1px solid var(--border);border-radius:4px;width:150px;font-size:13px" /></td>
               </tr>`;
             }).join('')}
           </tbody>
@@ -3606,24 +3659,26 @@ async function renderValoresProcessos() {
 
 async function salvarValoresProcessos() {
   const inputs = document.querySelectorAll('.val-proc-input');
-  const alteracoes = [];
-  inputs.forEach(inp => {
-    const val = inp.value.trim();
-    if (val !== '') alteracoes.push({ id: inp.dataset.id, valor: parseFloat(val) });
-  });
-
-  if (!alteracoes.length) {
-    toast('Nenhum valor novo foi digitado.', 'info');
-    return;
-  }
+  let alteracoes = 0;
 
   showLoading();
   try {
-    for (const a of alteracoes) {
-      await App.graph.updateItem(CONFIG.listas.processos, a.id, { ValorProcesso: a.valor });
-    }
-    App.invalidateCache('processos');
-    toast(`${alteracoes.length} valor(es) atualizado(s) com sucesso.`, 'success');
+    let valoresPadrao = {};
+    const raw = await App.graph._readFile('valores_padrao');
+    if (raw && !Array.isArray(raw)) valoresPadrao = raw;
+
+    inputs.forEach(inp => {
+      const val = inp.value.trim();
+      if (val !== '') {
+        valoresPadrao[inp.dataset.tipo] = parseFloat(val);
+        alteracoes++;
+      }
+    });
+
+    if (!alteracoes) { toast('Nenhum valor novo foi digitado.', 'info'); return; }
+
+    await App.graph._writeFile('valores_padrao', valoresPadrao);
+    toast(`${alteracoes} valor(es) atualizado(s) com sucesso.`, 'success');
     await renderValoresProcessos();
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
