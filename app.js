@@ -98,6 +98,15 @@ function imprimirDocumento(html, titulo) {
   setTimeout(() => w.print(), 600);
 }
 function chk(v) { return v ? '(X)' : '(  )'; }
+
+function getCurrentUserName() {
+  const fullName = (App.account?.name || '').toLowerCase();
+  return RESPONSAVEIS.find(r => fullName.includes(r.toLowerCase())) || (App.account?.name || '').split(' ')[0];
+}
+function isAdminUser() {
+  const nome = getCurrentUserName();
+  return ['Matheus', 'Simone'].includes(nome);
+}
 function toTitleCase(s) {
   if (!s) return '';
   return s.trim().toLowerCase().replace(/(^|\s)(\S)/g, (_, sp, ch) => sp + ch.toUpperCase());
@@ -208,11 +217,14 @@ async function renderPage() {
       case 'documentos/novo':      await renderDocumentoForm(params.clienteId); break;
       case 'documentos/editar':    await renderDocumentoForm(params.clienteId, params.id); break;
       case 'processos':            await renderProcessosList(); break;
+      case 'meus-processos':       await renderMeusProcessos(); break;
       case 'processos/novo':       await renderProcessoForm(params.clienteId); break;
       case 'processos/editar':     await renderProcessoEditar(params.id); break;
       case 'processos/detalhe':    await renderProcessoDetalhe(params.id); break;
       case 'validades':            await renderValidades(); break;
       case 'pagamentos':           await renderPagamentos(); break;
+      case 'valores-processos':    await renderValoresProcessos(); break;
+      case 'pagamentos-extras':    await renderPagamentosExtras(); break;
       case 'orcamento/novo':       await renderOrcamentoForm(params.clienteId); break;
       default:                     await renderDashboard();
     }
@@ -274,6 +286,10 @@ async function renderDashboard() {
   vencimentos.sort((a, b) => a.dias - b.dias);
 
   const urgentes = vencimentos.filter(v => v.dias < 0).length;
+
+  // CTF — clientes caçadores com data de validade cadastrada
+  const ctfClientes = clientes.filter(c => c.DataValidadeCTF)
+    .sort((a, b) => (a.DataValidadeCTF||'').localeCompare(b.DataValidadeCTF||''));
 
   const el = document.getElementById('page-content');
   el.innerHTML = `
@@ -364,6 +380,33 @@ async function renderDashboard() {
         })()}
       </div>
     </div>
+
+    ${ctfClientes.length > 0 ? `
+    <div class="card" style="margin-top:20px">
+      <div class="card-header">
+        <h3><i class="bi bi-shield-check me-2" style="color:#0369a1"></i>Controle de CTF</h3>
+        <span style="font-size:12px;color:var(--text-muted)">${ctfClientes.length} cliente(s) caçador(es)</span>
+      </div>
+      <div class="table-wrapper">
+        <table>
+          <thead><tr><th>Cliente</th><th>Vencimento CTF</th><th>Situação</th></tr></thead>
+          <tbody>
+            ${ctfClientes.map(c => {
+              const iso = c.DataValidadeCTF.split('T')[0];
+              const dias = daysBetween(iso);
+              const s = validadeStatus(iso);
+              const rowBg = dias < 0 ? 'background:#fff5f5' : dias <= 30 ? 'background:#fff7ed' : dias <= 60 ? 'background:#fffbeb' : '';
+              const label = dias === null ? '—' : dias < 0 ? `Vencido há ${Math.abs(dias)}d` : dias === 0 ? 'Vence hoje' : `${dias}d restantes`;
+              return `<tr style="${rowBg}">
+                <td><a style="cursor:pointer;color:var(--accent);font-weight:600" onclick="navigate('clientes/perfil',{id:'${c.id}',tab:'dados'})">${esc(c.Title)}</a></td>
+                <td>${fmtDate(iso)}</td>
+                <td><span class="badge ${s.cls}">${label}</span></td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>` : ''}
 
     ${simafVencimentos.length > 0 ? `
     <div class="card" style="margin-top:20px">
@@ -1630,6 +1673,68 @@ function filtrarProcessos() {
   if (q) lista = lista.filter(p => (p.ClienteNome||'').toLowerCase().includes(q) || (p.TipoProcesso||'').toLowerCase().includes(q));
   if (s) lista = lista.filter(p => p.Status === s);
   document.getElementById('tbody-processos').innerHTML = renderProcessosRows(lista);
+}
+
+// ============================================================
+// MEUS PROCESSOS
+// ============================================================
+async function renderMeusProcessos() {
+  document.getElementById('page-title').textContent = 'Meus Processos';
+  const currentUser = getCurrentUserName();
+  const processos = await App.getProcessos();
+
+  const meus = processos.filter(p => p.Responsavel === currentUser && !STATUS_FECHADOS.includes(p.Status));
+
+  const porCliente = {};
+  meus.forEach(p => {
+    const cid = String(p.ClienteId);
+    if (!porCliente[cid]) porCliente[cid] = { nome: p.ClienteNome, clienteId: cid, processos: [] };
+    porCliente[cid].processos.push(p);
+  });
+  const grupos = Object.values(porCliente).sort((a, b) => (a.nome||'').localeCompare(b.nome||'', 'pt-BR'));
+
+  const el = document.getElementById('page-content');
+  if (grupos.length === 0) {
+    el.innerHTML = `<div class="empty-state"><i class="bi bi-inbox" style="font-size:48px"></i><p>Nenhum processo em aberto para <strong>${esc(currentUser)}</strong>.</p></div>`;
+    return;
+  }
+
+  el.innerHTML = `
+    <div style="margin-bottom:12px">
+      <span style="font-size:13px;color:var(--text-muted)">${meus.length} processo(s) em aberto para <strong>${esc(currentUser)}</strong></span>
+    </div>
+    ${grupos.map(g => `
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-header" style="cursor:pointer" onclick="navigate('clientes/perfil',{id:'${g.clienteId}'})">
+          <h3><i class="bi bi-person-fill me-2"></i>${esc(g.nome)}</h3>
+          <span style="font-size:12px;color:var(--text-muted)">${g.processos.length} processo(s)</span>
+        </div>
+        <div class="card-body" style="padding:0">
+          ${g.processos.map(p => {
+            const checklist = JSON.parse(p.ChecklistJSON || '[]');
+            const pendentes = checklist.filter(i => !i.concluido);
+            const total = checklist.length;
+            const b = statusBadge(p.Status);
+            return `
+              <div style="padding:12px 16px;border-bottom:1px solid var(--border)">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+                  <a style="font-weight:600;cursor:pointer;color:var(--accent);font-size:14px" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.TipoProcesso||'—')}</a>
+                  <div style="display:flex;align-items:center;gap:8px">
+                    ${total > 0 ? `<span style="font-size:12px;color:var(--text-muted)">${total - pendentes.length}/${total} itens</span>` : ''}
+                    <span class="badge ${b.cls}">${b.txt}</span>
+                  </div>
+                </div>
+                ${pendentes.length > 0 ? `
+                  <div style="padding-left:12px;border-left:3px solid #e5e7eb">
+                    <div style="font-size:11px;color:var(--text-muted);margin-bottom:3px">Itens pendentes no checklist:</div>
+                    ${pendentes.map(i => `<div style="font-size:12px;padding:2px 0;color:#374151"><i class="bi bi-square me-1" style="color:#d1d5db"></i>${esc(i.nome)}</div>`).join('')}
+                  </div>
+                ` : `<div style="font-size:12px;color:var(--success)"><i class="bi bi-check-circle-fill me-1"></i>Checklist completo</div>`}
+              </div>`;
+          }).join('')}
+        </div>
+      </div>
+    `).join('')}`;
 }
 
 async function deletarProcesso(id, clienteNome) {
@@ -3341,6 +3446,189 @@ async function renderPagamentos() {
 }
 
 // ============================================================
+// PAGAMENTOS DE EXTRAS (Andrieli e Priscila)
+// ============================================================
+function getDataDeferido(p) {
+  try {
+    const hist = JSON.parse(p.HistoricoStatus || '[]');
+    const entry = [...hist].reverse().find(h => h.status === 'Deferido');
+    if (!entry || !entry.data) return null;
+    const parts = entry.data.split('/');
+    if (parts.length !== 3) return null;
+    return `${parts[2]}-${parts[1].padStart(2,'0')}-${parts[0].padStart(2,'0')}`;
+  } catch(e) { return null; }
+}
+
+function getProcessoDescExtra(p) {
+  try {
+    const d = JSON.parse(p.DadosEspecificosJSON || '{}');
+    const parts = [];
+    const modelo = getArmaModeloProcesso(p);
+    if (modelo) parts.push(modelo);
+    const cidade = d.cidadeGuia || d.cidade || '';
+    if (cidade) parts.push(cidade);
+    return parts.join(' · ');
+  } catch(e) { return ''; }
+}
+
+async function renderPagamentosExtras() {
+  document.getElementById('page-title').textContent = 'Pagamentos de Extras';
+  const processos = await App.getProcessos();
+
+  const NOMES_MESES = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
+                       'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+
+  // Monta lista de meses disponíveis (de processos com data de Deferido)
+  const mesesSet = new Set();
+  processos.forEach(p => {
+    const iso = getDataDeferido(p);
+    if (iso) mesesSet.add(iso.substring(0, 7));
+  });
+  const mesesList = [...mesesSet].sort().reverse();
+
+  const hoje = new Date();
+  const mesHoje = `${hoje.getFullYear()}-${String(hoje.getMonth()+1).padStart(2,'0')}`;
+  if (!window._extrasFilterMes) window._extrasFilterMes = mesesList[0] || mesHoje;
+  const filtroMes = window._extrasFilterMes;
+
+  function mesLabel(ym) {
+    if (!ym) return '—';
+    const [y, m] = ym.split('-');
+    return `${NOMES_MESES[parseInt(m)-1]} ${y}`;
+  }
+
+  function renderPainelExtra(responsavel, corHeader, corIcon) {
+    const meusDeferidos = processos.filter(p => {
+      if (p.Responsavel !== responsavel) return false;
+      const iso = getDataDeferido(p);
+      return iso && iso.startsWith(filtroMes);
+    });
+
+    if (!meusDeferidos.length) {
+      return `<div class="card-body"><div class="empty-state" style="padding:24px"><i class="bi bi-inbox"></i><p>Nenhum processo deferido neste mês.</p></div></div>`;
+    }
+
+    const totalExtra = meusDeferidos.reduce((s, p) => s + (Number(p.ValorProcesso)||0) * 0.1, 0);
+
+    return `<div class="card-body" style="padding:0">
+      ${meusDeferidos.map(p => {
+        const valor = Number(p.ValorProcesso) || 0;
+        const extra = valor * 0.1;
+        const desc = getProcessoDescExtra(p);
+        return `<div style="padding:10px 16px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+          <div style="flex:1;min-width:0">
+            <a style="font-size:13px;font-weight:600;cursor:pointer;color:var(--accent)" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.ClienteNome||'—')}</a>
+            <div style="font-size:12px;color:#374151;margin-top:2px">${esc(p.TipoProcesso||'—')}${desc ? ` <span style="color:var(--text-muted)">· ${esc(desc)}</span>` : ''}</div>
+            <div style="font-size:11px;color:var(--text-muted)">Valor total: ${fmtMoeda(valor)}</div>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0">
+            ${p.Restituido ? `<span class="badge" style="background:#9333ea;color:#fff;font-size:11px"><i class="bi bi-arrow-return-left me-1"></i>Restituído</span>` : ''}
+            <div style="text-align:right">
+              <div style="font-size:14px;font-weight:700;color:var(--success)">${fmtMoeda(extra)}</div>
+              <div style="font-size:10px;color:var(--text-muted)">10% extra</div>
+            </div>
+          </div>
+        </div>`;
+      }).join('')}
+      <div style="padding:12px 16px;background:#f0fdf4;border-top:2px solid var(--success);display:flex;justify-content:space-between;align-items:center">
+        <span style="font-size:13px;font-weight:600;color:#166534">Total de Extras — ${esc(mesLabel(filtroMes))}</span>
+        <span style="font-size:16px;font-weight:700;color:var(--success)">${fmtMoeda(totalExtra)}</span>
+      </div>
+    </div>`;
+  }
+
+  const selectOpts = mesesList.length ? mesesList.map(m => `<option value="${m}" ${m === filtroMes ? 'selected' : ''}>${mesLabel(m)}</option>`).join('') : `<option value="${filtroMes}">${mesLabel(filtroMes)}</option>`;
+
+  const el = document.getElementById('page-content');
+  el.innerHTML = `
+    <div style="margin-bottom:16px;display:flex;align-items:center;gap:12px">
+      <label style="font-size:13px;font-weight:600">Filtrar por mês:</label>
+      <select style="padding:6px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px" onchange="window._extrasFilterMes=this.value;renderPagamentosExtras()">${selectOpts}</select>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+      <div class="card">
+        <div class="card-header" style="background:#fef3c7">
+          <h3><i class="bi bi-person-badge me-2" style="color:#d97706"></i>Andrieli</h3>
+          <span style="font-size:12px;color:var(--text-muted)">${mesLabel(filtroMes)}</span>
+        </div>
+        ${renderPainelExtra('Andrieli')}
+      </div>
+      <div class="card">
+        <div class="card-header" style="background:#ede9fe">
+          <h3><i class="bi bi-person-badge me-2" style="color:#7c3aed"></i>Priscila</h3>
+          <span style="font-size:12px;color:var(--text-muted)">${mesLabel(filtroMes)}</span>
+        </div>
+        ${renderPainelExtra('Priscila')}
+      </div>
+    </div>`;
+}
+
+// ============================================================
+// VALORES DOS PROCESSOS (restrito a Matheus e Simone)
+// ============================================================
+async function renderValoresProcessos() {
+  document.getElementById('page-title').textContent = 'Valores dos Processos';
+  if (!isAdminUser()) {
+    document.getElementById('page-content').innerHTML = `<div class="empty-state"><i class="bi bi-lock" style="font-size:48px"></i><p>Acesso restrito.</p></div>`;
+    return;
+  }
+
+  const processos = await App.getProcessos();
+  processos.sort((a, b) => (a.ClienteNome||'').localeCompare(b.ClienteNome||'', 'pt-BR'));
+
+  const el = document.getElementById('page-content');
+  el.innerHTML = `
+    <div class="card">
+      <div class="card-header">
+        <h3><i class="bi bi-currency-dollar me-2"></i>Valores dos Processos</h3>
+        <button class="btn btn-primary" onclick="salvarValoresProcessos()"><i class="bi bi-floppy me-1"></i>Salvar Alterações</button>
+      </div>
+      <div class="table-wrapper">
+        <table>
+          <thead><tr><th>Cliente</th><th>Tipo de Processo</th><th>Responsável</th><th>Status</th><th>Valor Atual</th><th>Novo Valor</th></tr></thead>
+          <tbody>
+            ${processos.map(p => {
+              const b = statusBadge(p.Status);
+              return `<tr>
+                <td><a style="cursor:pointer;color:var(--accent);font-weight:600" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.ClienteNome||'—')}</a></td>
+                <td style="font-size:13px">${esc(p.TipoProcesso||'—')}</td>
+                <td>${p.Responsavel ? `<span class="badge badge-blue">${esc(p.Responsavel)}</span>` : '<span style="color:var(--text-muted)">—</span>'}</td>
+                <td><span class="badge ${b.cls}">${b.txt}</span></td>
+                <td style="font-weight:600">${fmtMoeda(p.ValorProcesso)}</td>
+                <td><input type="number" step="0.01" min="0" class="val-proc-input" data-id="${p.id}" placeholder="Novo valor..." style="padding:5px 8px;border:1px solid var(--border);border-radius:4px;width:130px;font-size:13px" /></td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+async function salvarValoresProcessos() {
+  const inputs = document.querySelectorAll('.val-proc-input');
+  const alteracoes = [];
+  inputs.forEach(inp => {
+    const val = inp.value.trim();
+    if (val !== '') alteracoes.push({ id: inp.dataset.id, valor: parseFloat(val) });
+  });
+
+  if (!alteracoes.length) {
+    toast('Nenhum valor novo foi digitado.', 'info');
+    return;
+  }
+
+  showLoading();
+  try {
+    for (const a of alteracoes) {
+      await App.graph.updateItem(CONFIG.listas.processos, a.id, { ValorProcesso: a.valor });
+    }
+    App.invalidateCache('processos');
+    toast(`${alteracoes.length} valor(es) atualizado(s) com sucesso.`, 'success');
+    await renderValoresProcessos();
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+// ============================================================
 // PROCESSOS — EDITAR
 // ============================================================
 async function renderProcessoEditar(id) {
@@ -4012,6 +4300,14 @@ async function iniciarApp() {
   document.getElementById('setup-screen').style.display  = 'none';
   document.getElementById('app-shell').style.display     = 'flex';
   document.getElementById('user-name').textContent       = App.account?.name || '';
+
+  // Mostrar itens de menu restritos a Matheus e Simone
+  if (isAdminUser()) {
+    const navVal = document.getElementById('nav-valores-processos');
+    const navExt = document.getElementById('nav-pagamentos-extras');
+    if (navVal) navVal.style.display = '';
+    if (navExt) navExt.style.display = '';
+  }
 
   // Verifica e cria listas se necessário
   showLoading();

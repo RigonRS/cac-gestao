@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>CAC Gestão</title>
+  <title>FOX System</title>
+  <link rel="icon" type="image/png" href="favicon.png" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -12,8 +13,8 @@
   <!-- ===================== TELA DE LOGIN ===================== -->
   <div id="login-screen" style="display:flex">
     <div class="login-card">
-      <div class="logo">🎯</div>
-      <h1>CAC Gestão</h1>
+      <div class="logo"><img src="logo-fox.png" alt="FOX System" style="max-width:220px;height:auto" /></div>
+      <h1>FOX System</h1>
       <p>Sistema de gestão de processos junto à Polícia Federal</p>
       <button id="btn-login" class="btn-ms">
         <svg width="20" height="20" viewBox="0 0 21 21" fill="none">
@@ -44,7 +45,7 @@
     <!-- SIDEBAR -->
     <nav id="sidebar">
       <div class="sidebar-header">
-        <div class="brand">🎯 CAC Gestão</div>
+        <div class="brand"><img src="logo-fox.png" alt="FOX" style="height:28px;vertical-align:middle;margin-right:6px" /> FOX System</div>
         <div class="user-info" id="user-name"></div>
       </div>
 
@@ -62,12 +63,21 @@
         <a class="nav-item" data-page="processos" onclick="navigate('processos')">
           <i class="bi bi-folder2-open"></i> Processos
         </a>
+        <a class="nav-item" data-page="meus-processos" onclick="navigate('meus-processos')">
+          <i class="bi bi-person-lines-fill"></i> Meus Processos
+        </a>
         <div class="nav-section">Controle</div>
         <a class="nav-item" data-page="validades" onclick="navigate('validades')">
           <i class="bi bi-calendar-x"></i> Validades
         </a>
         <a class="nav-item" data-page="pagamentos" onclick="navigate('pagamentos')">
           <i class="bi bi-cash-coin"></i> Pagamentos
+        </a>
+        <a class="nav-item" id="nav-valores-processos" data-page="valores-processos" onclick="navigate('valores-processos')" style="display:none">
+          <i class="bi bi-currency-dollar"></i> Valores dos Processos
+        </a>
+        <a class="nav-item" id="nav-pagamentos-extras" data-page="pagamentos-extras" onclick="navigate('pagamentos-extras')" style="display:none">
+          <i class="bi bi-trophy"></i> Pagamentos de Extras
         </a>
       </nav>
 
