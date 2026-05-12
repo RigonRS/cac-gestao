@@ -444,6 +444,7 @@ async function renderDashboard() {
 function statusBadge(s) {
   const m = {
     'Aguardando Pagamento Cliente': { cls:'badge-orange', txt:'Ag. Pagamento' },
+    'Parado':                       { cls:'badge-gray',   txt:'Parado' },
     'Aguardando Documentos':        { cls:'badge-yellow', txt:'Ag. Documentos' },
     'Aguardando Pagamento GRU':     { cls:'badge-orange', txt:'Ag. GRU' },
     'Pronto para Análise':          { cls:'badge-blue',   txt:'Pronto p/ Análise' },
@@ -457,6 +458,7 @@ function statusBadge(s) {
 
 const STATUS_PROCESSO = [
   'Aguardando Pagamento Cliente',
+  'Parado',
   'Aguardando Documentos',
   'Aguardando Pagamento GRU',
   'Pronto para Análise',
@@ -509,7 +511,7 @@ async function renderClientesList() {
       <div class="table-wrapper">
         <table>
           <thead><tr>
-            <th>Nome</th><th>CPF</th><th>Senha GOV</th><th>Celular</th>
+            <th>Nome</th><th>CPF</th><th>Senha GOV</th><th>2 Etapas</th><th>Celular</th>
             <th>N° CR</th><th>Val. CR</th><th>Categorias</th><th>Cadastro</th><th>Ações</th>
           </tr></thead>
           <tbody id="tbody-clientes">${renderClientesRows(clientes)}</tbody>
@@ -520,30 +522,59 @@ async function renderClientesList() {
 }
 
 function checarCadastroCliente(c) {
+  const isCacador = (c.Categoria || '').includes('Caçador');
+  const tem2End   = !!c.Endereco2;
+
   const campos = [
-    { campo: 'CPF',            label: 'CPF' },
-    { campo: 'RG',             label: 'RG' },
-    { campo: 'OrgaoEmissor',   label: 'Órgão Emissor' },
-    { campo: 'DataNascimento', label: 'Data de Nascimento' },
-    { campo: 'Naturalidade',   label: 'Naturalidade' },
-    { campo: 'Nacionalidade',  label: 'Nacionalidade' },
-    { campo: 'Profissao',      label: 'Profissão' },
-    { campo: 'Celular',        label: 'Celular' },
-    { campo: 'NomeMae',        label: 'Nome da Mãe' },
-    { campo: 'NomePai',        label: 'Nome do Pai' },
-    { campo: 'Endereco1',      label: 'Endereço' },
-    { campo: 'Cidade1',        label: 'Cidade' },
-    { campo: 'UF1Endereco',    label: 'UF' },
-    { campo: 'CEP1',           label: 'CEP' },
-    { campo: 'NumeroCR',       label: 'Número CR' },
-    { campo: 'Categoria',      label: 'Categoria' },
+    // Identificação
+    { campo: 'CPF',                label: 'CPF' },
+    { campo: 'SenhaGOV',           label: 'Senha GOV' },
+    { campo: 'RG',                 label: 'RG' },
+    { campo: 'OrgaoEmissor',       label: 'Órgão Emissor' },
+    { campo: 'UFDoc',              label: 'UF (RG)' },
+    { campo: 'DataExpedicaoRG',    label: 'Data Expedição RG' },
+    { campo: 'DataValidadeRGouCNH',label: 'Validade RG/CNH' },
+    { campo: 'DataNascimento',     label: 'Data de Nascimento' },
+    { campo: 'Nacionalidade',      label: 'Nacionalidade' },
+    { campo: 'Naturalidade',       label: 'Naturalidade' },
+    { campo: 'UFNaturalidade',     label: 'UF Naturalidade' },
+    { campo: 'Profissao',          label: 'Profissão' },
+    { campo: 'Sexo',               label: 'Sexo' },
+    { campo: 'EstadoCivil',        label: 'Estado Civil' },
+    // CR e Categorias
+    { campo: 'NumeroCR',           label: 'Número CR' },
+    { campo: 'DataValidadeCR',     label: 'Validade CR' },
+    { campo: 'Categoria',          label: 'Categoria' },
+    // CTF — apenas se for Caçador
+    ...(isCacador ? [{ campo: 'DataValidadeCTF', label: 'Validade CTF' }] : []),
+    // Contato e Filiação
+    { campo: 'Celular',            label: 'Celular' },
+    { campo: 'Email',              label: 'E-mail' },
+    { campo: 'NomeMae',            label: 'Nome da Mãe' },
+    { campo: 'NomePai',            label: 'Nome do Pai' },
+    // 1° Endereço (sem Complemento1)
+    { campo: 'CEP1',               label: 'CEP' },
+    { campo: 'Endereco1',          label: 'Endereço' },
+    { campo: 'Numero1',            label: 'Número' },
+    { campo: 'Bairro1',            label: 'Bairro' },
+    { campo: 'Cidade1',            label: 'Cidade' },
+    { campo: 'UF1Endereco',        label: 'UF' },
+    // 2° Endereço — apenas se já existir
+    ...(tem2End ? [
+      { campo: 'CEP2',             label: 'CEP (2° end.)' },
+      { campo: 'Numero2',          label: 'Número (2° end.)' },
+      { campo: 'Bairro2',          label: 'Bairro (2° end.)' },
+      { campo: 'Cidade2',          label: 'Cidade (2° end.)' },
+      { campo: 'UF2Endereco',      label: 'UF (2° end.)' },
+    ] : []),
   ];
+
   const faltando = campos.filter(f => !c[f.campo]).map(f => f.label);
   return { completo: faltando.length === 0, faltando };
 }
 
 function renderClientesRows(lista) {
-  if (!lista.length) return `<tr><td colspan="9"><div class="empty-state"><i class="bi bi-people"></i><p>Nenhum cliente encontrado.</p><button class="btn btn-primary" onclick="navigate('clientes/novo')">Cadastrar primeiro cliente</button></div></td></tr>`;
+  if (!lista.length) return `<tr><td colspan="10"><div class="empty-state"><i class="bi bi-people"></i><p>Nenhum cliente encontrado.</p><button class="btn btn-primary" onclick="navigate('clientes/novo')">Cadastrar primeiro cliente</button></div></td></tr>`;
   return lista.map(c => {
     const s = validadeStatus(normISO(c.DataValidadeCR) || null);
     const cats = (c.Categoria || '').split(',').filter(Boolean).map(ct => `<span class="badge badge-blue" style="margin-right:3px">${esc(ct.trim())}</span>`).join('');
@@ -563,6 +594,11 @@ function renderClientesRows(lista) {
           <span>${esc(c.SenhaGOV || '—')}</span>
           ${c.SenhaGOV ? `<button class="btn-copy" onclick="copiarCampo(this)" data-val="${esc(c.SenhaGOV)}" title="Copiar Senha GOV"><i class="bi bi-clipboard"></i></button>` : ''}
         </div>
+      </td>
+      <td style="text-align:center">
+        ${c.VerificacaoEtapas === 'Sim'
+          ? `<span class="badge badge-red">Sim</span>`
+          : `<span class="badge badge-green">Não</span>`}
       </td>
       <td>${esc(c.Celular || '—')}</td>
       <td>${esc(c.NumeroCR || '—')}</td>
@@ -649,7 +685,14 @@ async function renderClienteForm(id = null, importParams = {}) {
         <div class="form-grid">
           <div style="grid-column:1/-1"><label>Nome Completo *</label><input name="NomeCompleto" value="${val('Title')}" required /></div>
           <div><label>CPF</label><input name="CPF" value="${val('CPF')}" oninput="this.value=fmtCPF(this.value)" maxlength="14" /></div>
-          <div><label>Senha GOV</label><input name="SenhaGOV" value="${val('SenhaGOV')}" /></div>
+          <div>
+            <label>Senha GOV</label>
+            <input name="SenhaGOV" value="${val('SenhaGOV')}" />
+            <label class="checkbox-item" style="margin-top:6px;font-size:12px;display:flex;align-items:center;gap:6px">
+              <input type="checkbox" name="VerificacaoEtapas" ${c.VerificacaoEtapas === 'Sim' ? 'checked' : ''} />
+              Verificação em 2 etapas?
+            </label>
+          </div>
           <div><label>RG</label><input name="RG" value="${val('RG')}" /></div>
           <div><label>Órgão Emissor</label><input name="OrgaoEmissor" value="${val('OrgaoEmissor')}" oninput="this.value=this.value.toUpperCase()" style="text-transform:uppercase" /></div>
           <div><label>UF (RG)</label><input name="UFDoc" value="${val('UFDoc')}" maxlength="2" style="text-transform:uppercase" /></div>
@@ -772,6 +815,7 @@ async function salvarCliente(e, id) {
     Title:            toTitleCase(fd.get('NomeCompleto')),
     CPF:              fd.get('CPF'),
     SenhaGOV:         fd.get('SenhaGOV'),
+    VerificacaoEtapas: fd.get('VerificacaoEtapas') ? 'Sim' : 'Não',
     NumeroCR:         fd.get('NumeroCR'),
     DataValidadeCR:   fd.get('DataValidadeCR'),
     RG:               fd.get('RG'),
@@ -897,7 +941,7 @@ function renderPerfilDados(c) {
     <div class="form-section">
       <div class="form-section-title">Identificação</div>
       <div class="form-body"><div class="info-grid">
-        ${row('Nome Completo', c.Title)} ${row('CPF', c.CPF)} ${row('Senha GOV', c.SenhaGOV)}
+        ${row('Nome Completo', c.Title)} ${row('CPF', c.CPF)} ${row('Senha GOV', c.SenhaGOV)} ${row('Verif. 2 Etapas', c.VerificacaoEtapas)}
         ${row('RG', c.RG)} ${row('Órgão Emissor', c.OrgaoEmissor)} ${row('UF (RG)', c.UFDoc)}
         ${dateRow('Data Expedição RG', 'DataExpedicaoRG')} ${dateRow('Validade RG/CNH', 'DataValidadeRGouCNH')}
         ${dateRow('Data de Nascimento', 'DataNascimento')} ${row('Sexo', c.Sexo)} ${row('Estado Civil', c.EstadoCivil)}
@@ -921,6 +965,7 @@ function renderPerfilDados(c) {
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
             <div class="value ${!c.DataValidadeCTF?'empty':''}">${c.DataValidadeCTF ? fmtDate(c.DataValidadeCTF.split('T')[0]) : 'Não informado'}</div>
             <button class="btn btn-primary btn-sm" onclick="renovarCTF('${c.id}')"><i class="bi bi-arrow-clockwise"></i> Renovar +3m</button>
+            <a href="https://servicos.ibama.gov.br/ctf/sistema.php" target="_blank" class="btn btn-outline btn-sm"><i class="bi bi-box-arrow-up-right me-1"></i>Acessar Site do IBAMA</a>
           </div>
         </div>
       </div></div>
@@ -1493,8 +1538,6 @@ async function renderDocumentoForm(clienteId, id = null) {
           <div><label>Tipo de Documento *</label>
             <select name="TipoDocumento" required onchange="onTipoDocChange(this.value,'${clienteId}')">
               <option value="">Selecione...</option>
-              <option value="CTF"           ${tipoAtual==='CTF'?'selected':''}>CTF</option>
-              <option value="SIMAF"         ${tipoAtual==='SIMAF'?'selected':''}>SIMAF</option>
               <option value="CRAF"          ${tipoAtual==='CRAF'?'selected':''}>CRAF</option>
               <option value="Guia de Tráfego" ${tipoAtual==='Guia de Tráfego'?'selected':''}>Guia de Tráfego</option>
             </select>
@@ -1504,22 +1547,11 @@ async function renderDocumentoForm(clienteId, id = null) {
           <div><label>Data de Validade</label><input type="date" name="DataValidade" id="doc-validade" value="${d.DataValidade?d.DataValidade.split('T')[0]:''}" /></div>
         </div>
 
-        <div id="campos-ctf"          style="display:none"></div>
-        <div id="campos-simaf"        style="display:none" class="form-grid" style="margin-top:16px">
-          <div><label>Cidade</label><input name="CidadeDoc" value="${esc(d.CidadeDoc||'')}" /></div>
-          <div><label>Nome da Fazenda</label><input name="NomeFazenda" value="${esc(d.NomeFazenda||'')}" /></div>
-          <div><label>N° do CAR</label><input name="NumeroCar" value="${esc(d.NumeroCar||'')}" /></div>
-        </div>
         <div id="campos-craf" style="display:none">
           <div class="form-grid" style="margin-top:16px">
-            <div><label>Cliente Dono do CRAF</label>
-              <select name="ClienteDonoCRAF" onchange="onClienteCRAFChange(this.value,'${clienteId}')">
-                <option value="">Selecione...</option>${clientesOpts}
-              </select>
-            </div>
             <div><label>Arma</label>
               <select name="ArmaVinculadaCRAF" id="arma-craf-sel">
-                <option value="">Selecione o cliente primeiro...</option>${armasOpts}
+                <option value="">Selecione...</option>${armasOpts}
               </select>
             </div>
           </div>
@@ -1575,10 +1607,8 @@ async function renderDocumentoForm(clienteId, id = null) {
 }
 
 function onTipoDocChange(tipo) {
-  ['campos-simaf','campos-craf','campos-guia'].forEach(id => document.getElementById(id).style.display = 'none');
-  if (tipo === 'CTF')              { /* CTF só tem emissão e validade auto */ }
-  else if (tipo === 'SIMAF')       document.getElementById('campos-simaf').style.display = '';
-  else if (tipo === 'CRAF')        document.getElementById('campos-craf').style.display = '';
+  ['campos-craf','campos-guia'].forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; });
+  if (tipo === 'CRAF')             document.getElementById('campos-craf').style.display = '';
   else if (tipo === 'Guia de Tráfego') document.getElementById('campos-guia').style.display = '';
 }
 function onEmissaoChange(val) {
@@ -1620,10 +1650,8 @@ async function salvarDocumento(e, clienteId, id) {
     fields.NumeroCar  = fd.get('NumeroCar');
   }
   if (tipo === 'CRAF') {
-    const crafVal = fd.get('ClienteDonoCRAF') || '';
-    const [cid, cnome] = crafVal.split('|');
-    fields.ClienteDonoCRAFId   = cid || null;
-    fields.ClienteDonoCRAFNome = cnome || '';
+    fields.ClienteDonoCRAFId   = clienteId;
+    fields.ClienteDonoCRAFNome = cliente.Title;
     const armaVal = fd.get('ArmaVinculadaCRAF') || '';
     const [aid, adesc] = armaVal.split('|');
     fields.ArmaVinculadaId   = aid || null;
@@ -1663,6 +1691,7 @@ async function renderProcessosList() {
   document.getElementById('page-title').textContent = 'Processos';
   const [processos, clientes] = await Promise.all([App.getProcessos(), App.getClientes()]);
 
+  window._selectedProcessos = new Set();
   const el = document.getElementById('page-content');
   el.innerHTML = `
     <div class="toolbar">
@@ -1672,13 +1701,17 @@ async function renderProcessosList() {
           <option value="">Todos os status</option>
           ${STATUS_PROCESSO.map(s => `<option value="${s}">${s}</option>`).join('')}
         </select>
+        <button id="btn-excluir-massa" class="btn btn-danger" style="display:none" onclick="excluirProcessosSelecionados()"><i class="bi bi-trash"></i> Excluir selecionados (0)</button>
         <button class="btn btn-primary" onclick="navigate('processos/novo')"><i class="bi bi-plus-lg"></i> Novo Processo</button>
       </div>
     </div>
     <div class="card">
       <div class="table-wrapper">
         <table>
-          <thead><tr><th>Cliente</th><th>Tipo de Processo</th><th>Responsável</th><th>Protocolo</th><th>Abertura</th><th>Prazo</th><th>Status</th><th>Ações</th></tr></thead>
+          <thead><tr>
+            <th style="width:36px"><input type="checkbox" id="chk-todos" onchange="toggleSelecionarTodosProcessos(this.checked)" title="Selecionar todos" /></th>
+            <th>Cliente</th><th>Tipo de Processo</th><th>Responsável</th><th>Protocolo</th><th>Abertura</th><th>Prazo</th><th>Status</th><th>Ações</th>
+          </tr></thead>
           <tbody id="tbody-processos">${renderProcessosRows(processos)}</tbody>
         </table>
       </div>
@@ -1687,10 +1720,13 @@ async function renderProcessosList() {
 }
 
 function renderProcessosRows(lista) {
-  if (!lista.length) return `<tr><td colspan="8"><div class="empty-state"><i class="bi bi-folder-x"></i><p>Nenhum processo encontrado.</p></div></td></tr>`;
+  if (!lista.length) return `<tr><td colspan="9"><div class="empty-state"><i class="bi bi-folder-x"></i><p>Nenhum processo encontrado.</p></div></td></tr>`;
+  const selected = window._selectedProcessos || new Set();
   return lista.sort((a,b) => (b.DataAbertura||'').localeCompare(a.DataAbertura||'')).map(p => {
     const b = statusBadge(p.Status);
+    const isChecked = selected.has(String(p.id));
     return `<tr style="cursor:pointer" onclick="navigate('processos/detalhe',{id:'${p.id}'})">
+      <td onclick="event.stopPropagation()"><input type="checkbox" class="chk-processo" data-id="${p.id}" ${isChecked?'checked':''} onchange="toggleSelecaoProcesso('${p.id}',this.checked)" /></td>
       <td><strong>${esc(p.ClienteNome||'—')}</strong></td>
       <td>${esc(p.TipoProcesso||'—')}</td>
       <td>${p.Responsavel ? `<span class="badge badge-blue">${esc(p.Responsavel)}</span>` : '<span style="color:var(--text-muted)">—</span>'}</td>
@@ -1708,6 +1744,47 @@ function renderProcessosRows(lista) {
       </div></td>
     </tr>`;
   }).join('');
+}
+
+function toggleSelecaoProcesso(id, checked) {
+  if (!window._selectedProcessos) window._selectedProcessos = new Set();
+  if (checked) window._selectedProcessos.add(String(id));
+  else window._selectedProcessos.delete(String(id));
+  atualizarBotaoExclusaoMassa();
+}
+
+function toggleSelecionarTodosProcessos(checked) {
+  if (!window._selectedProcessos) window._selectedProcessos = new Set();
+  document.querySelectorAll('.chk-processo').forEach(cb => {
+    cb.checked = checked;
+    if (checked) window._selectedProcessos.add(String(cb.dataset.id));
+    else window._selectedProcessos.delete(String(cb.dataset.id));
+  });
+  atualizarBotaoExclusaoMassa();
+}
+
+function atualizarBotaoExclusaoMassa() {
+  const btn = document.getElementById('btn-excluir-massa');
+  if (!btn) return;
+  const n = (window._selectedProcessos || new Set()).size;
+  btn.style.display = n > 0 ? '' : 'none';
+  btn.innerHTML = `<i class="bi bi-trash"></i> Excluir selecionados (${n})`;
+}
+
+async function excluirProcessosSelecionados() {
+  const ids = [...(window._selectedProcessos || new Set())];
+  if (!ids.length) return;
+  if (!confirm(`Excluir ${ids.length} processo(s) selecionado(s)?\n\nEsta ação não pode ser desfeita.`)) return;
+  showLoading();
+  try {
+    for (const id of ids) {
+      await App.graph.deleteItem(CONFIG.listas.processos, id);
+    }
+    App.invalidateCache('processos');
+    window._selectedProcessos = new Set();
+    toast(`${ids.length} processo(s) excluído(s).`, 'success');
+    await renderProcessosList();
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 function filtrarProcessos() {
@@ -1909,20 +1986,24 @@ async function onClienteProcessoChange(clienteId) {
   if (tipo) onTipoProcessoChange(tipo);
 }
 
-function onTipoProcessoChange(tipo) {
+function onTipoProcessoChange(tipo, skipValor = false) {
   const clienteId = document.querySelector('[name="ClienteId"]')?.value;
   const camposEl = document.getElementById('campos-tipo-processo');
   const checklistEl = document.getElementById('checklist-preview');
   const secaoChecklist = document.getElementById('secao-checklist');
 
-  const valorInput = document.querySelector('[name="ValorProcesso"]');
-  if (valorInput && tipo && VALORES_PROCESSO[tipo] !== undefined) {
-    valorInput.value = VALORES_PROCESSO[tipo].toFixed(2);
-    calcularParcelas();
+  if (!skipValor) {
+    const valorInput = document.querySelector('[name="ValorProcesso"]');
+    if (valorInput && tipo && VALORES_PROCESSO[tipo] !== undefined) {
+      valorInput.value = VALORES_PROCESSO[tipo].toFixed(2);
+      calcularParcelas();
+    }
   }
 
-  camposEl.innerHTML = '';
+  if (camposEl) camposEl.innerHTML = '';
   const armasOpts = _processoArmasCache.map(a => `<option value="${a.id}|${esc(a.AtividadeCadastrada||'')}|${esc(a.Marca||'')}|${esc(a.Modelo||'')}">${esc(a.Marca||'')} ${esc(a.Modelo||'')}${a.NumeroSerie ? ' ('+esc(a.NumeroSerie)+')' : ''} — ${esc(a.AtividadeCadastrada||'')}</option>`).join('');
+
+  if (!camposEl) return;
 
   if (tipo === 'Aquisição de Arma SIGMA' || tipo === 'Aquisição de Arma PF') {
     camposEl.innerHTML = buildCamposAquisicao();
@@ -1945,12 +2026,34 @@ function onTipoProcessoChange(tipo) {
 
   // Checklist
   const items = buildChecklistItems(tipo);
-  if (items.length > 0) {
-    secaoChecklist.style.display = '';
-    checklistEl.innerHTML = renderChecklistForm(items);
-  } else {
-    secaoChecklist.style.display = 'none';
+  if (secaoChecklist) {
+    if (items.length > 0) {
+      secaoChecklist.style.display = '';
+      if (checklistEl) checklistEl.innerHTML = renderChecklistForm(items);
+    } else {
+      secaoChecklist.style.display = 'none';
+    }
   }
+}
+
+function popularCamposEspecificos(dados) {
+  Object.entries(dados).forEach(([key, val]) => {
+    const name = `proc_${key}`;
+    const allEls = document.querySelectorAll(`[name="${name}"]`);
+    if (!allEls.length) return;
+    if (allEls[0].type === 'radio') {
+      allEls.forEach(r => { r.checked = r.value === String(val); });
+      const checked = Array.from(allEls).find(r => r.checked);
+      if (checked) checked.dispatchEvent(new Event('change'));
+    } else if (allEls[0].type === 'checkbox') {
+      allEls[0].checked = val === 'sim' || val === true || val === 'true';
+    } else {
+      allEls[0].value = val != null ? String(val) : '';
+      if (allEls[0].tagName === 'SELECT' && allEls[0].hasAttribute('onchange')) {
+        allEls[0].dispatchEvent(new Event('change'));
+      }
+    }
+  });
 }
 
 function buildCamposAquisicao() {
@@ -2254,8 +2357,8 @@ function coletarChecklist(tipo, subTipo = null) {
   });
 }
 
-function coletarDadosEspecificos(tipo) {
-  const fd = new FormData(document.getElementById('form-processo'));
+function coletarDadosEspecificos(tipo, formId = 'form-processo') {
+  const fd = new FormData(document.getElementById(formId));
   const d = {};
   for (const [k, v] of fd.entries()) {
     if (k.startsWith('proc_')) d[k.replace('proc_', '')] = v;
@@ -3734,6 +3837,12 @@ async function renderProcessoEditar(id) {
   document.getElementById('page-title').textContent = 'Editar Processo';
   const processo = await App.graph.getItem(CONFIG.listas.processos, id);
 
+  // Load client data so tipo-specific field builders work correctly
+  _processoArmasCache = (await App.getArmas()).filter(a => String(a.ClienteId) === String(processo.ClienteId));
+  const clientes = await App.getClientes();
+  const clienteObj = clientes.find(c => String(c.id) === String(processo.ClienteId));
+  _processoClienteCategoria = clienteObj ? (clienteObj.Categoria || '').split(',').map(s => s.trim()).filter(Boolean) : [];
+
   const d = (f) => processo[f] ? processo[f].split('T')[0] : '';
   const tipoPag = processo.TipoPagamento || 'À vista';
 
@@ -3800,6 +3909,9 @@ async function renderProcessoEditar(id) {
         </div>
       </div>
     </div>
+
+    <div id="campos-tipo-processo"></div>
+
     <div class="form-section">
       <div class="form-section-title">Observações</div>
       <div class="form-body"><textarea name="Observacoes" rows="3">${esc(processo.Observacoes||'')}</textarea></div>
@@ -3810,11 +3922,20 @@ async function renderProcessoEditar(id) {
       <button type="button" class="btn btn-danger" onclick="deletarProcesso('${id}','${esc(processo.ClienteNome||'')}')"><i class="bi bi-trash"></i> Excluir Processo</button>
     </div>
   </form>`;
+
+  // Render tipo-specific fields and populate from saved data
+  const tipo = processo.TipoProcesso;
+  if (tipo) {
+    onTipoProcessoChange(tipo, true); // skipValor=true to preserve existing value
+    const dados = processo.DadosEspecificosJSON ? JSON.parse(processo.DadosEspecificosJSON) : {};
+    popularCamposEspecificos(dados);
+  }
 }
 
 async function salvarProcessoEdicao(e, id) {
   e.preventDefault();
   const fd = new FormData(e.target);
+  const dadosEsp = coletarDadosEspecificos(null, 'form-processo-edit');
   showLoading();
   try {
     await App.graph.updateItem(CONFIG.listas.processos, id, {
@@ -3834,6 +3955,7 @@ async function salvarProcessoEdicao(e, id) {
       ValorParcelas:          parseFloat(fd.get('ValorParcelas')) || null,
       DataVencimentoParcelas: fd.get('DataVencimentoParcelas') || null,
       Observacoes:            fd.get('Observacoes') || '',
+      DadosEspecificosJSON:   JSON.stringify(dadosEsp),
     });
     App.invalidateCache('processos');
     toast('Processo atualizado!', 'success');
@@ -4075,6 +4197,7 @@ function onCatCacadorChange(checked) {
 }
 
 async function renovarCTF(clienteId) {
+  if (!confirm('Confirmar renovação do CTF por +3 meses a partir de hoje?')) return;
   showLoading();
   try {
     const hoje = new Date().toISOString().split('T')[0];
@@ -4526,8 +4649,8 @@ var ufs=selVals.filter(function(s){return s.label==='UF';});
 function getUF(idx){return(ufs[idx]||{val:''}).val||find('UF',idx);}
 function iso(br){var m=(br||'').match(/^(\\d{2})\\/(\\d{2})\\/(\\d{4})$/);return m?m[3]+'-'+m[2]+'-'+m[1]:'';}
 function cep(v){var d=(v||'').replace(/\\D/g,'');return d.length>=8?d.slice(0,5)+'-'+d.slice(5,8):v;}
-var prof=find('Outra Profissão')||find('Profissão');
-var d={Title:find('Nome Completo'),CPF:find(['Número de Inscrição (CPF)','CPF']),RG:find(['Nº Identidade','Identidade']),DataExpedicaoRG:iso(find('Data de Expedição')),OrgaoEmissor:find('Órgão Emissor'),UFDoc:getUF(0),DataNascimento:iso(find('Data de Nascimento')),Nacionalidade:selV('País')||find(['País','Nacionalidade']),Naturalidade:selV('Local de Nascimento')||selV('Naturalidade')||find('Local de Nascimento')||find('Naturalidade'),UFNaturalidade:getUF(1),Profissao:prof,Celular:find(['Telefone 1','Telefone']),Email:find('Email'),NomeMae:find('Nome da Mãe'),NomePai:find('Nome do Pai'),CEP1:cep(find('CEP',0)),Endereco1:find(['Endereço Residencial','Endereço']),UF1Endereco:getUF(2),Cidade1:selV('Cidade',0)||find('Cidade',0),Bairro1:selV('Bairro',0)||find('Bairro',0),Numero1:find(['Nº','Número'],0),Complemento1:find('Complemento',0),CEP2:cep(find('CEP',1)),Endereco2:find(['Segundo Endereço do Acervo','Segundo Endereço']),UF2Endereco:getUF(3),Cidade2:selV('Cidade',1)||find('Cidade',1),Bairro2:selV('Bairro',1)||find('Bairro',1),Numero2:find(['Nº','Número'],1),Complemento2:find('Complemento',1)};
+var prof=find('Outra Profissão')||selV('Profissão')||find('Profissão');
+var d={Title:find('Nome Completo'),CPF:find(['Número de Inscrição (CPF)','CPF']),RG:find(['Nº Identidade','Identidade']),DataExpedicaoRG:iso(find('Data de Expedição')),OrgaoEmissor:find('Órgão Emissor'),UFDoc:getUF(0),DataNascimento:iso(find('Data de Nascimento')),Nacionalidade:selV('País')||find(['País','Nacionalidade']),Naturalidade:selV('Local de Nascimento')||selV('Naturalidade')||find('Local de Nascimento')||find('Naturalidade'),UFNaturalidade:getUF(1),Profissao:prof,Sexo:selV('Sexo')||find('Sexo'),Celular:find(['Telefone 1','Telefone']),Email:find('Email'),NomeMae:find('Nome da Mãe'),NomePai:find('Nome do Pai'),CEP1:cep(find('CEP',0)),Endereco1:find(['Endereço Residencial','Endereço']),UF1Endereco:getUF(2),Cidade1:selV('Cidade',0)||find('Cidade',0),Bairro1:selV('Bairro',0)||find('Bairro',0),Numero1:find(['Nº','Número'],0),Complemento1:find('Complemento',0),CEP2:cep(find('CEP',1)),Endereco2:find(['Segundo Endereço do Acervo','Segundo Endereço']),UF2Endereco:getUF(3),Cidade2:selV('Cidade',1)||find('Cidade',1),Bairro2:selV('Bairro',1)||find('Bairro',1),Numero2:find(['Nº','Número'],1),Complemento2:find('Complemento',1)};
 if(!d.Title){alert('Não foi possível encontrar os dados.\\nCertifique-se de que o modal "Visualizar Cadastro Inicial do Solicitante" está aberto.');return;}
 var preview=Object.entries(d).filter(function(e){return e[1];}).map(function(e){return e[0]+': '+e[1];}).join('\\n');
 if(!confirm('Dados encontrados no SINARM:\\n\\n'+preview+'\\n\\nAbrir o CAC Gestão com esses dados preenchidos?'))return;
