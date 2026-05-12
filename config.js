@@ -46,6 +46,12 @@ const CONFIG = {
   // Pasta no OneDrive onde os dados serão salvos
   dataFolderPath: 'cac-gestao-dados',
 
+  // Link de compartilhamento da pasta (para outros usuários acessarem sem admin consent)
+  // Como obter: no OneDrive, clique com botão direito em "cac-gestao-dados"
+  //   → Compartilhar → Pessoas da organização com o link → Pode editar → Copiar link
+  // Cole o link copiado aqui (entre as aspas)
+  dataFolderShareUrl: 'https://simonebpegoraro-my.sharepoint.com/:f:/g/personal/matheus_simonebpegoraro_onmicrosoft_com/IgAJyeTQ6njKRb1GAv7gyU2tAVpG-CqLCPzGhDh_5N_QDeU?e=I3ipn2',
+
   // Nomes dos arquivos de dados (não alterar)
   listas: {
     clientes:   'clientes',
