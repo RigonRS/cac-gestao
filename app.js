@@ -510,7 +510,7 @@ async function renderClientesList() {
         <table>
           <thead><tr>
             <th>Nome</th><th>CPF</th><th>Senha GOV</th><th>Celular</th>
-            <th>N° CR</th><th>Val. CR</th><th>Categorias</th><th>Ações</th>
+            <th>N° CR</th><th>Val. CR</th><th>Categorias</th><th>Cadastro</th><th>Ações</th>
           </tr></thead>
           <tbody id="tbody-clientes">${renderClientesRows(clientes)}</tbody>
         </table>
@@ -519,11 +519,37 @@ async function renderClientesList() {
   window._clientes_filtro = clientes;
 }
 
+function checarCadastroCliente(c) {
+  const campos = [
+    { campo: 'CPF',            label: 'CPF' },
+    { campo: 'RG',             label: 'RG' },
+    { campo: 'OrgaoEmissor',   label: 'Órgão Emissor' },
+    { campo: 'DataNascimento', label: 'Data de Nascimento' },
+    { campo: 'Naturalidade',   label: 'Naturalidade' },
+    { campo: 'Nacionalidade',  label: 'Nacionalidade' },
+    { campo: 'Profissao',      label: 'Profissão' },
+    { campo: 'Celular',        label: 'Celular' },
+    { campo: 'NomeMae',        label: 'Nome da Mãe' },
+    { campo: 'NomePai',        label: 'Nome do Pai' },
+    { campo: 'Endereco1',      label: 'Endereço' },
+    { campo: 'Cidade1',        label: 'Cidade' },
+    { campo: 'UF1Endereco',    label: 'UF' },
+    { campo: 'CEP1',           label: 'CEP' },
+    { campo: 'NumeroCR',       label: 'Número CR' },
+    { campo: 'Categoria',      label: 'Categoria' },
+  ];
+  const faltando = campos.filter(f => !c[f.campo]).map(f => f.label);
+  return { completo: faltando.length === 0, faltando };
+}
+
 function renderClientesRows(lista) {
-  if (!lista.length) return `<tr><td colspan="8"><div class="empty-state"><i class="bi bi-people"></i><p>Nenhum cliente encontrado.</p><button class="btn btn-primary" onclick="navigate('clientes/novo')">Cadastrar primeiro cliente</button></div></td></tr>`;
+  if (!lista.length) return `<tr><td colspan="9"><div class="empty-state"><i class="bi bi-people"></i><p>Nenhum cliente encontrado.</p><button class="btn btn-primary" onclick="navigate('clientes/novo')">Cadastrar primeiro cliente</button></div></td></tr>`;
   return lista.map(c => {
     const s = validadeStatus(normISO(c.DataValidadeCR) || null);
     const cats = (c.Categoria || '').split(',').filter(Boolean).map(ct => `<span class="badge badge-blue" style="margin-right:3px">${esc(ct.trim())}</span>`).join('');
+    const cad = checarCadastroCliente(c);
+    const dotColor = cad.completo ? '#22c55e' : '#ef4444';
+    const dotTitle = cad.completo ? 'Cadastro completo' : `Faltando: ${cad.faltando.join(', ')}`;
     return `<tr>
       <td><a style="font-weight:600;cursor:pointer;color:var(--accent)" onclick="navigate('clientes/perfil',{id:'${c.id}'})">${esc(c.Title)}</a></td>
       <td>
@@ -542,6 +568,9 @@ function renderClientesRows(lista) {
       <td>${esc(c.NumeroCR || '—')}</td>
       <td><span class="badge ${s.cls}">${s.txt}</span></td>
       <td>${cats || '<span class="badge badge-gray">—</span>'}</td>
+      <td style="text-align:center">
+        <span title="${esc(dotTitle)}" style="display:inline-block;width:14px;height:14px;border-radius:50%;background:${dotColor};cursor:default;flex-shrink:0" aria-label="${esc(dotTitle)}"></span>
+      </td>
       <td>
         <div class="btn-group">
           <button class="btn btn-outline btn-sm" onclick="navigate('clientes/perfil',{id:'${c.id}'})"><i class="bi bi-eye"></i></button>
@@ -838,7 +867,7 @@ async function renderClientePerfil(id, tab = 'dados') {
       <div class="btn-group" style="margin-left:auto">
         <button class="btn btn-outline btn-sm" onclick="navigate('clientes/editar',{id:'${id}'})"><i class="bi bi-pencil"></i> Editar</button>
         <button class="btn btn-primary btn-sm" onclick="navigate('processos/novo',{clienteId:'${id}'})"><i class="bi bi-plus-lg"></i> Novo Processo</button>
-        <button class="btn btn-sm" style="background:#f97316;color:#fff;border:1px solid #ea580c" onclick="navigate('orcamento/novo',{clienteId:'${id}'})"><i class="bi bi-calculator"></i> Novo Orçamento</button>
+        <button class="btn btn-sm" style="background:#f97316;color:#fff;border:1px solid #ea580c" onclick="novoOrcamentoComVerificacao('${id}')"><i class="bi bi-calculator"></i> Novo Orçamento</button>
       </div>
     </div>
 
@@ -988,6 +1017,10 @@ function renderPerfilArmas(armas, clienteId, cliente) {
   const permAti = armAti.filter(a => a.GrupoCalibre === 'Permitido');
   const resAti  = armAti.filter(a => a.GrupoCalibre === 'Restrito');
 
+  // PF Defesa Pessoal
+  const armPF  = armas.filter(a => a.OrgaoCadastro === 'PF - Defesa Pessoal');
+  const permPF = armPF.filter(a => a.GrupoCalibre === 'Permitido');
+
   const mkBar = (label, atual, maximo) => {
     const pct = Math.min(100, Math.round(atual / maximo * 100));
     const cor = atual >= maximo ? 'var(--danger)' : atual >= maximo - 1 ? 'var(--warning)' : 'var(--success)';
@@ -1039,10 +1072,21 @@ function renderPerfilArmas(armas, clienteId, cliente) {
         <span style="font-size:11px;color:#b0b7c3">Não cadastrado</span>
       </div>`;
 
+  const boxPF = `<div class="card" style="flex:1;min-width:220px">
+    <div class="card-header"><h3 style="font-size:13px"><i class="bi bi-shield-lock-fill me-1" style="color:#dc2626"></i>Acervo PF Defesa Pessoal</h3></div>
+    <div class="card-body">
+      ${mkBar('Calibre Permitido', permPF.length, 2)}
+      <div style="display:flex;gap:16px;margin-top:8px;font-size:12px;flex-wrap:wrap">
+        <span style="color:var(--text-muted)">Total registrado: <strong>${armPF.length}</strong></span>
+      </div>
+    </div>
+  </div>`;
+
   const resumoBlock = `
     <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px">
       ${boxAtirador}
       ${boxCacador}
+      ${boxPF}
     </div>`;
 
   return `
@@ -3013,7 +3057,7 @@ async function salvarMotivoRestituicao(e, id) {
     historico.push({
       data:    agora.toLocaleDateString('pt-BR'),
       hora:    agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-      status:  proc.Status || '',
+      status:  'Restituído',
       usuario: App.account?.name || App.account?.username || 'Desconhecido',
       motivo
     });
@@ -4231,6 +4275,19 @@ async function salvarClube(e, id) {
 // ============================================================
 // ORÇAMENTO
 // ============================================================
+async function novoOrcamentoComVerificacao(clienteId) {
+  try {
+    const processos = await App.getProcessos();
+    const doCliente = processos.filter(p => String(p.ClienteId) === String(clienteId));
+    const temDebito = doCliente.some(p => calcPagamento(p).pendente > 0);
+    if (temDebito) {
+      const continuar = confirm('Esse cliente possui débitos em aberto!\n\nDeseja continuar mesmo assim?');
+      if (!continuar) return;
+    }
+  } catch(e) {}
+  navigate('orcamento/novo', { clienteId });
+}
+
 async function renderOrcamentoForm(clienteId = null) {
   document.getElementById('page-title').textContent = 'Novo Orçamento';
   const clientes = await App.getClientes();
