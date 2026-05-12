@@ -12,12 +12,19 @@ class GraphService {
     const accounts = this.msal.getAllAccounts();
     if (!accounts.length) throw new Error('Usuário não autenticado.');
     try {
-      const r = await this.msal.acquireTokenSilent({ scopes: ['Files.ReadWrite', 'User.Read'], account: accounts[0] });
+      const r = await this.msal.acquireTokenSilent({ scopes: ['Files.ReadWrite.All', 'User.Read'], account: accounts[0] });
       return r.accessToken;
     } catch {
-      const r = await this.msal.acquireTokenPopup({ scopes: ['Files.ReadWrite', 'User.Read'] });
+      const r = await this.msal.acquireTokenPopup({ scopes: ['Files.ReadWrite.All', 'User.Read'] });
       return r.accessToken;
     }
+  }
+
+  // Retorna a base da URL do drive compartilhado (OneDrive do proprietário dos dados)
+  _driveBase() {
+    const upn = CONFIG.dataOwnerUpn;
+    if (!upn) return `${this.BASE}/me/drive/root:`;
+    return `${this.BASE}/users/${encodeURIComponent(upn)}/drive/root:`;
   }
 
   // Aguarda N milissegundos
@@ -27,7 +34,7 @@ class GraphService {
   async _readFile(nome, tentativa = 1) {
     try {
       const token = await this.getToken();
-      const url = `${this.BASE}/me/drive/root:/${CONFIG.dataFolderPath}/${nome}.json:/content`;
+      const url = `${this._driveBase()}/${CONFIG.dataFolderPath}/${nome}.json:/content`;
       const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
       if (res.status === 404) return [];
       if (res.status === 401 && tentativa < 3) {
@@ -49,7 +56,7 @@ class GraphService {
   async _writeFile(nome, dados, tentativa = 1) {
     try {
       const token = await this.getToken();
-      const url = `${this.BASE}/me/drive/root:/${CONFIG.dataFolderPath}/${nome}.json:/content`;
+      const url = `${this._driveBase()}/${CONFIG.dataFolderPath}/${nome}.json:/content`;
       const res = await fetch(url, {
         method: 'PUT',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -112,14 +119,18 @@ class GraphService {
     const token = await this.getToken();
     // Verifica se a pasta já existe
     const checkRes = await fetch(
-      `${this.BASE}/me/drive/root:/${CONFIG.dataFolderPath}`,
+      `${this._driveBase()}/${CONFIG.dataFolderPath}`,
       { headers: { 'Authorization': `Bearer ${token}` } }
     );
     if (checkRes.ok) return false; // já existe
 
     // Cria a pasta
     if (onProgress) onProgress('Criando pasta de dados no OneDrive...');
-    const createRes = await fetch(`${this.BASE}/me/drive/root/children`, {
+    const upn = CONFIG.dataOwnerUpn;
+    const rootUrl = upn
+      ? `${this.BASE}/users/${encodeURIComponent(upn)}/drive/root/children`
+      : `${this.BASE}/me/drive/root/children`;
+    const createRes = await fetch(rootUrl, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: CONFIG.dataFolderPath, folder: {}, '@microsoft.graph.conflictBehavior': 'rename' })

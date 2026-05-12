@@ -19,12 +19,18 @@ const CONFIG = {
   },
 
   loginRequest: {
-    scopes: ['User.Read', 'Files.ReadWrite']
+    scopes: ['User.Read', 'Files.ReadWrite.All']
   },
 
   graphScopes: {
-    scopes: ['Files.ReadWrite', 'User.Read']
+    scopes: ['Files.ReadWrite.All', 'User.Read']
   },
+
+  // --- ONEDRIVE COMPARTILHADO ---
+  // E-mail (UPN) do proprietário do OneDrive onde os dados ficam salvos.
+  // Todos os usuários lerão e gravarão NESTE OneDrive, não no próprio.
+  // Após alterar, faça logout e login novamente para renovar as permissões.
+  dataOwnerUpn: 'matheus@simonebpegoraro.onmicrosoft.com',
 
   // --- SHAREPOINT ---
   // URL do site SharePoint onde o sistema será hospedado
