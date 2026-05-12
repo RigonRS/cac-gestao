@@ -19,11 +19,11 @@ const CONFIG = {
   },
 
   loginRequest: {
-    scopes: ['User.Read', 'Files.ReadWrite']
+    scopes: ['User.Read', 'Files.ReadWrite.All']
   },
 
   graphScopes: {
-    scopes: ['Files.ReadWrite', 'User.Read']
+    scopes: ['Files.ReadWrite.All', 'User.Read']
   },
 
   // --- ONEDRIVE COMPARTILHADO ---
