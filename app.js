@@ -218,11 +218,13 @@ async function renderPage() {
       case 'documentos/editar':    await renderDocumentoForm(params.clienteId, params.id); break;
       case 'processos':            await renderProcessosList(); break;
       case 'meus-processos':       await renderMeusProcessos(); break;
+      case 'anotacoes':            await renderAnotacoes(); break;
       case 'processos/novo':       await renderProcessoForm(params.clienteId); break;
       case 'processos/editar':     await renderProcessoEditar(params.id); break;
       case 'processos/detalhe':    await renderProcessoDetalhe(params.id); break;
       case 'validades':            await renderValidades(); break;
       case 'pagamentos':           await renderPagamentos(); break;
+      case 'pagamentos-gru':       await renderPagamentosGRU(); break;
       case 'valores-processos':    await renderValoresProcessos(); break;
       case 'pagamentos-extras':    await renderPagamentosExtras(); break;
       case 'orcamento/novo':       await renderOrcamentoForm(params.clienteId); break;
@@ -445,6 +447,7 @@ function statusBadge(s) {
   const m = {
     'Aguardando Pagamento Cliente': { cls:'badge-orange', txt:'Ag. Pagamento' },
     'Parado':                       { cls:'badge-gray',   txt:'Parado' },
+    'Processo Futuro':              { cls:'badge-purple', txt:'Proc. Futuro' },
     'Aguardando Documentos':        { cls:'badge-yellow', txt:'Ag. Documentos' },
     'Aguardando Pagamento GRU':     { cls:'badge-orange', txt:'Ag. GRU' },
     'Pronto para Análise':          { cls:'badge-blue',   txt:'Pronto p/ Análise' },
@@ -459,6 +462,7 @@ function statusBadge(s) {
 const STATUS_PROCESSO = [
   'Aguardando Pagamento Cliente',
   'Parado',
+  'Processo Futuro',
   'Aguardando Documentos',
   'Aguardando Pagamento GRU',
   'Pronto para Análise',
@@ -600,7 +604,12 @@ function renderClientesRows(lista) {
           ? `<span class="badge badge-red">Sim</span>`
           : `<span class="badge badge-green">Não</span>`}
       </td>
-      <td>${esc(c.Celular || '—')}</td>
+      <td>
+        <div style="display:flex;align-items:center;gap:4px">
+          <span>${esc(c.Celular || '—')}</span>
+          ${c.Celular ? `<a class="btn btn-whatsapp btn-sm" href="https://wa.me/55${(c.Celular||'').replace(/\D/g,'')}" target="_blank" style="padding:2px 7px;font-size:11px;line-height:1.6" title="Abrir WhatsApp"><i class="bi bi-whatsapp"></i></a>` : ''}
+        </div>
+      </td>
       <td>${esc(c.NumeroCR || '—')}</td>
       <td><span class="badge ${s.cls}">${s.txt}</span></td>
       <td>${cats || '<span class="badge badge-gray">—</span>'}</td>
@@ -2398,6 +2407,12 @@ async function salvarProcesso(e) {
     Observacoes:            fd.get('Observacoes') || '',
     ChecklistJSON:          JSON.stringify(checklist),
     DadosEspecificosJSON:   JSON.stringify(dadosEsp),
+    HistoricoStatus:        JSON.stringify([{
+      data:    new Date().toLocaleDateString('pt-BR'),
+      hora:    new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+      status:  fd.get('Status'),
+      usuario: App.account?.name || App.account?.username || 'Desconhecido'
+    }]),
   };
 
   showLoading();
@@ -2884,6 +2899,21 @@ async function renderProcessoDetalhe(id) {
             &nbsp;·&nbsp; Abertura: ${fmtDate(processo.DataAbertura?processo.DataAbertura.split('T')[0]:'')}
             ${processo.DataPrazo ? `&nbsp;·&nbsp; Prazo: ${fmtDate(processo.DataPrazo.split('T')[0])}` : ''}
           </div>
+          ${(_clienteDetalhe.CPF || _clienteDetalhe.SenhaGOV) ? `
+          <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:6px;font-size:12px">
+            ${_clienteDetalhe.CPF ? `<div class="copy-hover-wrap" style="display:inline-flex;align-items:center;gap:4px">
+              <i class="bi bi-person-badge" style="color:var(--text-muted)"></i>
+              <span style="color:var(--text-muted)">CPF:</span>
+              <strong>${esc(_clienteDetalhe.CPF)}</strong>
+              <button class="btn-copy" onclick="copiarCampo(this)" data-val="${esc(_clienteDetalhe.CPF)}" title="Copiar CPF"><i class="bi bi-clipboard"></i></button>
+            </div>` : ''}
+            ${_clienteDetalhe.SenhaGOV ? `<div class="copy-hover-wrap" style="display:inline-flex;align-items:center;gap:4px">
+              <i class="bi bi-key" style="color:var(--text-muted)"></i>
+              <span style="color:var(--text-muted)">Senha GOV:</span>
+              <strong>${esc(_clienteDetalhe.SenhaGOV)}</strong>
+              <button class="btn-copy" onclick="copiarCampo(this)" data-val="${esc(_clienteDetalhe.SenhaGOV)}" title="Copiar Senha GOV"><i class="bi bi-clipboard"></i></button>
+            </div>` : ''}
+          </div>` : ''}
         </div>
         <div class="btn-group">
           <a class="btn btn-outline btn-sm" onclick="navigate('clientes/perfil',{id:'${processo.ClienteId}',tab:'processos'})"><i class="bi bi-person"></i> Ver Cliente</a>
@@ -2973,6 +3003,10 @@ async function renderProcessoDetalhe(id) {
               ${statusOpts}
             </select>
             <span class="badge ${b.cls}" style="font-size:13px">${b.txt}</span>
+            ${processo.Status === 'Processo Futuro' && processo.ProcessoFuturoId ? `
+            <div id="container-processo-futuro" style="margin-top:8px;padding:10px;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:8px">
+              <div style="font-size:12px;color:#7c3aed"><i class="bi bi-hourglass me-1"></i>Aguardando: <strong>${esc(processo.ProcessoFuturoNome||'—')}</strong></div>
+            </div>` : ''}
             <div style="margin-top:12px">
               <label class="checkbox-item" style="font-size:13px;font-weight:600">
                 <input type="checkbox" id="chk-gru-paga" ${processo.GruPaga ? 'checked' : ''} onchange="onGruPagaChange('${id}',this.checked)" />
@@ -3041,16 +3075,119 @@ async function renderProcessoDetalhe(id) {
 }
 
 async function atualizarStatus(id, novoStatus) {
+  if (novoStatus === 'Processo Futuro') {
+    mostrarSeletorProcessoFuturo(id);
+    return;
+  }
   showLoading();
   try {
-    await App.graph.updateItem(CONFIG.listas.processos, id, { Status: novoStatus });
+    const updates = { Status: novoStatus };
+    if (window._processoDetalhe?.ProcessoFuturoId) {
+      updates.ProcessoFuturoId   = null;
+      updates.ProcessoFuturoNome = null;
+    }
+    await App.graph.updateItem(CONFIG.listas.processos, id, updates);
     App.invalidateCache('processos');
     const b = statusBadge(novoStatus);
-    document.querySelector(`#page-content .badge`).className = `badge ${b.cls}`;
-    document.querySelector(`#page-content .badge`).textContent = b.txt;
+    const badge = document.querySelector('#page-content .badge');
+    if (badge) { badge.className = `badge ${b.cls}`; badge.textContent = b.txt; }
     toast('Status atualizado!', 'success');
-    window._processoDetalhe.Status = novoStatus;
+    if (window._processoDetalhe) window._processoDetalhe.Status = novoStatus;
+    const container = document.getElementById('container-processo-futuro');
+    if (container) container.remove();
+    if (novoStatus === 'Deferido') liberarProcessosFuturos(id);
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function mostrarSeletorProcessoFuturo(processoId) {
+  const p = window._processoDetalhe;
+  if (!p) return;
+  showLoading();
+  try {
+    const todos = await App.getProcessos();
+    const outros = todos.filter(proc =>
+      String(proc.ClienteId) === String(p.ClienteId) &&
+      String(proc.id) !== String(processoId) &&
+      !STATUS_FECHADOS.includes(proc.Status)
+    );
+    hideLoading();
+    if (!outros.length) {
+      toast('Nenhum processo em aberto encontrado para este cliente.', 'warning');
+      const sel = document.getElementById('sel-status');
+      if (sel) sel.value = p.Status || '';
+      return;
+    }
+    let container = document.getElementById('container-processo-futuro');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'container-processo-futuro';
+      const selStatus = document.getElementById('sel-status');
+      if (selStatus) selStatus.after(container);
+    }
+    container.style.cssText = 'margin-top:10px;padding:12px;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:8px';
+    container.innerHTML = `
+      <div style="font-size:12px;font-weight:600;color:#7c3aed;margin-bottom:8px"><i class="bi bi-hourglass me-1"></i>Aguardando qual processo ser deferido?</div>
+      <select id="sel-proc-futuro" style="margin-bottom:8px">
+        <option value="">Selecione o processo...</option>
+        ${outros.map(proc => `<option value="${proc.id}">${esc(proc.TipoProcesso||'—')} — ${fmtDate(proc.DataAbertura?proc.DataAbertura.split('T')[0]:'')}</option>`).join('')}
+      </select>
+      <div style="display:flex;gap:8px">
+        <button onclick="confirmarProcessoFuturo('${processoId}')" class="btn btn-primary btn-sm">Confirmar</button>
+        <button onclick="cancelarProcessoFuturo('${processoId}')" class="btn btn-outline btn-sm">Cancelar</button>
+      </div>`;
+  } catch(e) { toast(e.message, 'error'); hideLoading(); }
+}
+
+async function confirmarProcessoFuturo(processoId) {
+  const sel = document.getElementById('sel-proc-futuro');
+  const linkedId = sel?.value;
+  if (!linkedId) { toast('Selecione o processo vinculado.', 'warning'); return; }
+  const linkedNome = sel.options[sel.selectedIndex]?.text || '';
+  showLoading();
+  try {
+    await App.graph.updateItem(CONFIG.listas.processos, processoId, {
+      Status:             'Processo Futuro',
+      ProcessoFuturoId:   linkedId,
+      ProcessoFuturoNome: linkedNome
+    });
+    App.invalidateCache('processos');
+    if (window._processoDetalhe) {
+      window._processoDetalhe.Status             = 'Processo Futuro';
+      window._processoDetalhe.ProcessoFuturoId   = linkedId;
+      window._processoDetalhe.ProcessoFuturoNome = linkedNome;
+    }
+    const b = statusBadge('Processo Futuro');
+    const badge = document.querySelector('#page-content .badge');
+    if (badge) { badge.className = `badge ${b.cls}`; badge.textContent = b.txt; }
+    const container = document.getElementById('container-processo-futuro');
+    if (container) container.innerHTML = `<div style="font-size:12px;color:#7c3aed"><i class="bi bi-hourglass me-1"></i>Aguardando: <strong>${esc(linkedNome)}</strong></div>`;
+    toast('Status "Processo Futuro" configurado.', 'success');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+function cancelarProcessoFuturo(processoId) {
+  const p = window._processoDetalhe;
+  const sel = document.getElementById('sel-status');
+  if (sel) sel.value = p?.Status || '';
+  const container = document.getElementById('container-processo-futuro');
+  if (container) container.remove();
+}
+
+async function liberarProcessosFuturos(deferidoId) {
+  try {
+    const todos = await App.getProcessos();
+    const aguardando = todos.filter(p => p.ProcessoFuturoId === String(deferidoId));
+    if (!aguardando.length) return;
+    for (const proc of aguardando) {
+      await App.graph.updateItem(CONFIG.listas.processos, proc.id, {
+        Status:             'Aguardando Documentos',
+        ProcessoFuturoId:   null,
+        ProcessoFuturoNome: null
+      });
+      toast(`Processo liberado: ${proc.TipoProcesso||'—'} (${proc.ClienteNome||'?'})`, 'success');
+    }
+    App.invalidateCache('processos');
+  } catch(e) { console.error('liberarProcessosFuturos:', e); }
 }
 
 async function atualizarChecklistItem(processoId, index, concluido, observacao) {
@@ -3563,25 +3700,46 @@ async function renderPagamentos() {
       </div>
     </div>`;
 
+}
+
+// ============================================================
+// PAGAMENTOS DE GRU
+// ============================================================
+async function renderPagamentosGRU() {
+  document.getElementById('page-title').textContent = 'Pagamentos de GRU';
+  const processos = await App.getProcessos();
+
   const gruPendentes = processos.filter(p => !p.GruPaga && !STATUS_FECHADOS.includes(p.Status));
-  if (gruPendentes.length > 0) {
-    const porClienteGru = {};
-    gruPendentes.forEach(p => {
-      const cid = String(p.ClienteId);
-      if (!porClienteGru[cid]) porClienteGru[cid] = { nome: p.ClienteNome, clienteId: cid, processos: [] };
-      porClienteGru[cid].processos.push(p);
-    });
-    const gruGrupos = Object.values(porClienteGru).sort((a,b) => (a.nome||'').localeCompare(b.nome||''));
-    el.innerHTML += `<div class="card" style="margin-top:20px">
+  const el = document.getElementById('page-content');
+
+  if (!gruPendentes.length) {
+    el.innerHTML = `<div class="empty-state"><i class="bi bi-check-circle" style="font-size:48px;color:var(--success)"></i><p>Nenhuma GRU pendente. Tudo em dia!</p></div>`;
+    return;
+  }
+
+  const porClienteGru = {};
+  gruPendentes.forEach(p => {
+    const cid = String(p.ClienteId);
+    if (!porClienteGru[cid]) porClienteGru[cid] = { nome: p.ClienteNome, clienteId: cid, processos: [] };
+    porClienteGru[cid].processos.push(p);
+  });
+  const gruGrupos = Object.values(porClienteGru).sort((a,b) => (a.nome||'').localeCompare(b.nome||''));
+
+  el.innerHTML = `
+    <div class="card" style="margin-bottom:16px;padding:16px">
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">Total de Processos com GRU Pendente</div>
+      <div style="font-size:22px;font-weight:700;color:var(--accent)">${gruPendentes.length}</div>
+    </div>
+    <div class="card">
       <div class="card-header">
-        <h3><i class="bi bi-receipt me-2"></i>Pagamentos de GRU</h3>
+        <h3><i class="bi bi-receipt me-2"></i>Pagamentos de GRU Pendentes</h3>
         <span style="font-size:12px;color:var(--text-muted)">${gruPendentes.length} processo(s)</span>
       </div>
       <div class="card-body" style="padding:0">
         ${gruGrupos.map(g => `<div style="padding:12px 20px;border-bottom:1px solid var(--border)">
           <a style="font-size:14px;font-weight:700;cursor:pointer;color:var(--accent)" onclick="navigate('clientes/perfil',{id:'${g.clienteId}'})">${esc(g.nome)}</a>
           <div style="padding-left:12px;border-left:3px solid var(--border);margin-top:6px">
-            ${g.processos.map(p => `<div style="padding:3px 0;font-size:13px;display:flex;justify-content:space-between;align-items:center">
+            ${g.processos.map(p => `<div style="padding:5px 0;font-size:13px;display:flex;justify-content:space-between;align-items:center">
               <a style="cursor:pointer;color:var(--accent)" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.TipoProcesso||'—')}</a>
               <span class="badge badge-orange">GRU Pendente</span>
             </div>`).join('')}
@@ -3589,7 +3747,6 @@ async function renderPagamentos() {
         </div>`).join('')}
       </div>
     </div>`;
-  }
 }
 
 // ============================================================
@@ -3825,6 +3982,7 @@ async function salvarValoresProcessos() {
     if (!alteracoes) { toast('Nenhum valor novo foi digitado.', 'info'); return; }
 
     await App.graph._writeFile('valores_padrao', valoresPadrao);
+    Object.assign(VALORES_PROCESSO, valoresPadrao);
     toast(`${alteracoes} valor(es) atualizado(s) com sucesso.`, 'success');
     await renderValoresProcessos();
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
@@ -4528,6 +4686,171 @@ function atualizarOrcamento() {
 }
 
 // ============================================================
+// MINHAS ANOTAÇÕES
+// ============================================================
+const NOTA_CORES = [
+  { key:'amarelo', bg:'#fef9c3', borda:'#fde047', label:'Amarelo' },
+  { key:'verde',   bg:'#dcfce7', borda:'#86efac', label:'Verde'   },
+  { key:'rosa',    bg:'#fce7f3', borda:'#f9a8d4', label:'Rosa'    },
+  { key:'azul',    bg:'#dbeafe', borda:'#93c5fd', label:'Azul'    },
+  { key:'laranja', bg:'#ffedd5', borda:'#fdba74', label:'Laranja' },
+];
+
+function getNotaCor(key) {
+  return NOTA_CORES.find(c => c.key === key) || NOTA_CORES[0];
+}
+
+function gerarIdNota() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+
+async function carregarAnotacoes() {
+  const user = getCurrentUserName().toLowerCase().replace(/\s+/g, '_');
+  try {
+    const raw = await App.graph._readFile(`anotacoes_${user}`);
+    return (raw && Array.isArray(raw.notas)) ? raw.notas : [];
+  } catch(e) { return []; }
+}
+
+async function salvarAnotacoesArquivo(notas) {
+  const user = getCurrentUserName().toLowerCase().replace(/\s+/g, '_');
+  await App.graph._writeFile(`anotacoes_${user}`, { notas });
+}
+
+async function renderAnotacoes() {
+  document.getElementById('page-title').textContent = 'Minhas Anotações';
+  showLoading();
+  let notas = [];
+  try { notas = await carregarAnotacoes(); } catch(e) {} finally { hideLoading(); }
+
+  const el = document.getElementById('page-content');
+  el.innerHTML = `
+    <div style="margin-bottom:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <button class="btn btn-primary" onclick="abrirModalNota()"><i class="bi bi-plus-lg me-1"></i> Nova Anotação</button>
+      <span style="font-size:13px;color:var(--text-muted)">${notas.length} anotação(ões)</span>
+    </div>
+    <div id="notas-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px">
+      ${notas.length ? notas.map(n => renderNotaCard(n)).join('') : `<div class="empty-state" style="grid-column:1/-1"><i class="bi bi-sticky" style="font-size:48px"></i><p>Nenhuma anotação ainda. Clique em "Nova Anotação" para começar.</p></div>`}
+    </div>
+    <!-- Modal de edição de nota -->
+    <div id="modal-nota" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9000;align-items:center;justify-content:center">
+      <div id="modal-nota-box" style="background:#fff;border-radius:12px;padding:24px;width:420px;max-width:95vw;box-shadow:0 8px 40px rgba(0,0,0,.2)">
+        <h3 style="margin:0 0 16px;font-size:15px" id="modal-nota-titulo">Nova Anotação</h3>
+        <div style="margin-bottom:12px">
+          <label style="font-size:12px;font-weight:600">Título</label>
+          <input id="nota-inp-titulo" placeholder="Título..." style="margin-top:4px" />
+        </div>
+        <div style="margin-bottom:12px">
+          <label style="font-size:12px;font-weight:600">Conteúdo</label>
+          <textarea id="nota-inp-conteudo" rows="5" placeholder="Escreva aqui..." style="margin-top:4px;resize:vertical"></textarea>
+        </div>
+        <div style="margin-bottom:16px">
+          <label style="font-size:12px;font-weight:600">Cor</label>
+          <div style="display:flex;gap:8px;margin-top:6px">
+            ${NOTA_CORES.map(c => `<button type="button" title="${c.label}" onclick="selecionarCorNota('${c.key}')" id="cor-btn-${c.key}" style="width:28px;height:28px;border-radius:50%;background:${c.bg};border:2px solid ${c.borda};cursor:pointer"></button>`).join('')}
+          </div>
+          <input type="hidden" id="nota-inp-cor" value="amarelo" />
+          <input type="hidden" id="nota-inp-id" value="" />
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button class="btn btn-outline" onclick="fecharModalNota()">Cancelar</button>
+          <button class="btn btn-primary" onclick="salvarNota()"><i class="bi bi-floppy me-1"></i>Salvar</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderNotaCard(n) {
+  const cor = getNotaCor(n.cor);
+  return `<div style="background:${cor.bg};border:1.5px solid ${cor.borda};border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:8px;min-height:140px;position:relative">
+    ${n.titulo ? `<div style="font-weight:700;font-size:14px;color:#1f2937;word-break:break-word">${esc(n.titulo)}</div>` : ''}
+    <div style="font-size:13px;color:#374151;flex:1;white-space:pre-wrap;word-break:break-word">${esc(n.conteudo||'')}</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px">
+      <span style="font-size:11px;color:#9ca3af">${n.criadoEm ? new Date(n.criadoEm).toLocaleDateString('pt-BR') : ''}</span>
+      <div style="display:flex;gap:6px">
+        <button onclick="abrirModalNota('${n.id}')" class="btn btn-ghost btn-xs" style="padding:2px 7px" title="Editar"><i class="bi bi-pencil"></i></button>
+        <button onclick="excluirNota('${n.id}')" class="btn btn-ghost btn-xs" style="padding:2px 7px;color:var(--danger)" title="Excluir"><i class="bi bi-trash"></i></button>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function abrirModalNota(id = '') {
+  const modal = document.getElementById('modal-nota');
+  if (!modal) return;
+  document.getElementById('nota-inp-id').value = id;
+  document.getElementById('nota-inp-titulo').value = '';
+  document.getElementById('nota-inp-conteudo').value = '';
+  document.getElementById('nota-inp-cor').value = 'amarelo';
+  document.getElementById('modal-nota-titulo').textContent = id ? 'Editar Anotação' : 'Nova Anotação';
+  selecionarCorNota('amarelo');
+
+  if (id) {
+    const notas = await carregarAnotacoes();
+    const nota = notas.find(n => n.id === id);
+    if (nota) {
+      document.getElementById('nota-inp-titulo').value = nota.titulo || '';
+      document.getElementById('nota-inp-conteudo').value = nota.conteudo || '';
+      document.getElementById('nota-inp-cor').value = nota.cor || 'amarelo';
+      selecionarCorNota(nota.cor || 'amarelo');
+    }
+  }
+  modal.style.display = 'flex';
+}
+
+function selecionarCorNota(key) {
+  document.getElementById('nota-inp-cor').value = key;
+  NOTA_CORES.forEach(c => {
+    const btn = document.getElementById(`cor-btn-${c.key}`);
+    if (btn) btn.style.outline = c.key === key ? '3px solid #1f2937' : 'none';
+  });
+}
+
+function fecharModalNota() {
+  const modal = document.getElementById('modal-nota');
+  if (modal) modal.style.display = 'none';
+}
+
+async function salvarNota() {
+  const id       = document.getElementById('nota-inp-id').value.trim();
+  const titulo   = document.getElementById('nota-inp-titulo').value.trim();
+  const conteudo = document.getElementById('nota-inp-conteudo').value.trim();
+  const cor      = document.getElementById('nota-inp-cor').value || 'amarelo';
+  if (!titulo && !conteudo) { toast('Preencha o título ou conteúdo.', 'warning'); return; }
+  showLoading();
+  try {
+    let notas = await carregarAnotacoes();
+    if (id) {
+      const idx = notas.findIndex(n => n.id === id);
+      if (idx >= 0) notas[idx] = { ...notas[idx], titulo, conteudo, cor, editadoEm: new Date().toISOString() };
+    } else {
+      notas.push({ id: gerarIdNota(), titulo, conteudo, cor, criadoEm: new Date().toISOString() });
+    }
+    await salvarAnotacoesArquivo(notas);
+    fecharModalNota();
+    toast(id ? 'Anotação atualizada!' : 'Anotação criada!', 'success');
+    const grid = document.getElementById('notas-grid');
+    if (grid) grid.innerHTML = notas.length ? notas.map(n => renderNotaCard(n)).join('') : `<div class="empty-state" style="grid-column:1/-1"><i class="bi bi-sticky" style="font-size:48px"></i><p>Nenhuma anotação ainda.</p></div>`;
+    document.querySelector('#page-content > div:first-child span').textContent = `${notas.length} anotação(ões)`;
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function excluirNota(id) {
+  if (!confirm('Excluir esta anotação?')) return;
+  showLoading();
+  try {
+    let notas = await carregarAnotacoes();
+    notas = notas.filter(n => n.id !== id);
+    await salvarAnotacoesArquivo(notas);
+    toast('Anotação excluída.', 'success');
+    const grid = document.getElementById('notas-grid');
+    if (grid) grid.innerHTML = notas.length ? notas.map(n => renderNotaCard(n)).join('') : `<div class="empty-state" style="grid-column:1/-1"><i class="bi bi-sticky" style="font-size:48px"></i><p>Nenhuma anotação ainda.</p></div>`;
+    const span = document.querySelector('#page-content > div:first-child span');
+    if (span) span.textContent = `${notas.length} anotação(ões)`;
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+// ============================================================
 // INICIALIZAÇÃO
 // ============================================================
 async function iniciarApp() {
@@ -4543,6 +4866,12 @@ async function iniciarApp() {
     if (navVal) navVal.style.display = '';
     if (navExt) navExt.style.display = '';
   }
+
+  // Carrega valores de processos personalizados
+  try {
+    const vp = await App.graph._readFile('valores_padrao');
+    if (vp && !Array.isArray(vp)) Object.assign(VALORES_PROCESSO, vp);
+  } catch(e) {}
 
   // Verifica e cria listas se necessário
   showLoading();

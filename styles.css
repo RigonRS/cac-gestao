@@ -190,6 +190,7 @@ tr:hover td { background: var(--bg-light); }
 .badge-red    { background: #fee2e2; color: #991b1b; }
 .badge-blue   { background: #dbeafe; color: #1e40af; }
 .badge-gray   { background: #f3f4f6; color: #374151; }
+.badge-purple { background: #f3e8ff; color: #7c3aed; }
 
 /* ---- FORMULÁRIOS ---- */
 .form-section {
