@@ -100,12 +100,19 @@ function imprimirDocumento(html, titulo) {
 function chk(v) { return v ? '(X)' : '(  )'; }
 
 function getCurrentUserName() {
-  const fullName = (App.account?.name || '').toLowerCase();
-  return RESPONSAVEIS.find(r => fullName.includes(r.toLowerCase())) || (App.account?.name || '').split(' ')[0];
+  const acc = App.account;
+  const email = (acc?.username || '').toLowerCase();
+  const fullName = (acc?.name || '').toLowerCase();
+  if (email.includes('recepcao')) return 'Andrieli';
+  return RESPONSAVEIS.find(r => fullName.includes(r.toLowerCase())) || (acc?.name || '').split(' ')[0];
 }
 function isAdminUser() {
   const nome = getCurrentUserName();
   return ['Matheus', 'Simone'].includes(nome);
+}
+function isExtrasUser() {
+  const nome = getCurrentUserName();
+  return ['Matheus', 'Simone', 'Andrieli', 'Priscila'].includes(nome);
 }
 function toTitleCase(s) {
   if (!s) return '';
@@ -488,6 +495,24 @@ const VALORES_PROCESSO = {
   'Transferência de Arma SINARM x SINARM':     1117.00,
   'Transferência de Arma SIGMA x SIGMA':       1117.00,
   'Transferência de Arma SINARM x SIGMA':      1117.00,
+};
+
+const TAXAS_PROCESSO = {
+  'Aquisição de Arma SIGMA':                    113,
+  'Aquisição de Arma PF':                        88,
+  'Atualização de Documento de Identificação':   50,
+  'Concessão/Renovação de CR':                  100,
+  'Guia de Tráfego':                             20,
+  'Alteração de Endereço':                       50,
+  'Inclusão de Atividade':                       50,
+  'Exclusão de Atividade':                       50,
+  'Mudança de Acervo':                           88,
+  'Renovação de CRAF':                           88,
+  'Segunda via de CRAF':                         88,
+  'Transferência de Arma SIGMA x SINARM':        88,
+  'Transferência de Arma SINARM x SINARM':       88,
+  'Transferência de Arma SIGMA x SIGMA':         88,
+  'Transferência de Arma SINARM x SIGMA':        88,
 };
 
 const CERTIDOES_CONFIG = [
@@ -893,9 +918,11 @@ async function renderClientePerfil(id, tab = 'dados') {
   const documentos = todosDocumentos.filter(d => String(d.ClienteId) === String(id));
   const processos  = todosProcessos.filter(p => String(p.ClienteId) === String(id));
 
+  const isCacador = (cliente.Categoria || '').includes('Caçador');
   const tabs = [
     { key:'dados',      label:'Dados Pessoais',               icon:'bi-person-vcard' },
     { key:'armas',      label:`Armas (${armas.length})`,       icon:'bi-shield-fill' },
+    ...(isCacador ? [{ key:'ibama', label:'IBAMA', icon:'bi-tree-fill' }] : []),
     { key:'documentos', label:`Documentos (${documentos.length})`, icon:'bi-file-earmark-text' },
     { key:'processos',  label:`Processos (${processos.length})`,   icon:'bi-folder2-open' },
     { key:'pagamentos', label:'Pagamentos',                    icon:'bi-cash-coin' },
@@ -906,6 +933,7 @@ async function renderClientePerfil(id, tab = 'dados') {
   let tabContent = '';
   if (tab === 'dados')           tabContent = renderPerfilDados(cliente);
   else if (tab === 'armas')      tabContent = renderPerfilArmas(armas, id, cliente);
+  else if (tab === 'ibama')      tabContent = renderPerfilIBAMA(cliente);
   else if (tab === 'documentos') tabContent = renderPerfilDocumentos(documentos, id);
   else if (tab === 'processos')  tabContent = renderPerfilProcessos(processos, id);
   else if (tab === 'pagamentos') tabContent = renderPerfilPagamentos(processos, id);
@@ -918,6 +946,8 @@ async function renderClientePerfil(id, tab = 'dados') {
         <p>CPF: ${esc(cliente.CPF || '—')} &nbsp;·&nbsp; CR: ${esc(cliente.NumeroCR || '—')} &nbsp;·&nbsp; ${cats || '<span class="badge badge-gray">Sem categoria</span>'}</p>
       </div>
       <div class="btn-group" style="margin-left:auto">
+        <button class="btn btn-outline btn-sm" onclick="imprimirDadosCliente('${id}')"><i class="bi bi-printer"></i> Imprimir Dados</button>
+        <button class="btn btn-outline btn-sm" onclick="imprimirArmasCliente('${id}')"><i class="bi bi-printer"></i> Imprimir Armas</button>
         <button class="btn btn-outline btn-sm" onclick="navigate('clientes/editar',{id:'${id}'})"><i class="bi bi-pencil"></i> Editar</button>
         <button class="btn btn-primary btn-sm" onclick="navigate('processos/novo',{clienteId:'${id}'})"><i class="bi bi-plus-lg"></i> Novo Processo</button>
         <button class="btn btn-sm" style="background:#f97316;color:#fff;border:1px solid #ea580c" onclick="novoOrcamentoComVerificacao('${id}')"><i class="bi bi-calculator"></i> Novo Orçamento</button>
@@ -943,8 +973,6 @@ function renderPerfilDados(c) {
     </div>`;
   };
   const dateRow = (label, f) => row(label, c[f] ? fmtDate(normISO(c[f])) : '');
-  const isCacador = (c.Categoria || '').includes('Caçador');
-  const simafList = JSON.parse(c.SIMAFs || '[]');
 
   return `
     <div class="form-section">
@@ -966,19 +994,6 @@ function renderPerfilDados(c) {
         ${row('Categorias', (c.Categoria||'').replace(/,/g,', '))}
       </div></div>
     </div>
-    ${isCacador ? `
-    <div class="form-section">
-      <div class="form-section-title">CTF — Caçador</div>
-      <div class="form-body"><div class="info-grid">
-        <div class="info-item"><label>Data de Validade CTF</label>
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-            <div class="value ${!c.DataValidadeCTF?'empty':''}">${c.DataValidadeCTF ? fmtDate(c.DataValidadeCTF.split('T')[0]) : 'Não informado'}</div>
-            <button class="btn btn-primary btn-sm" onclick="renovarCTF('${c.id}')"><i class="bi bi-arrow-clockwise"></i> Renovar +3m</button>
-            <a href="https://servicos.ibama.gov.br/ctf/sistema.php" target="_blank" class="btn btn-outline btn-sm"><i class="bi bi-box-arrow-up-right me-1"></i>Acessar Site do IBAMA</a>
-          </div>
-        </div>
-      </div></div>
-    </div>` : ''}
     <div class="form-section">
       <div class="form-section-title">Contato e Filiação</div>
       <div class="form-body"><div class="info-grid">
@@ -1012,7 +1027,24 @@ function renderPerfilDados(c) {
     </div>` : `<div class="form-section">
       <div class="form-section-title">2° Endereço</div>
       <div class="form-body"><p style="color:var(--text-muted);font-style:italic;margin:0">Não cadastrado</p></div>
-    </div>`}
+    </div>`}`;
+}
+
+function renderPerfilIBAMA(c) {
+  const simafList = JSON.parse(c.SIMAFs || '[]');
+  return `
+    <div class="form-section">
+      <div class="form-section-title">CTF — Caçador</div>
+      <div class="form-body"><div class="info-grid">
+        <div class="info-item"><label>Data de Validade CTF</label>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <div class="value ${!c.DataValidadeCTF?'empty':''}">${c.DataValidadeCTF ? fmtDate(c.DataValidadeCTF.split('T')[0]) : 'Não informado'}</div>
+            <button class="btn btn-primary btn-sm" onclick="renovarCTF('${c.id}')"><i class="bi bi-arrow-clockwise"></i> Renovar +3m</button>
+            <a href="https://servicos.ibama.gov.br/ctf/sistema.php" target="_blank" class="btn btn-outline btn-sm"><i class="bi bi-box-arrow-up-right me-1"></i>Acessar Site do IBAMA</a>
+          </div>
+        </div>
+      </div></div>
+    </div>
     <div class="form-section" id="secao-simaf">
       <div class="form-section-title" style="display:flex;align-items:center;justify-content:space-between">
         <span>SIMAF</span>
@@ -1054,6 +1086,77 @@ function renderPerfilDados(c) {
         }
       </div>
     </div>`;
+}
+
+async function imprimirDadosCliente(clienteId) {
+  showLoading();
+  try {
+    const c = await App.graph.getItem(CONFIG.listas.clientes, clienteId);
+    const row = (label, value) => value ? `<tr><td style="font-weight:600;width:40%;padding:4px 8px;border:1px solid #ddd">${esc(label)}</td><td style="padding:4px 8px;border:1px solid #ddd">${esc(value)}</td></tr>` : '';
+    const html = `
+      <h2>Dados do Cliente — ${esc(c.Title)}</h2>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:16px">
+        <tr><td colspan="2" style="background:#333;color:#fff;font-weight:bold;padding:6px 8px;font-size:10pt">Identificação</td></tr>
+        ${row('Nome Completo', c.Title)}
+        ${row('CPF', c.CPF)}
+        ${row('RG', c.RG + (c.OrgaoEmissor ? ' ' + c.OrgaoEmissor : '') + (c.UFDoc ? '/' + c.UFDoc : ''))}
+        ${row('Data de Nascimento', c.DataNascimento ? fmtDate(normISO(c.DataNascimento)) : '')}
+        ${row('Sexo', c.Sexo)}
+        ${row('Estado Civil', c.EstadoCivil)}
+        ${row('Nacionalidade', c.Nacionalidade)}
+        ${row('Naturalidade', c.Naturalidade + (c.UFNaturalidade ? '/' + c.UFNaturalidade : ''))}
+        ${row('Profissão', c.Profissao)}
+        ${row('N° CR', c.NumeroCR)}
+        ${row('Validade CR', c.DataValidadeCR ? fmtDate(normISO(c.DataValidadeCR)) : '')}
+        ${row('Categorias', (c.Categoria||'').replace(/,/g,', '))}
+        <tr><td colspan="2" style="background:#333;color:#fff;font-weight:bold;padding:6px 8px;font-size:10pt">Contato</td></tr>
+        ${row('Celular', c.Celular)}
+        ${row('E-mail', c.Email)}
+        ${row('Nome da Mãe', c.NomeMae)}
+        ${row('Nome do Pai', c.NomePai)}
+        <tr><td colspan="2" style="background:#333;color:#fff;font-weight:bold;padding:6px 8px;font-size:10pt">1° Endereço</td></tr>
+        ${row('Logradouro', [c.Endereco1, c.Numero1 ? 'n° '+c.Numero1 : '', c.Complemento1].filter(Boolean).join(', '))}
+        ${row('Bairro', c.Bairro1)}
+        ${row('Cidade/UF', [c.Cidade1, c.UF1Endereco].filter(Boolean).join('/'))}
+        ${row('CEP', c.CEP1)}
+        ${c.Endereco2 ? `<tr><td colspan="2" style="background:#333;color:#fff;font-weight:bold;padding:6px 8px;font-size:10pt">2° Endereço</td></tr>
+        ${row('Logradouro', [c.Endereco2, c.Numero2 ? 'n° '+c.Numero2 : '', c.Complemento2].filter(Boolean).join(', '))}
+        ${row('Bairro', c.Bairro2)}
+        ${row('Cidade/UF', [c.Cidade2, c.UF2Endereco].filter(Boolean).join('/'))}
+        ${row('CEP', c.CEP2)}` : ''}
+      </table>`;
+    imprimirDocumento(html, `Dados — ${c.Title}`);
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function imprimirArmasCliente(clienteId) {
+  showLoading();
+  try {
+    const [c, todasArmas] = await Promise.all([
+      App.graph.getItem(CONFIG.listas.clientes, clienteId),
+      App.getArmas()
+    ]);
+    const armas = todasArmas.filter(a => String(a.ClienteId) === String(clienteId));
+    if (!armas.length) { toast('Nenhuma arma cadastrada para este cliente.', 'info'); return; }
+    const html = `
+      <h2>Relação de Armas — ${esc(c.Title)}</h2>
+      <table>
+        <thead><tr><th>N° Série</th><th>N° SIGMA</th><th>Espécie</th><th>Marca</th><th>Modelo</th><th>Calibre</th><th>Atividade</th></tr></thead>
+        <tbody>
+          ${armas.map(a => `<tr>
+            <td>${esc(a.NumeroSerie||'—')}</td>
+            <td>${esc(a.NumeroSIGMA||'—')}</td>
+            <td>${esc(a.Especie||'—')}</td>
+            <td>${esc(a.Marca||'—')}</td>
+            <td>${esc(a.Modelo||'—')}</td>
+            <td>${esc(a.Calibre||'—')}</td>
+            <td>${esc(a.AtividadeCadastrada||'—')}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+      <p style="margin-top:16px;font-size:10pt;color:#555">Total: ${armas.length} arma(s)</p>`;
+    imprimirDocumento(html, `Armas — ${c.Title}`);
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 function renderPerfilArmas(armas, clienteId, cliente) {
@@ -2924,6 +3027,24 @@ async function renderProcessoDetalhe(id) {
 
     <div style="display:grid;grid-template-columns:1fr 340px;gap:20px;align-items:start">
       <div>
+        ${Object.keys(dadosEsp).length > 0 ? `
+        <div class="card" style="margin-bottom:20px">
+          <div class="card-header"><h3><i class="bi bi-info-circle me-2"></i>Dados do Processo</h3></div>
+          <div class="card-body">
+            <div class="info-grid">
+              ${Object.entries(dadosEsp).filter(([,v]) => v).map(([k,v]) => {
+                let displayV = v;
+                if (k === 'armaId' && v && v.includes('|')) {
+                  const parts = v.split('|');
+                  displayV = parts.length >= 4 ? `${parts[2]} ${parts[3]}`.trim() : (parts[2] || v);
+                }
+                const label = k === 'armaId' ? 'Arma' : esc(k.replace(/([A-Z])/g,' $1').trim());
+                return `<div class="info-item"><label>${label}</label><div class="value">${esc(displayV)}</div></div>`;
+              }).join('')}
+            </div>
+          </div>
+        </div>` : ''}
+
         ${checklist.length > 0 ? `
         <div class="card" style="margin-bottom:20px">
           <div class="card-header">
@@ -2972,24 +3093,6 @@ async function renderProcessoDetalhe(id) {
           </div>
         </div>` : ''}
 
-        ${Object.keys(dadosEsp).length > 0 ? `
-        <div class="card">
-          <div class="card-header"><h3><i class="bi bi-info-circle me-2"></i>Dados do Processo</h3></div>
-          <div class="card-body">
-            <div class="info-grid">
-              ${Object.entries(dadosEsp).filter(([,v]) => v).map(([k,v]) => {
-                let displayV = v;
-                if (k === 'armaId' && v && v.includes('|')) {
-                  const parts = v.split('|');
-                  displayV = parts.length >= 4 ? `${parts[2]} ${parts[3]}`.trim() : (parts[2] || v);
-                }
-                const label = k === 'armaId' ? 'Arma' : esc(k.replace(/([A-Z])/g,' $1').trim());
-                return `<div class="info-item"><label>${label}</label><div class="value">${esc(displayV)}</div></div>`;
-              }).join('')}
-            </div>
-          </div>
-        </div>` : ''}
-
         <div id="dados-pagamento-wrapper">${renderDadosPagamento(processo)}</div>
 
       </div>
@@ -3015,6 +3118,7 @@ async function renderProcessoDetalhe(id) {
               <div id="campo-gru-data-pag" style="display:${processo.GruPaga ? '' : 'none'};margin-top:8px">
                 <label style="font-size:12px">Data de Pagamento GRU</label>
                 <input type="date" id="input-gru-data" value="${processo.DataPagamentoGRU ? processo.DataPagamentoGRU.split('T')[0] : ''}" style="margin-top:4px" onchange="salvarGRU('${id}',this.value)" />
+                <button type="button" onclick="salvarPagamentoGRUHistorico('${id}')" class="btn btn-outline btn-sm" style="margin-top:6px;width:100%"><i class="bi bi-floppy me-1"></i>Salvar Pagamento</button>
               </div>
             </div>
             ${processo.Restituido ? `<div style="margin-top:12px;padding:12px;background:#fdf4ff;border:1px solid #d8b4fe;border-radius:8px">
@@ -3047,9 +3151,11 @@ async function renderProcessoDetalhe(id) {
           <div class="card-header"><h3><i class="bi bi-calendar3 me-2"></i>Datas</h3></div>
           <div class="card-body">
             <form onsubmit="salvarDatasProcesso(event,'${id}')">
-              <label>Protocolo no Sistema</label>
+              <label style="font-size:12px">N° Protocolo</label>
+              <input type="text" inputmode="numeric" pattern="[0-9]*" name="NumeroProtocolo" value="${esc(processo.NumeroProtocolo||'')}" placeholder="Apenas números" style="margin-bottom:10px" oninput="this.value=this.value.replace(/\D/g,'')" />
+              <label style="font-size:12px">Data do Protocolo no Sistema</label>
               <input type="date" name="DataProtocoloSistema" value="${processo.DataProtocoloSistema?processo.DataProtocoloSistema.split('T')[0]:''}" style="margin-bottom:14px" />
-              <button type="submit" class="btn btn-outline" style="width:100%"><i class="bi bi-floppy"></i> Salvar Datas</button>
+              <button type="submit" class="btn btn-outline" style="width:100%"><i class="bi bi-floppy"></i> Salvar Protocolo</button>
             </form>
           </div>
         </div>
@@ -3213,13 +3319,34 @@ async function atualizarChecklistItem(processoId, index, concluido, observacao) 
 async function salvarDatasProcesso(e, id) {
   e.preventDefault();
   const fd = new FormData(e.target);
+  const numProt = (fd.get('NumeroProtocolo') || '').trim();
+  const dataProt = fd.get('DataProtocoloSistema') || '';
+  if (!numProt && !dataProt) {
+    alert('Preencha o N° Protocolo e a Data do Protocolo antes de salvar.');
+    return;
+  }
+  if (!numProt) { alert('Preencha o N° Protocolo.'); return; }
+  if (!dataProt) { alert('Preencha a Data do Protocolo no Sistema.'); return; }
   showLoading();
   try {
+    const proc = await App.graph.getItem(CONFIG.listas.processos, id);
+    const historico = JSON.parse(proc.HistoricoStatus || '[]');
+    const agora = new Date();
+    historico.push({
+      data:    agora.toLocaleDateString('pt-BR'),
+      hora:    agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+      status:  `Protocolo no Sistema — N° ${numProt}`,
+      usuario: App.account?.name || App.account?.username || 'Desconhecido'
+    });
     await App.graph.updateItem(CONFIG.listas.processos, id, {
-      DataProtocoloSistema: fd.get('DataProtocoloSistema') || null,
+      NumeroProtocolo:      numProt,
+      DataProtocoloSistema: dataProt,
+      HistoricoStatus:      JSON.stringify(historico)
     });
     App.invalidateCache('processos');
-    toast('Datas salvas!', 'success');
+    const body = document.getElementById('historico-status-body');
+    if (body) body.innerHTML = renderHistoricoStatus(historico);
+    toast('Protocolo salvo!', 'success');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
@@ -3365,6 +3492,27 @@ async function salvarGRU(id, data) {
     await App.graph.updateItem(CONFIG.listas.processos, id, { DataPagamentoGRU: data || null });
     App.invalidateCache('processos');
     toast('Data de pagamento GRU salva!', 'success');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function salvarPagamentoGRUHistorico(id) {
+  showLoading();
+  try {
+    const data = document.getElementById('input-gru-data')?.value || '';
+    const proc = await App.graph.getItem(CONFIG.listas.processos, id);
+    const historico = JSON.parse(proc.HistoricoStatus || '[]');
+    const agora = new Date();
+    historico.push({
+      data:    agora.toLocaleDateString('pt-BR'),
+      hora:    agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+      status:  `Pagamento GRU${data ? ' — ' + fmtDate(data) : ''}`,
+      usuario: App.account?.name || App.account?.username || 'Desconhecido'
+    });
+    await App.graph.updateItem(CONFIG.listas.processos, id, { HistoricoStatus: JSON.stringify(historico) });
+    App.invalidateCache('processos');
+    const body = document.getElementById('historico-status-body');
+    if (body) body.innerHTML = renderHistoricoStatus(historico);
+    toast('Pagamento GRU registrado no histórico!', 'success');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
@@ -3792,11 +3940,15 @@ function imprimirExtras(responsavel) {
     return iso && iso.startsWith(filtroMes);
   });
 
-  const totalExtra = meusDeferidos.reduce((s, p) => s + (Number(p.ValorProcesso)||0) * 0.1, 0);
+  const totalExtra = meusDeferidos.reduce((s, p) => {
+    const taxa = TAXAS_PROCESSO[p.TipoProcesso] || 0;
+    return s + Math.max(0, (Number(p.ValorProcesso)||0) - taxa) * 0.1;
+  }, 0);
 
   const itensHtml = meusDeferidos.map(p => {
     const valor = Number(p.ValorProcesso) || 0;
-    const extra = valor * 0.1;
+    const taxa = TAXAS_PROCESSO[p.TipoProcesso] || 0;
+    const extra = Math.max(0, valor - taxa) * 0.1;
     const desc = getProcessoDescExtra(p);
     return `<tr>
       <td>${esc(p.ClienteNome||'—')}</td>
@@ -3858,12 +4010,16 @@ async function renderPagamentosExtras() {
       return `<div class="card-body"><div class="empty-state" style="padding:24px"><i class="bi bi-inbox"></i><p>Nenhum processo deferido neste mês.</p></div></div>`;
     }
 
-    const totalExtra = meusDeferidos.reduce((s, p) => s + (Number(p.ValorProcesso)||0) * 0.1, 0);
+    const totalExtra = meusDeferidos.reduce((s, p) => {
+      const taxa = TAXAS_PROCESSO[p.TipoProcesso] || 0;
+      return s + Math.max(0, (Number(p.ValorProcesso)||0) - taxa) * 0.1;
+    }, 0);
 
     return `<div class="card-body" style="padding:0">
       ${meusDeferidos.map(p => {
         const valor = Number(p.ValorProcesso) || 0;
-        const extra = valor * 0.1;
+        const taxa = TAXAS_PROCESSO[p.TipoProcesso] || 0;
+        const extra = Math.max(0, valor - taxa) * 0.1;
         const desc = getProcessoDescExtra(p);
         return `<div style="padding:10px 16px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
           <div style="flex:1;min-width:0">
@@ -3880,9 +4036,23 @@ async function renderPagamentosExtras() {
           </div>
         </div>`;
       }).join('')}
-      <div style="padding:12px 16px;background:#f0fdf4;border-top:2px solid var(--success);display:flex;justify-content:space-between;align-items:center">
-        <span style="font-size:13px;font-weight:600;color:#166534">Total de Extras — ${esc(mesLabel(filtroMes))}</span>
-        <span style="font-size:16px;font-weight:700;color:var(--success)">${fmtMoeda(totalExtra)}</span>
+      <div style="padding:12px 16px;background:#f0fdf4;border-top:2px solid var(--success)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <span style="font-size:13px;font-weight:600;color:#166534">Total de Extras — ${esc(mesLabel(filtroMes))}</span>
+          <span style="font-size:16px;font-weight:700;color:var(--success)">${fmtMoeda(totalExtra)}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <label class="checkbox-item" style="font-size:13px;font-weight:600;margin:0">
+            <input type="checkbox" id="chk-extra-pago-${responsavel}" ${window['_extraPago_'+responsavel+'_'+filtroMes] ? 'checked' : ''}
+              onchange="onExtraPagoChange('${responsavel}',this.checked)" /> Pago
+          </label>
+          <div id="extra-pago-data-wrap-${responsavel}" style="display:${window['_extraPago_'+responsavel+'_'+filtroMes] ? '' : 'none'}">
+            <input type="date" id="extra-pago-data-${responsavel}"
+              value="${window['_extraPagoData_'+responsavel+'_'+filtroMes] || ''}"
+              onchange="onExtraPagoDataChange('${responsavel}',this.value)"
+              style="font-size:12px;padding:4px 8px" />
+          </div>
+        </div>
       </div>
     </div>`;
   }
@@ -3917,6 +4087,22 @@ async function renderPagamentosExtras() {
         ${renderPainelExtra('Priscila')}
       </div>
     </div>`;
+}
+
+function onExtraPagoChange(responsavel, checked) {
+  const filtroMes = window._extrasFilterMes || '';
+  window[`_extraPago_${responsavel}_${filtroMes}`] = checked;
+  const wrap = document.getElementById(`extra-pago-data-wrap-${responsavel}`);
+  if (wrap) wrap.style.display = checked ? '' : 'none';
+  if (checked) {
+    const inp = document.getElementById(`extra-pago-data-${responsavel}`);
+    if (inp && !inp.value) inp.value = new Date().toISOString().split('T')[0];
+  }
+}
+
+function onExtraPagoDataChange(responsavel, value) {
+  const filtroMes = window._extrasFilterMes || '';
+  window[`_extraPagoData_${responsavel}_${filtroMes}`] = value;
 }
 
 // ============================================================
@@ -4281,10 +4467,34 @@ function renderDadosPagamento(p) {
               </div>
             </div>
             <div id="pag-data-wrap-${l.key}" style="display:${pago ? '' : 'none'};margin-top:6px">
-              <label style="font-size:11px;color:var(--text-muted)">Data de Pagamento</label>
-              <input type="date" id="input-pag-data-${l.key}" value="${dataPag}"
-                style="margin-top:2px;font-size:12px;padding:4px 8px"
-                onchange="onPagItemData('${pid}','${l.key}','${l.dataVenc||''}')" />
+              <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;flex-wrap:wrap">
+                <div>
+                  <label style="font-size:11px;color:var(--text-muted)">Data de Pagamento</label>
+                  <input type="date" id="input-pag-data-${l.key}" value="${item.dataPagamento||''}"
+                    style="margin-top:2px;font-size:12px;padding:4px 8px"
+                    onchange="onPagItemData('${pid}','${l.key}','${l.dataVenc||''}')" />
+                </div>
+                <div>
+                  <label style="font-size:11px;color:var(--text-muted)">Forma de Pagamento</label>
+                  <select id="input-pag-forma-${l.key}" style="margin-top:2px;font-size:12px;padding:4px 8px"
+                    onchange="onPagItemData('${pid}','${l.key}','${l.dataVenc||''}')">
+                    <option value="">Selecione...</option>
+                    <option value="Pix" ${item.formaPagamento==='Pix'?'selected':''}>Pix</option>
+                    <option value="Dinheiro" ${item.formaPagamento==='Dinheiro'?'selected':''}>Dinheiro</option>
+                    <option value="Cartão" ${item.formaPagamento==='Cartão'?'selected':''}>Cartão</option>
+                  </select>
+                </div>
+                <div>
+                  <label style="font-size:11px;color:var(--text-muted)">Banco</label>
+                  <select id="input-pag-banco-${l.key}" style="margin-top:2px;font-size:12px;padding:4px 8px"
+                    onchange="onPagItemData('${pid}','${l.key}','${l.dataVenc||''}')">
+                    <option value="">Selecione...</option>
+                    <option value="Banco do Brasil" ${item.banco==='Banco do Brasil'?'selected':''}>Banco do Brasil</option>
+                    <option value="Sicredi" ${item.banco==='Sicredi'?'selected':''}>Sicredi</option>
+                    <option value="Cresol" ${item.banco==='Cresol'?'selected':''}>Cresol</option>
+                  </select>
+                </div>
+              </div>
             </div>
           </div>`;
         }).join('')}
@@ -4313,9 +4523,13 @@ async function _salvarItemPagamento(processoId, key, dataVenc) {
     const pagamentos = JSON.parse(proc.PagamentosJSON || '{}');
     const chk = document.getElementById(`chk-pag-${key}`);
     const inp = document.getElementById(`input-pag-data-${key}`);
+    const formaEl = document.getElementById(`input-pag-forma-${key}`);
+    const bancoEl = document.getElementById(`input-pag-banco-${key}`);
     pagamentos[key] = {
       pago: chk?.checked || false,
-      dataPagamento: chk?.checked ? (inp?.value || null) : null
+      dataPagamento:  chk?.checked ? (inp?.value || null) : null,
+      formaPagamento: chk?.checked ? (formaEl?.value || null) : null,
+      banco:          chk?.checked ? (bancoEl?.value || null) : null,
     };
     await App.graph.updateItem(CONFIG.listas.processos, processoId, { PagamentosJSON: JSON.stringify(pagamentos) });
     App.invalidateCache('processos');
@@ -4862,8 +5076,10 @@ async function iniciarApp() {
   // Mostrar itens de menu restritos a Matheus e Simone
   if (isAdminUser()) {
     const navVal = document.getElementById('nav-valores-processos');
-    const navExt = document.getElementById('nav-pagamentos-extras');
     if (navVal) navVal.style.display = '';
+  }
+  if (isExtrasUser()) {
+    const navExt = document.getElementById('nav-pagamentos-extras');
     if (navExt) navExt.style.display = '';
   }
 
