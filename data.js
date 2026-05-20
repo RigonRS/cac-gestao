@@ -83,6 +83,24 @@ const CHECKLIST_TRANSFERENCIA_SIGMA_SINARM = [
   'Procuração'
 ];
 
+const CHECKLIST_TRANSFERENCIA_SINARM_SINARM = [
+  'Requerimento PF SINARM',
+  'Documento de identificação do Comprador',
+  'Certidão Justiça Federal',
+  'Certidão Justiça Estadual',
+  'Certidão Justiça Militar',
+  'Certidão Justiça Eleitoral',
+  'Comprovante de Ocupação do Comprador',
+  'Comprovante de Residência do Comprador',
+  'Avaliação Psicológica',
+  'Teste de Tiro',
+  'GRU emitida no Requerimento',
+  'Comprovante pgto GRU',
+  'Documento de identificação do Vendedor',
+  'Termo de Transferência',
+  'Procuração'
+];
+
 const CHECKLISTS = {
   'Aquisição de Arma SIGMA':                  CHECKLIST_AQUISICAO,
   'Aquisição de Arma PF':                     CHECKLIST_AQUISICAO,
@@ -106,7 +124,7 @@ const CHECKLISTS = {
   'Renovação de CRAF':    CHECKLIST_CR_INCLUSAO_RENOVCRAF,
   'Segunda via de CRAF':  ['Documento de Identificação'],
   'Transferência de Arma SIGMA x SINARM':  CHECKLIST_TRANSFERENCIA_SIGMA_SINARM,
-  'Transferência de Arma SINARM x SINARM': CHECKLIST_TRANSFERENCIA,
+  'Transferência de Arma SINARM x SINARM': CHECKLIST_TRANSFERENCIA_SINARM_SINARM,
   'Transferência de Arma SIGMA x SIGMA':   CHECKLIST_TRANSFERENCIA_SIGMA_SIGMA,
   'Transferência de Arma SINARM x SIGMA':  CHECKLIST_TRANSFERENCIA
 };

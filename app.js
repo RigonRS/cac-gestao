@@ -301,6 +301,11 @@ async function renderDashboard() {
   simafVencimentos.sort((a, b) => (a.dias ?? 9999) - (b.dias ?? 9999));
   vencimentos.sort((a, b) => a.dias - b.dias);
 
+  const v60 = [];
+  documentos.forEach(d => { if (d.DataValidade) { const iso = normISO(d.DataValidade); const dias = iso ? daysBetween(iso) : null; if (dias !== null && dias >= 0 && dias <= 60) v60.push({ tipo: d.TipoDocumento, cliente: d.ClienteNome, data: iso, dias }); } });
+  clientes.forEach(c => { if (c.DataValidadeCR) { const iso = normISO(c.DataValidadeCR); const dias = iso ? daysBetween(iso) : null; if (dias !== null && dias >= 0 && dias <= 60) v60.push({ tipo: 'CR', cliente: c.Title, data: iso, dias }); } });
+  v60.sort((a, b) => a.dias - b.dias);
+
   const urgentes = vencimentos.filter(v => v.dias < 0).length;
 
   // CTF — clientes caçadores com data de validade cadastrada
@@ -335,7 +340,7 @@ async function renderDashboard() {
           <a class="btn btn-outline btn-sm" onclick="navigate('validades')">Ver todos</a>
         </div>
         <div class="card-body" style="padding:0">
-          ${(() => { const v60 = vencimentos.filter(v => v.dias >= 0 && v.dias < 60); return v60.length === 0
+          ${(() => { return v60.length === 0
             ? '<div class="empty-state" style="padding:24px"><i class="bi bi-check-circle" style="font-size:32px"></i><p>Nenhum documento a vencer em 60 dias</p></div>'
             : v60.slice(0,8).map(v => {
                 const s = validadeStatus(v.data);
@@ -2262,7 +2267,7 @@ function onTipoProcessoChange(tipo, skipValor = false) {
     camposEl.innerHTML = buildCamposArmaSelector(armasOpts);
     if (tipo === 'Mudança de Acervo') camposEl.innerHTML += buildCamposMudancaAcervo(_processoClienteCategoria);
   } else if (TIPOS_TRANSFERENCIA.includes(tipo)) {
-    camposEl.innerHTML = buildCamposTransferencia(armasOpts);
+    camposEl.innerHTML = buildCamposTransferencia(armasOpts, tipo);
   }
 
   // Checklist
@@ -2437,7 +2442,7 @@ function buildCamposMudancaAcervo(categoriasCliente = []) {
   </div>`;
 }
 
-function buildCamposTransferencia(armasOpts) {
+function buildCamposTransferencia(armasOpts, tipo) {
   const especieOpts = ['Pistola','Espingarda','Revólver','Carabina/Fuzil'].map(v=>`<option>${v}</option>`).join('');
   const acabOpts    = ['Oxidado','Aço Inox','Niquelado','Outros'].map(v=>`<option>${v}</option>`).join('');
   const funcOpts    = ['Repetição','Automático','Semiautomático','Outros'].map(v=>`<option>${v}</option>`).join('');
@@ -2446,7 +2451,22 @@ function buildCamposTransferencia(armasOpts) {
   const sexoOpts    = ['Masculino','Feminino'].map(v=>`<option>${v}</option>`).join('');
   const ecOpts      = ['Solteiro','Casado','Viúvo','Separado Jud.','Divorciado','União Estável','União Homoafetiva','Outros'].map(v=>`<option>${v}</option>`).join('');
 
+  const acervoDestinoOpts = (_processoClienteCategoria.length ? _processoClienteCategoria : ['Caçador','Atirador','Colecionador']).map(v=>`<option>${v}</option>`).join('');
+  const isMesmoTitular = tipo === 'Transferência de Arma SIGMA x SINARM' || tipo === 'Transferência de Arma SINARM x SIGMA';
   return `<div class="form-section"><div class="form-section-title">Transferência de Arma</div><div class="form-body">
+    ${isMesmoTitular ? `
+    <div style="margin-bottom:16px">
+      <label style="font-size:14px;font-weight:600;display:block;margin-bottom:8px">Transferência para o mesmo titular?</label>
+      <div class="checkbox-group">
+        <label class="checkbox-item"><input type="radio" name="proc_mesmoTitular" value="sim" onchange="onMesmoTitularRadio(this.value)" /> Sim</label>
+        <label class="checkbox-item"><input type="radio" name="proc_mesmoTitular" value="nao" onchange="onMesmoTitularRadio(this.value)" /> Não</label>
+      </div>
+    </div>
+    <div id="proc-mesmo-titular" style="display:none"><div class="form-grid">
+      <div><label>Arma (do cliente)</label><select name="proc_armaIdMesmoTitular"><option value="">Selecione...</option>${armasOpts}</select></div>
+      <div><label>Acervo de Destino da Arma</label><select name="proc_acervoDestinoMesmoTitular"><option value="">Selecione...</option>${acervoDestinoOpts}</select></div>
+    </div></div>
+    <div id="proc-outro-titular" style="display:none">` : ''}
     <div style="margin-bottom:16px">
       <label style="font-size:14px;font-weight:600;display:block;margin-bottom:8px">O cliente está vendendo a arma?</label>
       <div class="checkbox-group">
@@ -2567,7 +2587,12 @@ function buildCamposTransferencia(armasOpts) {
         </div>
       </div>
     </div>
-  </div></div>`;
+  ${isMesmoTitular ? '</div>' : ''}</div></div>`;
+}
+
+function onMesmoTitularRadio(value) {
+  document.getElementById('proc-mesmo-titular').style.display = value === 'sim' ? '' : 'none';
+  document.getElementById('proc-outro-titular').style.display = value === 'nao' ? '' : 'none';
 }
 
 function onClienteVendeRadio(value) {
@@ -2836,7 +2861,54 @@ async function gerarProcuracao() {
       <div style="page-break-before:always;page-break-after:avoid;margin:0;padding:0;overflow:hidden">
         <embed src="procuracao-doc.pdf" type="application/pdf" width="100%" height="1050px" style="border:none;display:block" />
       </div>`;
-    imprimirDocumento(html, 'Procuração', '@page{margin:0}@media print{body{margin:0}}');
+    imprimirDocumento(html, 'Procuração', '@page{margin:0}');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function gerarTermoTransferencia() {
+  const p = window._processoDetalhe;
+  if (!p) return;
+  showLoading();
+  try {
+    const dados = p.DadosEspecificosJSON ? JSON.parse(p.DadosEspecificosJSON) : {};
+    const c = window._clienteDetalhe || {};
+    const eTransf = TIPOS_TRANSFERENCIA.includes(p.TipoProcesso);
+    const _ef = (...parts) => parts.filter(Boolean).join(', ');
+    const clienteEnd = _ef(c.Endereco1||'', c.Numero1 ? `n° ${c.Numero1}` : '', c.Complemento1||'', c.Bairro1||'', c.Cidade1||'', c.UF1Endereco||'', c.CEP1 ? `CEP ${c.CEP1}` : '');
+    const clienteCU = [c.Cidade1||'', c.UF1Endereco||''].filter(Boolean).join('/');
+    let vend = {}, comp = {}, arm = {};
+    if (dados.mesmoTitular === 'sim') {
+      vend = { nome: c.Title||'', cpf: c.CPF||'', endereco: clienteEnd, cidadeUF: clienteCU };
+      comp = { ...vend };
+      const armaId = (dados.armaIdMesmoTitular||'').split('|')[0];
+      if (armaId) {
+        const a = await App.graph.getItem(CONFIG.listas.armas, armaId).catch(() => ({}));
+        arm = { especie: a.Especie||'', marca: a.Marca||'', serie: a.NumeroSerie||'', acabamento: a.Acabamento||'', calibre: a.Calibre||'', funcionamento: a.Funcionamento||'', numCanos: a.NumeroCanos||'', capacidade: a.CapacidadeTiro||'', comprCano: '', pais: a.PaisFabricacao||'', cadSinarm: a.NumeroSINARM||a.NumeroSIGMA||'' };
+      }
+    } else if (eTransf && dados.clienteVende === 'sim') {
+      vend = { nome: c.Title||'', cpf: c.CPF||'', endereco: clienteEnd, cidadeUF: clienteCU };
+      const compEnd = _ef(dados.endResidComprador||dados.endComercialComprador||'', (dados.numResidComprador||dados.numComercialComprador) ? `n° ${dados.numResidComprador||dados.numComercialComprador}` : '', dados.complResidComprador||'', dados.bairroResidComprador||dados.bairroComercialComprador||'', dados.municipioResidComprador||dados.municipioComercialComprador||'', dados.ufResidComprador||dados.ufComercialComprador||'');
+      comp = { nome: dados.nomeComprador||'', cpf: dados.cpfComprador||'', endereco: compEnd };
+      const armaId = (dados.armaId||'').split('|')[0];
+      if (armaId) {
+        const a = await App.graph.getItem(CONFIG.listas.armas, armaId).catch(() => ({}));
+        arm = { especie: a.Especie||'', marca: a.Marca||'', serie: a.NumeroSerie||'', acabamento: a.Acabamento||'', calibre: a.Calibre||'', funcionamento: a.Funcionamento||'', numCanos: a.NumeroCanos||'', capacidade: a.CapacidadeTiro||'', comprCano: '', pais: a.PaisFabricacao||'', cadSinarm: a.NumeroSINARM||a.NumeroSIGMA||'' };
+      }
+    } else {
+      const vendEnd = _ef(dados.endVendedor||'', dados.numVendedor ? `n° ${dados.numVendedor}` : '', dados.bairroVendedor||'', dados.municipioVendedor||'', dados.ufVendedor||'', dados.cepVendedor ? `CEP ${dados.cepVendedor}` : '');
+      vend = { nome: dados.nomeVendedor||'', cpf: dados.cpfVendedor||'', endereco: vendEnd, cidadeUF: [dados.municipioVendedor||'', dados.ufVendedor||''].filter(Boolean).join('/') };
+      comp = { nome: c.Title||'', cpf: c.CPF||'', endereco: clienteEnd };
+      arm = { especie: dados.especie||'', marca: dados.marcaArma||'', serie: dados.serieArma||'', acabamento: dados.acabamento||'', calibre: dados.calibre||'', funcionamento: dados.funcionamento||'', numCanos: dados.numeroCanos||'', capacidade: dados.capacidadeTiros||'', comprCano: dados.comprCano||'', pais: dados.paisFabricacao||'', cadSinarm: dados.cadSinarm||'' };
+    }
+    const hoje = new Date().toISOString().split('T')[0];
+    const html = `
+      <h1>TERMO DE TRANSFERÊNCIA</h1>
+      <p style="text-indent:2cm">Eu, <strong>${esc(vend.nome)}</strong>, portador do CPF nº ${esc(vend.cpf)}, residente à ${esc(vend.endereco)}, <strong>autorizo a TRANSFERÊNCIA</strong> ao Sr. <strong>${esc(comp.nome)}</strong>, portador do CPF nº ${esc(comp.cpf)}, residente à ${esc(comp.endereco)}, de uma arma de sua propriedade, com as seguintes características:</p>
+      <p><strong>Espécie:</strong> ${esc(arm.especie)}, <strong>Marca:</strong> ${esc(arm.marca)}, <strong>Nº de Série:</strong> ${esc(arm.serie)}, <strong>Acabamento:</strong> ${esc(arm.acabamento)}, <strong>Calibre:</strong> ${esc(arm.calibre)}, <strong>Tipo de Funcionamento:</strong> ${esc(arm.funcionamento)}, <strong>Quantidade de Canos:</strong> ${esc(arm.numCanos)}, <strong>Capacidade de Carregamento:</strong> ${esc(arm.capacidade)}, <strong>Comprimento do Cano:</strong> ${esc(arm.comprCano)}, <strong>País de Fabricação:</strong> ${esc(arm.pais)}, <strong>Nº Cad. SINARM:</strong> ${esc(arm.cadSinarm)}</p>
+      <p style="text-align:center;margin-top:48px">${esc(vend.cidadeUF||'')}, ${dataPorExtenso(hoje)}</p>
+      <div class="assinatura"><div class="assinatura-linha"></div><div><strong>${esc(vend.nome)}</strong></div></div>
+      <div class="assinatura" style="margin-top:60px"><div class="assinatura-linha"></div><div><strong>${esc(comp.nome)}</strong></div></div>`;
+    imprimirDocumento(html, 'Termo de Transferência');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
@@ -3208,6 +3280,7 @@ async function renderProcessoDetalhe(id) {
               const temDSA         = item.nome === 'DSA';
               const temDSA1End     = item.nome.includes('DSA 1°');
               const temProcuracao  = item.nome === 'Procuração';
+              const temTermoTransferencia = item.nome === 'Termo de Transferência';
               const temReq         = item.nome === 'Requerimento';
               const temReqSINARM   = item.nome === 'Requerimento PF SINARM';
               const btnStyle       = 'class="btn btn-ghost btn-xs" style="font-size:11px;padding:1px 7px;height:auto;white-space:nowrap"';
@@ -3226,6 +3299,7 @@ async function renderProcessoDetalhe(id) {
                   ${temAnexoC    ? `<button onclick="gerarAnexoC()" ${btnStyle} title="Gerar Anexo C preenchido"><i class="bi bi-file-earmark-text"></i> Gerar PDF</button>` : ''}
                   ${temDSA       ? `<button onclick="gerarDSA(false)" ${btnStyle} title="Gerar DSA preenchido"><i class="bi bi-file-earmark-text"></i> Gerar PDF</button>` : ''}
                   ${temDSA1End   ? `<button onclick="gerarDSA(true)" ${btnStyle} title="Gerar DSA 1° Endereço preenchido"><i class="bi bi-file-earmark-text"></i> Gerar PDF</button>` : ''}
+                  ${temTermoTransferencia ? `<button onclick="gerarTermoTransferencia()" ${btnStyle} title="Gerar Termo de Transferência preenchido"><i class="bi bi-file-earmark-text"></i> Gerar PDF</button>` : ''}
                   ${temProcuracao? `<button onclick="gerarProcuracao()" ${btnStyle} title="Gerar Procuração preenchida"><i class="bi bi-file-earmark-text"></i> Gerar PDF</button>` : ''}
                   ${temReq       ? `<button onclick="gerarRequerimento()" ${btnStyle} title="Gerar Requerimento preenchido"><i class="bi bi-file-earmark-text"></i> Gerar PDF</button>` : ''}
                 </div>
