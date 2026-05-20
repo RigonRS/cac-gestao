@@ -79,7 +79,7 @@ function dataPorExtenso(dateStr) {
              'julho','agosto','setembro','outubro','novembro','dezembro'];
   return `${d.getDate()} de ${m[d.getMonth()]} de ${d.getFullYear()}`;
 }
-function imprimirDocumento(html, titulo) {
+function imprimirDocumento(html, titulo, extraStyle) {
   const w = window.open('', '_blank', 'width=900,height=700');
   w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${titulo||'Documento'}</title>
     <style>
@@ -92,6 +92,7 @@ function imprimirDocumento(html, titulo) {
       td,th{border:1px solid #000;padding:4px 6px;vertical-align:top}
       .secao{background:#333;color:#fff;font-weight:bold;padding:4px 8px;font-size:10pt}
       @media print{body{margin:2cm}}
+      ${extraStyle||''}
     </style>
   </head><body>${html}</body></html>`);
   w.document.close();
@@ -105,6 +106,11 @@ function getCurrentUserName() {
   const fullName = (acc?.name || '').toLowerCase();
   if (email.includes('recepcao')) return 'Andrieli';
   return RESPONSAVEIS.find(r => fullName.includes(r.toLowerCase())) || (acc?.name || '').split(' ')[0];
+}
+function normalizeUserName(nome) {
+  if (!nome) return nome;
+  if (/recep/i.test(nome)) return 'Andrieli';
+  return nome;
 }
 function isAdminUser() {
   const nome = getCurrentUserName();
@@ -325,22 +331,22 @@ async function renderDashboard() {
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;flex-wrap:wrap">
       <div class="card">
         <div class="card-header">
-          <h3><i class="bi bi-calendar-x me-2"></i>Documentos Vencendo</h3>
+          <h3><i class="bi bi-calendar-x me-2"></i>Documentos Vencendo em 60D</h3>
           <a class="btn btn-outline btn-sm" onclick="navigate('validades')">Ver todos</a>
         </div>
         <div class="card-body" style="padding:0">
-          ${vencimentos.length === 0
-            ? '<div class="empty-state" style="padding:24px"><i class="bi bi-check-circle" style="font-size:32px"></i><p>Nenhum documento a vencer</p></div>'
-            : vencimentos.slice(0,8).map(v => {
+          ${(() => { const v60 = vencimentos.filter(v => v.dias >= 0 && v.dias < 60); return v60.length === 0
+            ? '<div class="empty-state" style="padding:24px"><i class="bi bi-check-circle" style="font-size:32px"></i><p>Nenhum documento a vencer em 60 dias</p></div>'
+            : v60.slice(0,8).map(v => {
                 const s = validadeStatus(v.data);
                 return `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--border)">
                   <div>
                     <div style="font-size:13px;font-weight:600">${esc(v.tipo)} — ${esc(v.cliente)}</div>
                     <div style="font-size:11px;color:var(--text-muted)">${fmtDate(v.data)}</div>
                   </div>
-                  <span class="badge ${s.cls}">${v.dias < 0 ? 'Vencido' : v.dias === 0 ? 'Hoje' : v.dias + 'd'}</span>
+                  <span class="badge ${s.cls}">${v.dias === 0 ? 'Hoje' : v.dias + 'd'}</span>
                 </div>`;
-              }).join('')
+              }).join(''); })()
           }
         </div>
       </div>
@@ -1191,13 +1197,13 @@ function verDetalhesArma(armaId) {
   if (!a) return;
   const row = (label, val) => val ? `<div class="info-item"><label>${label}</label><div class="value">${esc(val)}</div></div>` : '';
   const modal = document.createElement('div');
-  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.35);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
   modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
   modal.innerHTML = `
-    <div style="background:var(--bg-card);border-radius:12px;padding:24px;max-width:640px;width:100%;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.4)">
+    <div style="background:#fff;border-radius:12px;padding:24px;max-width:640px;width:100%;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-        <h3 style="margin:0;font-size:16px"><i class="bi bi-shield-fill me-2"></i>${esc(a.Marca||'')} ${esc(a.Modelo||'')}</h3>
-        <button onclick="this.closest('[style*=fixed]').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--text-muted);line-height:1">×</button>
+        <h3 style="margin:0;font-size:16px;color:#111"><i class="bi bi-shield-fill me-2"></i>${esc(a.Marca||'')} ${esc(a.Modelo||'')}</h3>
+        <button onclick="this.closest('[style*=fixed]').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:#666;line-height:1">×</button>
       </div>
       <div class="info-grid">
         ${row('N° Série', a.NumeroSerie)}
@@ -2818,8 +2824,7 @@ async function gerarProcuracao() {
       natural de ${esc(d.nat)}${d.ufNat ? '/' + esc(d.ufNat) : ''}, nascido em ${esc(d.dataNasc)},
       com endereço em ${esc(endFmt)},
       portador do RG ${esc(d.rg)}${d.orgao ? ' ' + esc(d.orgao) : ''}${d.ufRG ? '/' + esc(d.ufRG) : ''} e CPF nº ${esc(d.cpf)}.</p>
-      <p><strong>Outorgado:</strong> SIMONE BARP PEGORARO, brasileira, solteira, Contadora, portadora do RG 1085506374 SSP/RS
-      e CPF de nº 018.699.740-00, com endereço comercial na rua Itararé, 18, sala 101, Petrópolis, Vacaria-RS, CEP 95211-101.</p>
+      <p><strong>Outorgado:</strong> <strong>Simone Barp Pegoraro</strong>, brasileira, solteira, Contadora, com endereço comercial na rua Itararé, 18, sala 101, Petrópolis, Vacaria-RS, CEP 95211-101, portadora do RG 1085506374 SSP/RS e CPF de nº 018.699.740-00.</p>
       <p>Pelo presente instrumento particular de mandato a parte que assina, denominada outorgante, nomeia e constitui como procurador o outorgado
       acima qualificado, outorgando-lhe os poderes necessários para representá-lo junto aos seguintes órgãos: Comando da 3ª Região Militar e
       Polícia Federal-SINARM, em seu Serviço de Fiscalização de Produtos Controlados, para promoção da entrega dos documentos de solicitação de
@@ -2828,10 +2833,10 @@ async function gerarProcuracao() {
       elencadas, exclusivamente, sendo vedado seu substabelecimento.</p>
       <p style="text-align:center;margin-top:48px">${esc(d.cidade)}${d.uf ? '/' + esc(d.uf) : ''}, ${dataPorExtenso(hoje)}</p>
       <div class="assinatura"><div class="assinatura-linha"></div><div><strong>${esc(d.nome)}</strong></div></div>
-      <div style="page-break-before:always;margin:0;padding:0">
+      <div style="page-break-before:always;page-break-after:avoid;margin:0;padding:0;overflow:hidden">
         <embed src="procuracao-doc.pdf" type="application/pdf" width="100%" height="1050px" style="border:none;display:block" />
       </div>`;
-    imprimirDocumento(html, 'Procuração');
+    imprimirDocumento(html, 'Procuração', '@page{margin:0}@media print{body{margin:0}}');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
@@ -3197,13 +3202,14 @@ async function renderProcessoDetalhe(id) {
               const temFiliacao    = item.nome.includes('Declaração de Filiação');
               const temHabitualidade = item.nome.includes('Declaração de Habitualidade');
               const temCTF         = item.nome.includes('CTF');
-              const temGRU88       = item.nome.includes('GRU R$88');
+              const temGRU88       = item.nome.includes('GRU R$88') && !['Transferência de Arma SINARM x SINARM','Transferência de Arma SIGMA x SINARM'].includes(processo.TipoProcesso);
               const temGRU50       = item.nome.includes('GRU R$50');
               const temAnexoC      = item.nome === 'Anexo C';
               const temDSA         = item.nome === 'DSA';
               const temDSA1End     = item.nome.includes('DSA 1°');
               const temProcuracao  = item.nome === 'Procuração';
               const temReq         = item.nome === 'Requerimento';
+              const temReqSINARM   = item.nome === 'Requerimento PF SINARM';
               const btnStyle       = 'class="btn btn-ghost btn-xs" style="font-size:11px;padding:1px 7px;height:auto;white-space:nowrap"';
               return `
               <div class="checklist-item ${item.concluido?'done':''}" id="clp-${i}">
@@ -3211,6 +3217,7 @@ async function renderProcessoDetalhe(id) {
                 <div class="checklist-nome" style="display:flex;align-items:center;gap:6px">
                   <span>${esc(item.nome)}</span>
                   ${certCfg      ? `<button onclick="abrirCertidao('${certCfg.keyword}')" ${btnStyle} title="Abrir site e copiar dados"><i class="bi bi-box-arrow-up-right"></i> Emitir</button>` : ''}
+                  ${temReqSINARM ? `<button onclick="window.open('https://servicos.dpf.gov.br/sinarm-internet/faces/publico/incluirReqRegistroArmaFogo/consultarRequerimentoRegistro.seam','_blank')" ${btnStyle} title="Abrir site do SINARM"><i class="bi bi-box-arrow-up-right"></i> Acessar</button>` : ''}
                   ${temFiliacao  ? `<button onclick="solicitarDeclaracao('filiacao')" ${btnStyle} title="Solicitar via WhatsApp do Clube"><i class="bi bi-whatsapp"></i> Solicitar</button>` : ''}
                   ${temHabitualidade ? `<button onclick="solicitarDeclaracao('habitualidade')" ${btnStyle} title="Solicitar via WhatsApp do Clube"><i class="bi bi-whatsapp"></i> Solicitar</button>` : ''}
                   ${temCTF       ? `<button onclick="window.open('https://servicos.ibama.gov.br/ctf/sistema.php','_blank')" ${btnStyle} title="Abrir site do IBAMA"><i class="bi bi-box-arrow-up-right"></i> Abrir site</button>` : ''}
@@ -3590,7 +3597,7 @@ function renderHistoricoStatus(historico, processoId) {
           <button onclick="excluirItemHistorico('${processoId}',${realIndex})" style="background:none;border:none;cursor:pointer;padding:1px 4px;color:#ef4444" title="Excluir"><i class="bi bi-trash" style="font-size:11px"></i></button>` : ''}
         </div>
       </div>
-      <div style="color:var(--text-muted)"><i class="bi bi-person me-1"></i>${esc(h.usuario||'—')}</div>
+      <div style="color:var(--text-muted)"><i class="bi bi-person me-1"></i>${esc(normalizeUserName(h.usuario)||'—')}</div>
       ${h.motivo ? `<div style="margin-top:4px;color:#9333ea;font-size:11px"><i class="bi bi-arrow-return-left me-1"></i>Motivo: ${esc(h.motivo)}</div>` : ''}
     </div>`;
   }).join('');

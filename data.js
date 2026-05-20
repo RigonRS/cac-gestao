@@ -59,12 +59,28 @@ const CHECKLIST_TRANSFERENCIA = [
   'Anexo C','DSA 1° Endereço','Certidão Justiça Federal',
   'Certidão Justiça Estadual','Certidão Justiça Militar',
   'Certidão Justiça Eleitoral','Avaliação Psicológica','Teste de Tiro',
-  'CTF + SIMAF','Declaração de Habitualidade','Procuração','Requerimento','GRU R$88,00 (Estado do RS)'
+  'CTF + SIMAF','Declaração de Habitualidade','Procuração','Requerimento','GRU R$88,00 REF 20371 (Estado do RS)'
 ];
 
 const CHECKLIST_TRANSFERENCIA_SIGMA_SIGMA = [
   ...CHECKLIST_TRANSFERENCIA,
   'Autorização de Caça'
+];
+
+const CHECKLIST_TRANSFERENCIA_SIGMA_SINARM = [
+  'Requerimento PF SINARM',
+  'Documento de Identificação Comprador',
+  'Certidão Justiça Federal',
+  'Certidão Justiça Estadual',
+  'Certidão Justiça Militar',
+  'Certidão Justiça Eleitoral',
+  'Comprovante de Ocupação Comprador',
+  'Comprovante de Residência Comprador',
+  'Avaliação Psicológica',
+  'Teste de Tiro',
+  'GRU emitida no Requerimento',
+  'Comprovante pgto GRU',
+  'Procuração'
 ];
 
 const CHECKLISTS = {
@@ -85,11 +101,11 @@ const CHECKLISTS = {
     'Certidão Justiça Estadual','Certidão Justiça Militar',
     'Certidão Justiça Eleitoral','Comprovante de Ocupação',
     'Comprovante de Residência','Anexo C','DSA','CTF + SIMAF',
-    'Declaração de Habitualidade','Requerimento','Procuração','GRU R$50,00 (Estado do RS)'
+    'Declaração de Habitualidade','Requerimento','Procuração','GRU R$50,00 REF 20324 (Estado do RS)'
   ],
   'Renovação de CRAF':    CHECKLIST_CR_INCLUSAO_RENOVCRAF,
   'Segunda via de CRAF':  ['Documento de Identificação'],
-  'Transferência de Arma SIGMA x SINARM':  CHECKLIST_TRANSFERENCIA,
+  'Transferência de Arma SIGMA x SINARM':  CHECKLIST_TRANSFERENCIA_SIGMA_SINARM,
   'Transferência de Arma SINARM x SINARM': CHECKLIST_TRANSFERENCIA,
   'Transferência de Arma SIGMA x SIGMA':   CHECKLIST_TRANSFERENCIA_SIGMA_SIGMA,
   'Transferência de Arma SINARM x SIGMA':  CHECKLIST_TRANSFERENCIA
