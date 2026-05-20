@@ -62,6 +62,11 @@ const CHECKLIST_TRANSFERENCIA = [
   'CTF + SIMAF','Declaração de Habitualidade','Procuração','Requerimento','GRU R$88,00 (Estado do RS)'
 ];
 
+const CHECKLIST_TRANSFERENCIA_SIGMA_SIGMA = [
+  ...CHECKLIST_TRANSFERENCIA,
+  'Autorização de Caça'
+];
+
 const CHECKLISTS = {
   'Aquisição de Arma SIGMA':                  CHECKLIST_AQUISICAO,
   'Aquisição de Arma PF':                     CHECKLIST_AQUISICAO,
@@ -80,13 +85,13 @@ const CHECKLISTS = {
     'Certidão Justiça Estadual','Certidão Justiça Militar',
     'Certidão Justiça Eleitoral','Comprovante de Ocupação',
     'Comprovante de Residência','Anexo C','DSA','CTF + SIMAF',
-    'Declaração de Habitualidade','Requerimento','GRU R$50,00 (Estado do RS)'
+    'Declaração de Habitualidade','Requerimento','Procuração','GRU R$50,00 (Estado do RS)'
   ],
   'Renovação de CRAF':    CHECKLIST_CR_INCLUSAO_RENOVCRAF,
   'Segunda via de CRAF':  ['Documento de Identificação'],
   'Transferência de Arma SIGMA x SINARM':  CHECKLIST_TRANSFERENCIA,
   'Transferência de Arma SINARM x SINARM': CHECKLIST_TRANSFERENCIA,
-  'Transferência de Arma SIGMA x SIGMA':   CHECKLIST_TRANSFERENCIA,
+  'Transferência de Arma SIGMA x SIGMA':   CHECKLIST_TRANSFERENCIA_SIGMA_SIGMA,
   'Transferência de Arma SINARM x SIGMA':  CHECKLIST_TRANSFERENCIA
 };
 
