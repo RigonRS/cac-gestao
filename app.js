@@ -233,7 +233,8 @@ async function renderPage() {
       case 'pagamentos':           await renderPagamentos(); break;
       case 'pagamentos-gru':       await renderPagamentosGRU(); break;
       case 'valores-processos':    await renderValoresProcessos(); break;
-      case 'pagamentos-extras':    await renderPagamentosExtras(); break;
+      case 'pagamentos-extras':        await renderPagamentosExtras(); break;
+      case 'registro-movimentacoes':   await renderRegistroMovimentacoes(); break;
       case 'orcamento/novo':       await renderOrcamentoForm(params.clienteId); break;
       default:                     await renderDashboard();
     }
@@ -459,6 +460,7 @@ function statusBadge(s) {
     'Aguardando Pagamento GRU':     { cls:'badge-orange', txt:'Ag. GRU' },
     'Pronto para Análise':          { cls:'badge-blue',   txt:'Pronto p/ Análise' },
     'Em análise':                   { cls:'badge-blue',   txt:'Em análise' },
+    'Aguardando Assinatura':        { cls:'badge-blue',   txt:'Ag. Assinatura' },
     'Deferido':                     { cls:'badge-green',  txt:'Deferido' },
     'Indeferido':                   { cls:'badge-red',    txt:'Indeferido' },
     'Aguardando Docs':              { cls:'badge-yellow', txt:'Ag. Docs' },
@@ -474,6 +476,7 @@ const STATUS_PROCESSO = [
   'Aguardando Pagamento GRU',
   'Pronto para Análise',
   'Em análise',
+  'Aguardando Assinatura',
   'Deferido',
   'Indeferido',
 ];
@@ -895,10 +898,12 @@ async function salvarCliente(e, id) {
     if (id) {
       await App.graph.updateItem(CONFIG.listas.clientes, id, fields);
       toast('Cliente atualizado!', 'success');
+      registrarMovimentacao('Editar Cliente', fields.Title);
     } else {
       const created = await App.graph.createItem(CONFIG.listas.clientes, fields);
       id = created.id;
       toast('Cliente cadastrado!', 'success');
+      registrarMovimentacao('Novo Cliente', fields.Title);
     }
     App.invalidateCache('clientes');
     navigate('clientes/perfil', { id });
@@ -1058,6 +1063,7 @@ function renderPerfilIBAMA(c) {
             <div><label>CAR da Propriedade</label><input name="CARPropriedade" /></div>
             <div><label>Cidade</label><input name="CidadeSimaf" /></div>
             <div><label>UF</label><input name="UFSimaf" maxlength="2" style="text-transform:uppercase" /></div>
+            <div><label>CPF do Proprietário</label><input name="CPFProprietario" oninput="this.value=fmtCPF(this.value)" maxlength="14" /></div>
           </div>
           <div class="btn-group" style="margin-top:12px;margin-bottom:16px">
             <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-check-lg"></i> Salvar SIMAF</button>
@@ -1069,13 +1075,14 @@ function renderPerfilIBAMA(c) {
         ${simafList.length === 0
           ? '<div class="empty-state" style="padding:20px"><i class="bi bi-file-earmark-x"></i><p>Nenhum SIMAF cadastrado.</p></div>'
           : `<div class="table-wrapper"><table>
-              <thead><tr><th>Propriedade</th><th>CAR</th><th>Cidade/UF</th><th>Validade</th><th>Ações</th></tr></thead>
+              <thead><tr><th>Propriedade</th><th>CAR</th><th>CPF Proprietário</th><th>Cidade/UF</th><th>Validade</th><th>Ações</th></tr></thead>
               <tbody>
                 ${simafList.map((s, i) => {
                   const vs = validadeStatus(s.DataValidade || null);
                   return `<tr>
                     <td>${esc(s.NomePropriedade||'—')}</td>
                     <td>${esc(s.CARPropriedade||'—')}</td>
+                    <td>${esc(s.CPFProprietario||'—')}</td>
                     <td>${esc(s.CidadeSimaf||'')}${s.UFSimaf?' - '+esc(s.UFSimaf):''}</td>
                     <td><span class="badge ${vs.cls}">${vs.txt}</span></td>
                     <td><button class="btn btn-ghost btn-sm" onclick="deletarSIMAF('${c.id}',${i})"><i class="bi bi-trash" style="color:var(--danger)"></i></button></td>
@@ -1157,6 +1164,69 @@ async function imprimirArmasCliente(clienteId) {
       <p style="margin-top:16px;font-size:10pt;color:#555">Total: ${armas.length} arma(s)</p>`;
     imprimirDocumento(html, `Armas — ${c.Title}`);
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+function checarCadastroArma(a) {
+  const campos = [
+    { campo: 'NumeroSerie',         label: 'N° Série' },
+    { campo: 'OrgaoCadastro',       label: 'Órgão de Cadastro' },
+    { campo: 'AtividadeCadastrada', label: 'Atividade' },
+    { campo: 'Marca',               label: 'Marca' },
+    { campo: 'Modelo',              label: 'Modelo' },
+    { campo: 'Especie',             label: 'Espécie' },
+    { campo: 'Calibre',             label: 'Calibre' },
+    { campo: 'GrupoCalibre',        label: 'Grupo Calibre' },
+    { campo: 'PaisFabricacao',      label: 'País de Fabricação' },
+    { campo: 'CapacidadeTiro',      label: 'Capacidade de Tiro' },
+    { campo: 'NumeroCanos',         label: 'N° de Canos' },
+    { campo: 'AlmaCano',            label: 'Alma do Cano' },
+    { campo: 'Funcionamento',       label: 'Funcionamento' },
+  ];
+  const faltando = campos.filter(f => !a[f.campo]).map(f => f.label);
+  return { completo: faltando.length === 0, faltando };
+}
+
+function verDetalhesArma(armaId) {
+  const a = (window._armasCacheDetalhe || {})[armaId];
+  if (!a) return;
+  const row = (label, val) => val ? `<div class="info-item"><label>${label}</label><div class="value">${esc(val)}</div></div>` : '';
+  const modal = document.createElement('div');
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+  modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+  modal.innerHTML = `
+    <div style="background:var(--bg-card);border-radius:12px;padding:24px;max-width:640px;width:100%;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.4)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <h3 style="margin:0;font-size:16px"><i class="bi bi-shield-fill me-2"></i>${esc(a.Marca||'')} ${esc(a.Modelo||'')}</h3>
+        <button onclick="this.closest('[style*=fixed]').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:var(--text-muted);line-height:1">×</button>
+      </div>
+      <div class="info-grid">
+        ${row('N° Série', a.NumeroSerie)}
+        ${row('N° SIGMA', a.NumeroSIGMA)}
+        ${row('N° SINARM', a.NumeroSINARM)}
+        ${row('N° Registro', a.NumeroRegistro)}
+        ${row('Órgão de Cadastro', a.OrgaoCadastro)}
+        ${row('Atividade Cadastrada', a.AtividadeCadastrada)}
+        ${row('Marca', a.Marca)}
+        ${row('Modelo', a.Modelo)}
+        ${row('Espécie', a.Especie)}
+        ${row('Calibre', a.Calibre)}
+        ${row('Grupo Calibre', a.GrupoCalibre)}
+        ${row('País de Fabricação', a.PaisFabricacao)}
+        ${row('Capacidade de Tiro', a.CapacidadeTiro)}
+        ${row('N° de Canos', a.NumeroCanos)}
+        ${row('Comprimento do Cano (mm)', a.ComprimentoCano)}
+        ${row('Alma do Cano', a.AlmaCano)}
+        ${row('N° de Raias', a.NumeroRaias)}
+        ${row('Sentido das Raias', a.SentidoRaias)}
+        ${row('Acabamento', a.Acabamento)}
+        ${row('Funcionamento', a.Funcionamento)}
+      </div>
+      ${a.Observacoes ? `<div style="margin-top:12px;padding:10px;background:var(--bg);border-radius:6px;font-size:13px;color:var(--text-muted)">${esc(a.Observacoes)}</div>` : ''}
+      <div style="margin-top:16px;text-align:right">
+        <button onclick="this.closest('[style*=fixed]').remove()" class="btn btn-outline btn-sm">Fechar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
 }
 
 function renderPerfilArmas(armas, clienteId, cliente) {
@@ -1246,6 +1316,8 @@ function renderPerfilArmas(armas, clienteId, cliente) {
       ${boxPF}
     </div>`;
 
+  window._armasCacheDetalhe = Object.fromEntries(armas.map(a => [a.id, a]));
+
   return `
     <div class="toolbar">
       <span style="font-size:13px;color:var(--text-muted)">${armas.length} arma(s) cadastrada(s)</span>
@@ -1255,22 +1327,31 @@ function renderPerfilArmas(armas, clienteId, cliente) {
     <div class="card">
       <div class="table-wrapper">
         <table>
-          <thead><tr><th>N° Série</th><th>N° SIGMA</th><th>Atividade</th><th>Marca/Modelo</th><th>Calibre</th><th>Espécie</th><th>Grupo</th><th>Ações</th></tr></thead>
+          <thead><tr><th>N° Série</th><th>N° SIGMA</th><th>Atividade</th><th>Marca/Modelo</th><th>Calibre</th><th>Espécie</th><th>Grupo</th><th style="text-align:center">Dados</th><th>Ações</th></tr></thead>
           <tbody>${armas.length === 0
-            ? `<tr><td colspan="8"><div class="empty-state"><i class="bi bi-shield"></i><p>Nenhuma arma cadastrada.</p></div></td></tr>`
-            : armas.map(a => `<tr>
-                <td>${esc(a.NumeroSerie||'—')}</td>
-                <td>${esc(a.NumeroSIGMA||'—')}</td>
-                <td><span class="badge badge-blue">${esc(a.AtividadeCadastrada||'—')}</span></td>
-                <td>${esc(a.Marca||'')} ${esc(a.Modelo||'')}</td>
-                <td>${esc(a.Calibre||'—')}</td>
-                <td>${esc(a.Especie||'—')}</td>
-                <td><span class="badge ${a.GrupoCalibre==='Restrito'?'badge-red':'badge-green'}">${esc(a.GrupoCalibre||'—')}</span></td>
-                <td><div class="btn-group">
-                  <button class="btn btn-outline btn-sm" onclick="navigate('armas/editar',{clienteId:'${clienteId}',id:'${a.id}'})"><i class="bi bi-pencil"></i></button>
-                  <button class="btn btn-ghost btn-sm" onclick="deletarArma('${a.id}','${clienteId}')"><i class="bi bi-trash" style="color:var(--danger)"></i></button>
-                </div></td>
-              </tr>`).join('')
+            ? `<tr><td colspan="9"><div class="empty-state"><i class="bi bi-shield"></i><p>Nenhuma arma cadastrada.</p></div></td></tr>`
+            : armas.map(a => {
+                const cad = checarCadastroArma(a);
+                const dotColor = cad.completo ? '#22c55e' : '#ef4444';
+                const dotTitle = cad.completo ? 'Dados completos' : `Faltando: ${cad.faltando.join(', ')}`;
+                return `<tr>
+                  <td>${esc(a.NumeroSerie||'—')}</td>
+                  <td>${esc(a.NumeroSIGMA||'—')}</td>
+                  <td><span class="badge badge-blue">${esc(a.AtividadeCadastrada||'—')}</span></td>
+                  <td>${esc(a.Marca||'')} ${esc(a.Modelo||'')}</td>
+                  <td>${esc(a.Calibre||'—')}</td>
+                  <td>${esc(a.Especie||'—')}</td>
+                  <td><span class="badge ${a.GrupoCalibre==='Restrito'?'badge-red':'badge-green'}">${esc(a.GrupoCalibre||'—')}</span></td>
+                  <td style="text-align:center">
+                    <span title="${esc(dotTitle)}" style="display:inline-block;width:14px;height:14px;border-radius:50%;background:${dotColor};cursor:default" aria-label="${esc(dotTitle)}"></span>
+                  </td>
+                  <td><div class="btn-group">
+                    <button class="btn btn-outline btn-sm" onclick="verDetalhesArma('${a.id}')" title="Ver detalhes"><i class="bi bi-eye"></i></button>
+                    <button class="btn btn-outline btn-sm" onclick="navigate('armas/editar',{clienteId:'${clienteId}',id:'${a.id}'})"><i class="bi bi-pencil"></i></button>
+                    <button class="btn btn-ghost btn-sm" onclick="deletarArma('${a.id}','${clienteId}')"><i class="bi bi-trash" style="color:var(--danger)"></i></button>
+                  </div></td>
+                </tr>`;
+              }).join('')
           }</tbody>
         </table>
       </div>
@@ -1617,8 +1698,15 @@ async function salvarArma(e, clienteId, id) {
   };
   showLoading();
   try {
-    if (id) { await App.graph.updateItem(CONFIG.listas.armas, id, fields); toast('Arma atualizada!', 'success'); }
-    else     { await App.graph.createItem(CONFIG.listas.armas, fields); toast('Arma cadastrada!', 'success'); }
+    if (id) {
+      await App.graph.updateItem(CONFIG.listas.armas, id, fields);
+      toast('Arma atualizada!', 'success');
+      registrarMovimentacao('Editar Arma', `${fields.Marca||''} ${fields.Modelo||''} — ${fields.ClienteNome||''}`);
+    } else {
+      await App.graph.createItem(CONFIG.listas.armas, fields);
+      toast('Arma cadastrada!', 'success');
+      registrarMovimentacao('Nova Arma', `${fields.Marca||''} ${fields.Modelo||''} — ${fields.ClienteNome||''}`);
+    }
     App.invalidateCache('armas');
     navigate('clientes/perfil', { id: clienteId, tab: 'armas' });
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
@@ -2016,10 +2104,17 @@ async function renderProcessoForm(clienteId = null) {
               ${RESPONSAVEIS.map(r => `<option value="${r}">${r}</option>`).join('')}
             </select>
           </div>
-          <div><label>Status</label>
-            <select name="Status">
+          <div>
+            <label>Status</label>
+            <select name="Status" id="status-novo-processo" onchange="onStatusNovoProcessoChange(this.value)">
               ${STATUS_PROCESSO.map(s => `<option value="${s}" ${s==='Aguardando Documentos'?'selected':''}>${s}</option>`).join('')}
             </select>
+            <div id="selector-proc-futuro-novo" style="display:none;margin-top:8px;padding:10px;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:8px">
+              <div style="font-size:12px;font-weight:600;color:#7c3aed;margin-bottom:6px"><i class="bi bi-hourglass me-1"></i>Aguardando qual processo ser deferido?</div>
+              <select id="sel-proc-futuro-novo" style="width:100%">
+                <option value="">Selecione o processo...</option>
+              </select>
+            </div>
           </div>
           <div><label>Data de Abertura</label><input type="date" name="DataAbertura" value="${new Date().toISOString().split('T')[0]}" /></div>
         </div>
@@ -2096,6 +2191,34 @@ async function onClienteProcessoChange(clienteId) {
   _processoClienteCategoria = cliente ? (cliente.Categoria || '').split(',').map(s => s.trim()).filter(Boolean) : [];
   const tipo = document.querySelector('[name="TipoProcesso"]')?.value;
   if (tipo) onTipoProcessoChange(tipo);
+  // Atualiza seletor de processo futuro se status já estiver selecionado
+  const statusSel = document.getElementById('status-novo-processo');
+  if (statusSel && statusSel.value === 'Processo Futuro') onStatusNovoProcessoChange('Processo Futuro');
+}
+
+async function onStatusNovoProcessoChange(status) {
+  const wrap = document.getElementById('selector-proc-futuro-novo');
+  const sel = document.getElementById('sel-proc-futuro-novo');
+  if (!wrap || !sel) return;
+  if (status !== 'Processo Futuro') { wrap.style.display = 'none'; return; }
+  const clienteId = document.querySelector('[name="ClienteId"]')?.value;
+  if (!clienteId) { toast('Selecione o cliente primeiro.', 'warning'); document.getElementById('status-novo-processo').value = 'Aguardando Documentos'; return; }
+  showLoading();
+  try {
+    const todos = await App.getProcessos();
+    const abertos = todos.filter(p =>
+      String(p.ClienteId) === String(clienteId) &&
+      !STATUS_FECHADOS.includes(p.Status)
+    );
+    if (!abertos.length) {
+      toast('Nenhum processo em aberto para este cliente.', 'warning');
+      document.getElementById('status-novo-processo').value = 'Aguardando Documentos';
+      return;
+    }
+    sel.innerHTML = `<option value="">Selecione o processo...</option>` +
+      abertos.map(p => `<option value="${p.id}">${esc(p.TipoProcesso||'—')} — ${fmtDate(p.DataAbertura?p.DataAbertura.split('T')[0]:'')}</option>`).join('');
+    wrap.style.display = '';
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 function onTipoProcessoChange(tipo, skipValor = false) {
@@ -2518,11 +2641,20 @@ async function salvarProcesso(e) {
     }]),
   };
 
+  if (fd.get('Status') === 'Processo Futuro') {
+    const selFuturo = document.getElementById('sel-proc-futuro-novo');
+    if (selFuturo && selFuturo.value) {
+      fields.ProcessoFuturoId   = selFuturo.value;
+      fields.ProcessoFuturoNome = selFuturo.options[selFuturo.selectedIndex]?.text || '';
+    }
+  }
+
   showLoading();
   try {
     const created = await App.graph.createItem(CONFIG.listas.processos, fields);
     App.invalidateCache('processos');
     toast('Processo criado!', 'success');
+    registrarMovimentacao('Novo Processo', `${tipoProc} — ${fields.ClienteNome||''}`);
     navigate('processos/detalhe', { id: created.id });
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
@@ -2695,7 +2827,10 @@ async function gerarProcuracao() {
       controlados constantes dos acervos por esse órgão controlado, bem como a retirada dos despachos (e/ou documentos) referentes às concessões
       elencadas, exclusivamente, sendo vedado seu substabelecimento.</p>
       <p style="text-align:center;margin-top:48px">${esc(d.cidade)}${d.uf ? '/' + esc(d.uf) : ''}, ${dataPorExtenso(hoje)}</p>
-      <div class="assinatura"><div class="assinatura-linha"></div><div><strong>${esc(d.nome)}</strong></div></div>`;
+      <div class="assinatura"><div class="assinatura-linha"></div><div><strong>${esc(d.nome)}</strong></div></div>
+      <div style="page-break-before:always;margin:0;padding:0">
+        <embed src="procuracao-doc.pdf" type="application/pdf" width="100%" height="1050px" style="border:none;display:block" />
+      </div>`;
     imprimirDocumento(html, 'Procuração');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
@@ -3161,19 +3296,19 @@ async function renderProcessoDetalhe(id) {
         </div>
 
         <div class="card" style="margin-top:16px">
-          <div class="card-header"><h3><i class="bi bi-clock-history me-2"></i>Histórico de Status</h3></div>
+          <div class="card-header"><h3><i class="bi bi-clock-history me-2"></i>Histórico</h3></div>
           <div class="card-body" id="historico-status-body" style="padding-top:4px">
-            ${renderHistoricoStatus(JSON.parse(processo.HistoricoStatus || '[]'))}
+            ${renderHistoricoStatus(JSON.parse(processo.HistoricoStatus || '[]'), id)}
           </div>
         </div>
-
-        ${processo.Observacoes ? `
-        <div class="card" style="margin-top:16px">
-          <div class="card-header"><h3><i class="bi bi-chat-text me-2"></i>Observações</h3></div>
-          <div class="card-body"><p style="margin:0;font-size:13px;white-space:pre-wrap">${esc(processo.Observacoes)}</p></div>
-        </div>` : ''}
       </div>
-    </div>`;
+    </div>
+
+    ${processo.Observacoes ? `
+    <div class="card" style="margin-top:20px">
+      <div class="card-header"><h3><i class="bi bi-chat-text me-2"></i>Observações</h3></div>
+      <div class="card-body"><p style="margin:0;font-size:13px;white-space:pre-wrap">${esc(processo.Observacoes)}</p></div>
+    </div>` : ''}`;
 
   window._processoDetalhe = processo;
   window._clienteDetalhe  = _clienteDetalhe;
@@ -3345,7 +3480,7 @@ async function salvarDatasProcesso(e, id) {
     });
     App.invalidateCache('processos');
     const body = document.getElementById('historico-status-body');
-    if (body) body.innerHTML = renderHistoricoStatus(historico);
+    if (body) body.innerHTML = renderHistoricoStatus(historico, id);
     toast('Protocolo salvo!', 'success');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
@@ -3434,22 +3569,68 @@ async function salvarMotivoRestituicao(e, id) {
     });
     App.invalidateCache('processos');
     const body = document.getElementById('historico-status-body');
-    if (body) body.innerHTML = renderHistoricoStatus(historico);
+    if (body) body.innerHTML = renderHistoricoStatus(historico, id);
     toast('Motivo salvo!', 'success');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
-function renderHistoricoStatus(historico) {
+function renderHistoricoStatus(historico, processoId) {
   if (!historico.length) return '<p style="color:var(--text-muted);font-style:italic;font-size:13px;margin:0">Nenhum registro ainda.</p>';
-  return historico.slice().reverse().map(h => `
-    <div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:12px">
+  const admin = isAdminUser();
+  return historico.slice().reverse().map((h, i) => {
+    const realIndex = historico.length - 1 - i;
+    return `
+    <div id="hist-item-${i}" style="padding:8px 0;border-bottom:1px solid var(--border);font-size:12px">
       <div style="display:flex;justify-content:space-between;margin-bottom:2px">
         <strong style="color:#1f2937">${esc(h.status||'—')}</strong>
-        <span style="color:var(--text-muted)">${esc(h.data||'')} ${esc(h.hora||'')}</span>
+        <div style="display:flex;align-items:center;gap:6px">
+          <span style="color:var(--text-muted)">${esc(h.data||'')} ${esc(h.hora||'')}</span>
+          ${admin && processoId ? `
+          <button onclick="editarItemHistorico('${processoId}',${realIndex})" style="background:none;border:none;cursor:pointer;padding:1px 4px;color:#6b7280" title="Editar"><i class="bi bi-pencil" style="font-size:11px"></i></button>
+          <button onclick="excluirItemHistorico('${processoId}',${realIndex})" style="background:none;border:none;cursor:pointer;padding:1px 4px;color:#ef4444" title="Excluir"><i class="bi bi-trash" style="font-size:11px"></i></button>` : ''}
+        </div>
       </div>
       <div style="color:var(--text-muted)"><i class="bi bi-person me-1"></i>${esc(h.usuario||'—')}</div>
       ${h.motivo ? `<div style="margin-top:4px;color:#9333ea;font-size:11px"><i class="bi bi-arrow-return-left me-1"></i>Motivo: ${esc(h.motivo)}</div>` : ''}
-    </div>`).join('');
+    </div>`;
+  }).join('');
+}
+
+async function editarItemHistorico(processoId, index) {
+  const proc = window._processoDetalhe;
+  if (!proc) return;
+  const hist = JSON.parse(proc.HistoricoStatus || '[]');
+  const item = hist[index];
+  if (!item) return;
+  const novoStatus = prompt('Editar status do histórico:', item.status || '');
+  if (novoStatus === null) return;
+  hist[index].status = novoStatus.trim();
+  showLoading();
+  try {
+    await App.graph.updateItem(CONFIG.listas.processos, processoId, { HistoricoStatus: JSON.stringify(hist) });
+    App.invalidateCache('processos');
+    proc.HistoricoStatus = JSON.stringify(hist);
+    const body = document.getElementById('historico-status-body');
+    if (body) body.innerHTML = renderHistoricoStatus(hist, processoId);
+    toast('Histórico editado.', 'success');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function excluirItemHistorico(processoId, index) {
+  if (!confirm('Excluir este registro do histórico?')) return;
+  const proc = window._processoDetalhe;
+  if (!proc) return;
+  const hist = JSON.parse(proc.HistoricoStatus || '[]');
+  hist.splice(index, 1);
+  showLoading();
+  try {
+    await App.graph.updateItem(CONFIG.listas.processos, processoId, { HistoricoStatus: JSON.stringify(hist) });
+    App.invalidateCache('processos');
+    proc.HistoricoStatus = JSON.stringify(hist);
+    const body = document.getElementById('historico-status-body');
+    if (body) body.innerHTML = renderHistoricoStatus(hist, processoId);
+    toast('Registro excluído.', 'success');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 async function registrarStatusHistorico(id) {
@@ -3468,7 +3649,7 @@ async function registrarStatusHistorico(id) {
     await App.graph.updateItem(CONFIG.listas.processos, id, { HistoricoStatus: JSON.stringify(historico) });
     App.invalidateCache('processos');
     const body = document.getElementById('historico-status-body');
-    if (body) body.innerHTML = renderHistoricoStatus(historico);
+    if (body) body.innerHTML = renderHistoricoStatus(historico, id);
     toast('Status registrado no histórico!', 'success');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
@@ -3511,7 +3692,7 @@ async function salvarPagamentoGRUHistorico(id) {
     await App.graph.updateItem(CONFIG.listas.processos, id, { HistoricoStatus: JSON.stringify(historico) });
     App.invalidateCache('processos');
     const body = document.getElementById('historico-status-body');
-    if (body) body.innerHTML = renderHistoricoStatus(historico);
+    if (body) body.innerHTML = renderHistoricoStatus(historico, id);
     toast('Pagamento GRU registrado no histórico!', 'success');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
@@ -4117,9 +4298,14 @@ async function renderValoresProcessos() {
 
   showLoading();
   let valoresPadrao = {};
+  let taxasPadrao = {};
   try {
-    const raw = await App.graph._readFile('valores_padrao');
-    if (raw && !Array.isArray(raw)) valoresPadrao = raw;
+    const [rawVal, rawTax] = await Promise.all([
+      App.graph._readFile('valores_padrao'),
+      App.graph._readFile('taxas_padrao')
+    ]);
+    if (rawVal && !Array.isArray(rawVal)) valoresPadrao = rawVal;
+    if (rawTax && !Array.isArray(rawTax)) taxasPadrao = rawTax;
   } catch(e) {} finally { hideLoading(); }
 
   const el = document.getElementById('page-content');
@@ -4131,14 +4317,21 @@ async function renderValoresProcessos() {
       </div>
       <div class="table-wrapper">
         <table>
-          <thead><tr><th>Tipo de Processo</th><th>Valor Atual</th><th>Novo Valor</th></tr></thead>
+          <thead><tr><th>Tipo de Processo</th><th>Valor Atual</th><th>Novo Valor</th><th>Valor das Taxas</th></tr></thead>
           <tbody>
             ${TIPOS_PROCESSO.map(tipo => {
               const atual = valoresPadrao[tipo];
+              const taxaAtual = taxasPadrao[tipo] != null ? taxasPadrao[tipo] : TAXAS_PROCESSO[tipo];
               return `<tr>
                 <td style="font-weight:600">${esc(tipo)}</td>
                 <td>${atual != null ? `<span style="font-weight:600">${fmtMoeda(atual)}</span>` : '<span style="color:var(--text-muted)">—</span>'}</td>
                 <td><input type="number" step="0.01" min="0" class="val-proc-input" data-tipo="${esc(tipo)}" placeholder="${atual != null ? 'Alterar...' : 'Definir valor...'}" style="padding:5px 8px;border:1px solid var(--border);border-radius:4px;width:150px;font-size:13px" /></td>
+                <td>
+                  <div style="display:flex;align-items:center;gap:8px">
+                    <span style="font-weight:600;min-width:60px" id="taxa-atual-${esc(tipo).replace(/\s/g,'_')}">${fmtMoeda(taxaAtual)}</span>
+                    <input type="number" step="0.01" min="0" class="val-taxa-input" data-tipo="${esc(tipo)}" placeholder="Alterar taxa..." style="padding:5px 8px;border:1px solid var(--border);border-radius:4px;width:140px;font-size:13px" />
+                  </div>
+                </td>
               </tr>`;
             }).join('')}
           </tbody>
@@ -4149,13 +4342,19 @@ async function renderValoresProcessos() {
 
 async function salvarValoresProcessos() {
   const inputs = document.querySelectorAll('.val-proc-input');
+  const taxaInputs = document.querySelectorAll('.val-taxa-input');
   let alteracoes = 0;
 
   showLoading();
   try {
     let valoresPadrao = {};
-    const raw = await App.graph._readFile('valores_padrao');
-    if (raw && !Array.isArray(raw)) valoresPadrao = raw;
+    let taxasPadrao = {};
+    const [rawVal, rawTax] = await Promise.all([
+      App.graph._readFile('valores_padrao'),
+      App.graph._readFile('taxas_padrao')
+    ]);
+    if (rawVal && !Array.isArray(rawVal)) valoresPadrao = rawVal;
+    if (rawTax && !Array.isArray(rawTax)) taxasPadrao = rawTax;
 
     inputs.forEach(inp => {
       const val = inp.value.trim();
@@ -4164,11 +4363,23 @@ async function salvarValoresProcessos() {
         alteracoes++;
       }
     });
+    taxaInputs.forEach(inp => {
+      const val = inp.value.trim();
+      if (val !== '') {
+        taxasPadrao[inp.dataset.tipo] = parseFloat(val);
+        alteracoes++;
+      }
+    });
 
     if (!alteracoes) { toast('Nenhum valor novo foi digitado.', 'info'); return; }
 
-    await App.graph._writeFile('valores_padrao', valoresPadrao);
+    const saves = [];
+    if (Object.keys(valoresPadrao).length) saves.push(App.graph._writeFile('valores_padrao', valoresPadrao));
+    if (Object.keys(taxasPadrao).length)   saves.push(App.graph._writeFile('taxas_padrao', taxasPadrao));
+    await Promise.all(saves);
+
     Object.assign(VALORES_PROCESSO, valoresPadrao);
+    Object.assign(TAXAS_PROCESSO, taxasPadrao);
     toast(`${alteracoes} valor(es) atualizado(s) com sucesso.`, 'success');
     await renderValoresProcessos();
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
@@ -4599,11 +4810,13 @@ async function salvarSIMAF(e, clienteId) {
       CARPropriedade:  fd.get('CARPropriedade') || '',
       CidadeSimaf:     fd.get('CidadeSimaf') || '',
       UFSimaf:         (fd.get('UFSimaf') || '').toUpperCase(),
+      CPFProprietario: fd.get('CPFProprietario') || '',
     });
     await App.graph.updateItem(CONFIG.listas.clientes, clienteId, { SIMAFs: JSON.stringify(simafList) });
     App.invalidateCache('clientes');
     toast('SIMAF adicionado!', 'success');
-    await renderClientePerfil(clienteId, 'dados');
+    registrarMovimentacao('Novo SIMAF', `${fd.get('NomePropriedade')||''} — ${cliente.Title||''}`);
+    await renderClientePerfil(clienteId, 'ibama');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
@@ -4617,8 +4830,98 @@ async function deletarSIMAF(clienteId, index) {
     await App.graph.updateItem(CONFIG.listas.clientes, clienteId, { SIMAFs: JSON.stringify(simafList) });
     App.invalidateCache('clientes');
     toast('SIMAF excluído.', 'success');
-    await renderClientePerfil(clienteId, 'dados');
+    await renderClientePerfil(clienteId, 'ibama');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+// ============================================================
+// REGISTRO DE MOVIMENTAÇÕES
+// ============================================================
+async function registrarMovimentacao(acao, detalhes) {
+  try {
+    const agora = new Date();
+    const nome = getCurrentUserName();
+    const entrada = {
+      timestamp: agora.toISOString(),
+      data:      agora.toLocaleDateString('pt-BR'),
+      hora:      agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+      usuario:   nome,
+      acao,
+      detalhes:  detalhes || ''
+    };
+    let lista = [];
+    try {
+      const raw = await App.graph._readFile('movimentacoes');
+      if (Array.isArray(raw)) lista = raw;
+    } catch(e) {}
+    lista.push(entrada);
+    // Limita a 2000 registros para evitar arquivo muito grande
+    if (lista.length > 2000) lista = lista.slice(-2000);
+    await App.graph._writeFile('movimentacoes', lista);
+  } catch(e) {
+    console.warn('registrarMovimentacao error:', e);
+  }
+}
+
+async function renderRegistroMovimentacoes() {
+  document.getElementById('page-title').textContent = 'Registro de Movimentações';
+  if (!isAdminUser()) {
+    document.getElementById('page-content').innerHTML = `<div class="empty-state"><i class="bi bi-lock" style="font-size:48px"></i><p>Acesso restrito.</p></div>`;
+    return;
+  }
+
+  showLoading();
+  let lista = [];
+  try {
+    const raw = await App.graph._readFile('movimentacoes');
+    if (Array.isArray(raw)) lista = raw;
+  } catch(e) {} finally { hideLoading(); }
+
+  const filtrados = lista
+    .filter(m => ['Andrieli', 'Priscila'].includes(m.usuario))
+    .slice().reverse();
+
+  const ACOES_ICONE = {
+    'Login':             'bi-box-arrow-in-right',
+    'Novo Cliente':      'bi-person-plus',
+    'Editar Cliente':    'bi-person-gear',
+    'Nova Arma':         'bi-shield-plus',
+    'Editar Arma':       'bi-shield-check',
+    'Novo SIMAF':        'bi-tree-fill',
+    'Novo Processo':     'bi-folder-plus',
+    'Editar Processo':   'bi-folder-check',
+    'Novo Clube':        'bi-building-add',
+    'Editar Clube':      'bi-building-gear',
+  };
+
+  const el = document.getElementById('page-content');
+  el.innerHTML = `
+    <div class="card">
+      <div class="card-header">
+        <h3><i class="bi bi-journal-text me-2"></i>Movimentações — Andrieli e Priscila</h3>
+        <span style="font-size:12px;color:var(--text-muted)">${filtrados.length} registro(s)</span>
+      </div>
+      ${filtrados.length === 0
+        ? `<div class="empty-state" style="padding:32px"><i class="bi bi-journal" style="font-size:40px"></i><p>Nenhuma movimentação registrada.</p></div>`
+        : `<div class="table-wrapper">
+            <table>
+              <thead><tr><th>Data/Hora</th><th>Usuário</th><th>Ação</th><th>Detalhes</th></tr></thead>
+              <tbody>
+                ${filtrados.map(m => {
+                  const icon = ACOES_ICONE[m.acao] || 'bi-dot';
+                  const userColor = m.usuario === 'Andrieli' ? '#d97706' : '#7c3aed';
+                  return `<tr>
+                    <td style="font-size:12px;white-space:nowrap;color:var(--text-muted)">${esc(m.data||'')} ${esc(m.hora||'')}</td>
+                    <td><span style="font-weight:600;color:${userColor}">${esc(m.usuario||'—')}</span></td>
+                    <td><span style="display:inline-flex;align-items:center;gap:5px;font-size:13px"><i class="bi ${icon}" style="color:var(--accent)"></i>${esc(m.acao||'—')}</span></td>
+                    <td style="font-size:12px;color:var(--text-muted)">${esc(m.detalhes||'—')}</td>
+                  </tr>`;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>`
+      }
+    </div>`;
 }
 
 // ============================================================
@@ -4758,8 +5061,10 @@ async function salvarClube(e, id) {
   try {
     if (id) {
       await App.graph.updateItem(CONFIG.listas.clubes, id, fields);
+      registrarMovimentacao('Editar Clube', fields.Title);
     } else {
       await App.graph.createItem(CONFIG.listas.clubes, fields);
+      registrarMovimentacao('Novo Clube', fields.Title);
     }
     App.invalidateCache('clubes');
     toast(id ? 'Clube atualizado!' : 'Clube cadastrado!', 'success');
@@ -5077,16 +5382,22 @@ async function iniciarApp() {
   if (isAdminUser()) {
     const navVal = document.getElementById('nav-valores-processos');
     if (navVal) navVal.style.display = '';
+    const navMov = document.getElementById('nav-registro-movimentacoes');
+    if (navMov) navMov.style.display = '';
   }
   if (isExtrasUser()) {
     const navExt = document.getElementById('nav-pagamentos-extras');
     if (navExt) navExt.style.display = '';
   }
 
-  // Carrega valores de processos personalizados
+  // Carrega valores e taxas de processos personalizados
   try {
-    const vp = await App.graph._readFile('valores_padrao');
+    const [vp, tp] = await Promise.all([
+      App.graph._readFile('valores_padrao'),
+      App.graph._readFile('taxas_padrao')
+    ]);
     if (vp && !Array.isArray(vp)) Object.assign(VALORES_PROCESSO, vp);
+    if (tp && !Array.isArray(tp)) Object.assign(TAXAS_PROCESSO, tp);
   } catch(e) {}
 
   // Verifica e cria listas se necessário
@@ -5105,6 +5416,10 @@ async function iniciarApp() {
 
   document.getElementById('setup-screen').style.display  = 'none';
   document.getElementById('app-shell').style.display     = 'flex';
+
+  // Registra login
+  registrarMovimentacao('Login', '');
+
   renderPage();
 }
 
