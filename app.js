@@ -1959,7 +1959,11 @@ function _getUltimoRegistro(p) {
     const hist = JSON.parse(p.HistoricoStatus || '[]');
     if (!hist.length) return '';
     const ult = hist[hist.length - 1];
-    return ult.data ? ult.data.split('T')[0] : '';
+    if (!ult.data) return '';
+    const raw = String(ult.data).split('T')[0];
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(raw)) return raw;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return fmtDate(raw);
+    return raw;
   } catch(e) { return ''; }
 }
 
@@ -1988,7 +1992,7 @@ function renderProcessosRows(lista) {
       <td>${esc(p.NumeroProtocolo||'—')}</td>
       <td>${fmtDate(p.DataAbertura?p.DataAbertura.split('T')[0]:'')}</td>
       <td>${fmtDate(p.DataPrazo?p.DataPrazo.split('T')[0]:'')}</td>
-      <td style="font-size:12px;color:var(--text-muted)">${ultimoReg ? fmtDate(ultimoReg) : '—'}</td>
+      <td style="font-size:12px;color:var(--text-muted)">${ultimoReg || '—'}</td>
       <td>
         <span class="badge ${b.cls}">${b.txt}</span>
         ${p.Restituido ? '<span class="badge" style="background:#9333ea;color:#fff;margin-left:4px;font-size:11px"><i class="bi bi-arrow-return-left"></i> Restituído</span>' : ''}
@@ -2449,23 +2453,41 @@ function buildCamposAlteracaoEndereco(clienteId) {
           <option value="2° Endereço">2° Endereço</option>
         </select>
       </div>
-      <div style="grid-column:span 2"><label>Novo Endereço Completo</label><input name="proc_novoEndereco" /></div>
     </div>
+    <div style="margin-top:12px"><div class="form-grid">
+      <div style="grid-column:span 2"><label>Logradouro</label><input name="proc_endLogradouro" /></div>
+      <div><label>Número</label><input name="proc_endNumero" /></div>
+      <div><label>Complemento</label><input name="proc_endComplemento" /></div>
+      <div><label>Bairro</label><input name="proc_endBairro" /></div>
+      <div><label>Cidade</label><input name="proc_endCidade" /></div>
+      <div><label>UF</label><input name="proc_endUF" maxlength="2" style="text-transform:uppercase" /></div>
+      <div><label>CEP</label><input name="proc_endCEP" oninput="this.value=fmtCEP(this.value)" maxlength="9" /></div>
+    </div></div>
   </div></div>`;
 }
 
 function buildCamposInclusaoExclusaoAtividade(clienteId, exclusao) {
-  const cliente = window._processoArmasCache;
-  // Obtemos categorias do cliente via o select já selecionado
+  const todasCats = ['Colecionador', 'Atirador', 'Caçador'];
+  let cats;
+  if (_processoClienteCategoria.length) {
+    cats = exclusao
+      ? todasCats.filter(c =>  _processoClienteCategoria.includes(c))
+      : todasCats.filter(c => !_processoClienteCategoria.includes(c));
+  } else {
+    cats = todasCats;
+  }
   const titulo = exclusao ? 'Atividade a Excluir' : 'Atividade a Incluir';
-  const label  = exclusao ? 'Atividade' : 'Atividade';
+  const aviso  = cats.length === 0
+    ? `<p style="font-size:13px;color:var(--text-muted);margin:0">${exclusao ? 'O cliente não possui atividades cadastradas.' : 'O cliente já possui todas as atividades cadastradas.'}</p>`
+    : '';
   return `<div class="form-section"><div class="form-section-title">${titulo}</div><div class="form-body">
     <div class="form-grid">
-      <div><label>${label}</label>
+      <div><label>Atividade</label>
         <select name="proc_atividade">
           <option value="">Selecione...</option>
-          <option>Colecionador</option><option>Atirador</option><option>Caçador</option>
+          ${cats.map(c => `<option>${c}</option>`).join('')}
         </select>
+        ${aviso}
       </div>
     </div>
   </div></div>`;
@@ -3270,6 +3292,11 @@ async function renderProcessoDetalhe(id) {
     .filter(s => s !== 'Deferido')
     .map(s => `<option value="${s}" ${processo.Status===s?'selected':''}>${s}</option>`).join('');
 
+  const jaDeferido = processo.Status === 'Deferido';
+  const fnRestituir = jaDeferido ? 'alertaJaDeferido' : 'restituirProcesso';
+  const fnRegistrar = jaDeferido ? 'alertaJaDeferido' : 'registrarStatusHistorico';
+  const fnDeferir   = jaDeferido ? 'alertaJaDeferido' : 'deferirProcesso';
+
   const celular = (processo.ClienteNome ? '' : '');
 
   document.getElementById('page-content').innerHTML = `
@@ -3421,17 +3448,17 @@ async function renderProcessoDetalhe(id) {
               </button>
             </div>
             <div style="margin-top:8px">
-              <button onclick="restituirProcesso('${id}')" style="background:#9333ea;color:#fff;border:none;width:100%;border-radius:6px;padding:8px 12px;cursor:pointer;font-size:13px;font-weight:500;display:flex;align-items:center;justify-content:center;gap:6px">
+              <button onclick="${fnRestituir}('${id}')" style="background:#9333ea;color:#fff;border:none;width:100%;border-radius:6px;padding:8px 12px;cursor:pointer;font-size:13px;font-weight:500;display:flex;align-items:center;justify-content:center;gap:6px${jaDeferido?';opacity:.5':''}">
                 <i class="bi bi-arrow-return-left"></i> Restituído
               </button>
             </div>
             <div style="margin-top:8px">
-              <button onclick="registrarStatusHistorico('${id}')" style="background:#ea580c;color:#fff;border:none;width:100%;border-radius:6px;padding:8px 12px;cursor:pointer;font-size:13px;font-weight:500;display:flex;align-items:center;justify-content:center;gap:6px">
+              <button onclick="${fnRegistrar}('${id}')" style="background:#ea580c;color:#fff;border:none;width:100%;border-radius:6px;padding:8px 12px;cursor:pointer;font-size:13px;font-weight:500;display:flex;align-items:center;justify-content:center;gap:6px${jaDeferido?';opacity:.5':''}">
                 <i class="bi bi-clock-history"></i> Registrar Status do Processo
               </button>
             </div>
             <div style="margin-top:8px">
-              <button onclick="deferirProcesso('${id}')" style="background:#16a34a;color:#fff;border:none;width:100%;border-radius:6px;padding:8px 12px;cursor:pointer;font-size:13px;font-weight:500;display:flex;align-items:center;justify-content:center;gap:6px">
+              <button onclick="${fnDeferir}('${id}')" style="background:#16a34a;color:#fff;border:none;width:100%;border-radius:6px;padding:8px 12px;cursor:pointer;font-size:13px;font-weight:500;display:flex;align-items:center;justify-content:center;gap:6px${jaDeferido?';opacity:.5':''}">
                 <i class="bi bi-check-circle"></i> Deferir Processo
               </button>
             </div>
@@ -3494,6 +3521,21 @@ async function atualizarStatus(id, novoStatus) {
     if (container) container.remove();
     if (novoStatus === 'Deferido') liberarProcessosFuturos(id);
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+function alertaJaDeferido() {
+  const modal = document.createElement('div');
+  modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center';
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:10px;padding:24px;max-width:360px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.2)">
+      <h3 style="margin:0 0 12px;font-size:16px;color:#15803d"><i class="bi bi-check-circle-fill me-2"></i>Processo Deferido</h3>
+      <p style="font-size:13px;color:#374151;margin:0 0 16px">Não é possível realizar esta ação pois o processo já foi deferido.</p>
+      <div style="text-align:right">
+        <button onclick="this.closest('[style*=fixed]').remove()" style="background:#16a34a;color:#fff;border:none;border-radius:6px;padding:8px 20px;cursor:pointer;font-size:13px;font-weight:500">Entendido</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
 }
 
 async function deferirProcesso(id) {
@@ -3584,6 +3626,63 @@ async function deferirProcesso(id) {
         } catch(e2) {
           toast('Deferido, mas não foi possível atualizar o acervo: ' + e2.message, 'warning');
         }
+      } else if (tipo === 'Inclusão de Atividade') {
+        try {
+          const atividade = dados.atividade || '';
+          if (atividade) {
+            const clientesList = await App.getClientes();
+            const clienteObj = clientesList.find(c => String(c.id) === String(p.ClienteId));
+            const cats = (clienteObj?.Categoria || '').split(',').map(s => s.trim()).filter(Boolean);
+            if (!cats.includes(atividade)) cats.push(atividade);
+            await App.graph.updateItem(CONFIG.listas.clientes, p.ClienteId, { Categoria: cats.join(', ') });
+            App.invalidateCache('clientes');
+            toast(`Processo deferido! Atividade "${atividade}" adicionada ao perfil do cliente.`, 'success');
+          } else { toast('Processo deferido!', 'success'); }
+        } catch(e2) { toast('Deferido, mas não foi possível atualizar as atividades: ' + e2.message, 'warning'); }
+      } else if (tipo === 'Exclusão de Atividade') {
+        try {
+          const atividade = dados.atividade || '';
+          if (atividade) {
+            const clientesList = await App.getClientes();
+            const clienteObj = clientesList.find(c => String(c.id) === String(p.ClienteId));
+            const cats = (clienteObj?.Categoria || '').split(',').map(s => s.trim()).filter(Boolean);
+            const novaCats = cats.filter(c => c !== atividade);
+            await App.graph.updateItem(CONFIG.listas.clientes, p.ClienteId, { Categoria: novaCats.join(', ') });
+            App.invalidateCache('clientes');
+            toast(`Processo deferido! Atividade "${atividade}" removida do perfil do cliente.`, 'success');
+          } else { toast('Processo deferido!', 'success'); }
+        } catch(e2) { toast('Deferido, mas não foi possível atualizar as atividades: ' + e2.message, 'warning'); }
+      } else if (tipo === 'Alteração de Endereço') {
+        try {
+          const qual = dados.enderecoAlteracao || '1° Endereço';
+          const isSegundo = qual === '2° Endereço';
+          const suffix  = isSegundo ? '2' : '1';
+          const ufField = isSegundo ? 'UF2Endereco' : 'UF1Endereco';
+          const updates = {};
+          if (dados.endLogradouro)  updates[`Endereco${suffix}`]   = dados.endLogradouro;
+          if (dados.endNumero)      updates[`Numero${suffix}`]     = dados.endNumero;
+          if (dados.endComplemento) updates[`Complemento${suffix}`] = dados.endComplemento;
+          if (dados.endBairro)      updates[`Bairro${suffix}`]     = dados.endBairro;
+          if (dados.endCidade)      updates[`Cidade${suffix}`]     = dados.endCidade;
+          if (dados.endUF)          updates[ufField]                = String(dados.endUF).toUpperCase();
+          if (dados.endCEP)         updates[`CEP${suffix}`]         = dados.endCEP;
+          if (Object.keys(updates).length) {
+            await App.graph.updateItem(CONFIG.listas.clientes, p.ClienteId, updates);
+            App.invalidateCache('clientes');
+            toast(`Processo deferido! ${qual} do cliente atualizado.`, 'success');
+          } else { toast('Processo deferido!', 'success'); }
+        } catch(e2) { toast('Deferido, mas não foi possível atualizar o endereço: ' + e2.message, 'warning'); }
+      } else if (tipo === 'Atualização de Documento de Identificação') {
+        try {
+          const updates = {};
+          if (dados.dataExpedicao) updates.DataExpedicaoRG    = dados.dataExpedicao;
+          if (dados.dataValidade)  updates.DataValidadeRGouCNH = dados.dataValidade;
+          if (Object.keys(updates).length) {
+            await App.graph.updateItem(CONFIG.listas.clientes, p.ClienteId, updates);
+            App.invalidateCache('clientes');
+            toast('Processo deferido! Documento do cliente atualizado.', 'success');
+          } else { toast('Processo deferido!', 'success'); }
+        } catch(e2) { toast('Deferido, mas não foi possível atualizar o documento: ' + e2.message, 'warning'); }
       } else {
         toast('Processo deferido!', 'success');
       }
