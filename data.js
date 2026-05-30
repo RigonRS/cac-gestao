@@ -58,7 +58,7 @@ const CHECKLIST_TRANSFERENCIA = [
   'Comprovante de Residência do Comprador','Comprovante de Ocupação',
   'Anexo C','DSA 1° Endereço','Certidão Justiça Federal',
   'Certidão Justiça Estadual','Certidão Justiça Militar',
-  'Certidão Justiça Eleitoral','Avaliação Psicológica','Teste de Tiro',
+  'Certidão Justiça Eleitoral','Certidão Polícia Civil','Avaliação Psicológica','Teste de Tiro',
   'CTF + SIMAF','Declaração de Habitualidade','Procuração','Requerimento','GRU R$88,00 REF 20371 (Estado do RS)'
 ];
 
@@ -74,6 +74,7 @@ const CHECKLIST_TRANSFERENCIA_SIGMA_SINARM = [
   'Certidão Justiça Estadual',
   'Certidão Justiça Militar',
   'Certidão Justiça Eleitoral',
+  'Certidão Polícia Civil',
   'Comprovante de Ocupação Comprador',
   'Comprovante de Residência Comprador',
   'Avaliação Psicológica',
@@ -90,6 +91,7 @@ const CHECKLIST_TRANSFERENCIA_SINARM_SINARM = [
   'Certidão Justiça Estadual',
   'Certidão Justiça Militar',
   'Certidão Justiça Eleitoral',
+  'Certidão Polícia Civil',
   'Comprovante de Ocupação do Comprador',
   'Comprovante de Residência do Comprador',
   'Avaliação Psicológica',

@@ -474,6 +474,7 @@ function statusBadge(s) {
     'Aguardando Assinatura':        { cls:'badge-blue',   txt:'Ag. Assinatura' },
     'Deferido':                     { cls:'badge-green',  txt:'Deferido' },
     'Indeferido':                   { cls:'badge-red',    txt:'Indeferido' },
+    'Desistência Cliente':          { cls:'badge-red',    txt:'Desistência' },
     'Aguardando Docs':              { cls:'badge-yellow', txt:'Ag. Docs' },
   };
   return m[s] || { cls:'badge-gray', txt: s || '—' };
@@ -488,10 +489,10 @@ const STATUS_PROCESSO = [
   'Pronto para Análise',
   'Em análise',
   'Aguardando Assinatura',
-  'Deferido',
   'Indeferido',
+  'Desistência Cliente',
 ];
-const STATUS_FECHADOS = ['Deferido', 'Indeferido'];
+const STATUS_FECHADOS = ['Deferido', 'Indeferido', 'Desistência Cliente'];
 const RESPONSAVEIS = ['Andrieli', 'Matheus', 'Priscila', 'Simone'];
 const VALORES_PROCESSO = {
   'Aquisição de Arma SIGMA':                   940.00,
@@ -530,10 +531,11 @@ const TAXAS_PROCESSO = {
 };
 
 const CERTIDOES_CONFIG = [
-  { keyword: 'Federal',   label: 'Justiça Federal (TRF4)',   url: 'https://www2.trf4.jus.br/trf4/processos/certidao/index.php' },
-  { keyword: 'Estadual',  label: 'Justiça Estadual (TJRS)',  url: 'https://www.tjrs.jus.br/novo/processos-e-servicos/servicos-processuais/emissao-de-antecedentes-e-certidoes/' },
-  { keyword: 'Militar',   label: 'Justiça Militar (STM)',    url: 'https://www2.stm.jus.br/ceneg_internet/emitir/index.php' },
-  { keyword: 'Eleitoral', label: 'Crimes Eleitorais (TSE)',  url: 'https://www.tse.jus.br/servicos-eleitorais/autoatendimento-eleitoral#/' },
+  { keyword: 'Federal',       label: 'Justiça Federal (TRF4)',   url: 'https://www2.trf4.jus.br/trf4/processos/certidao/index.php' },
+  { keyword: 'Estadual',      label: 'Justiça Estadual (TJRS)',  url: 'https://www.tjrs.jus.br/novo/processos-e-servicos/servicos-processuais/emissao-de-antecedentes-e-certidoes/' },
+  { keyword: 'Militar',       label: 'Justiça Militar (STM)',    url: 'https://www2.stm.jus.br/ceneg_internet/emitir/index.php' },
+  { keyword: 'Eleitoral',     label: 'Crimes Eleitorais (TSE)',  url: 'https://www.tse.jus.br/servicos-eleitorais/autoatendimento-eleitoral#/' },
+  { keyword: 'Polícia Civil', label: 'Polícia Civil (RS)',       url: 'https://www.pc.rs.gov.br/emitir-certidao-de-antecedentes-policiais' },
 ];
 
 // ============================================================
@@ -939,9 +941,10 @@ async function renderClientePerfil(id, tab = 'dados') {
     { key:'dados',      label:'Dados Pessoais',               icon:'bi-person-vcard' },
     { key:'armas',      label:`Armas (${armas.length})`,       icon:'bi-shield-fill' },
     ...(isCacador ? [{ key:'ibama', label:'IBAMA', icon:'bi-tree-fill' }] : []),
-    { key:'documentos', label:`Documentos (${documentos.length})`, icon:'bi-file-earmark-text' },
-    { key:'processos',  label:`Processos (${processos.length})`,   icon:'bi-folder2-open' },
-    { key:'pagamentos', label:'Pagamentos',                    icon:'bi-cash-coin' },
+    { key:'documentos',  label:`Documentos (${documentos.length})`, icon:'bi-file-earmark-text' },
+    { key:'processos',   label:`Processos (${processos.length})`,   icon:'bi-folder2-open' },
+    { key:'pagamentos',  label:'Pagamentos',                        icon:'bi-cash-coin' },
+    { key:'orcamentos',  label:'Orçamentos',                        icon:'bi-calculator' },
   ];
 
   const cats = (cliente.Categoria || '').split(',').filter(Boolean).map(ct => `<span class="badge badge-blue">${esc(ct.trim())}</span>`).join(' ');
@@ -953,6 +956,7 @@ async function renderClientePerfil(id, tab = 'dados') {
   else if (tab === 'documentos') tabContent = renderPerfilDocumentos(documentos, id);
   else if (tab === 'processos')  tabContent = renderPerfilProcessos(processos, id);
   else if (tab === 'pagamentos') tabContent = renderPerfilPagamentos(processos, id);
+  else if (tab === 'orcamentos') tabContent = await renderPerfilOrcamentos(id);
 
   document.getElementById('page-content').innerHTML = `
     <div class="profile-header">
@@ -1903,14 +1907,24 @@ async function renderProcessosList() {
   const [processos, clientes] = await Promise.all([App.getProcessos(), App.getClientes()]);
 
   window._selectedProcessos = new Set();
+  window._processosSortField = window._processosSortField || 'DataAbertura';
+  window._processosSortDir   = window._processosSortDir   || 'desc';
   const el = document.getElementById('page-content');
+
+  function sortTh(field, label) {
+    const active = window._processosSortField === field;
+    const dir    = active ? window._processosSortDir : '';
+    const icon   = active ? (dir === 'asc' ? ' ↑' : ' ↓') : ' ↕';
+    return `<th style="cursor:pointer;user-select:none;white-space:nowrap" onclick="sortProcessos('${field}')">${label}<span style="font-size:10px;color:${active?'var(--accent)':'#9ca3af'}">${icon}</span></th>`;
+  }
+
   el.innerHTML = `
     <div class="toolbar">
       <div class="search-bar"><i class="bi bi-search"></i><input id="busca-proc" placeholder="Buscar por cliente ou tipo..." oninput="filtrarProcessos()" /></div>
       <div class="btn-group">
         <select id="filtro-status" onchange="filtrarProcessos()" style="padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px">
           <option value="">Todos os status</option>
-          ${STATUS_PROCESSO.map(s => `<option value="${s}">${s}</option>`).join('')}
+          ${[...STATUS_PROCESSO,'Deferido'].map(s => `<option value="${s}">${s}</option>`).join('')}
         </select>
         <button id="btn-excluir-massa" class="btn btn-danger" style="display:none" onclick="excluirProcessosSelecionados()"><i class="bi bi-trash"></i> Excluir selecionados (0)</button>
         <button class="btn btn-primary" onclick="navigate('processos/novo')"><i class="bi bi-plus-lg"></i> Novo Processo</button>
@@ -1921,7 +1935,15 @@ async function renderProcessosList() {
         <table>
           <thead><tr>
             <th style="width:36px"><input type="checkbox" id="chk-todos" onchange="toggleSelecionarTodosProcessos(this.checked)" title="Selecionar todos" /></th>
-            <th>Cliente</th><th>Tipo de Processo</th><th>Responsável</th><th>Protocolo</th><th>Abertura</th><th>Prazo</th><th>Status</th><th>Ações</th>
+            ${sortTh('ClienteNome','Cliente')}
+            ${sortTh('TipoProcesso','Tipo de Processo')}
+            ${sortTh('Responsavel','Responsável')}
+            <th>Protocolo</th>
+            ${sortTh('DataAbertura','Abertura')}
+            <th>Prazo</th>
+            ${sortTh('_ultimoRegistro','Último Registro')}
+            ${sortTh('Status','Status')}
+            <th>Ações</th>
           </tr></thead>
           <tbody id="tbody-processos">${renderProcessosRows(processos)}</tbody>
         </table>
@@ -1930,12 +1952,34 @@ async function renderProcessosList() {
   window._processos_filtro = processos;
 }
 
+
+
+function _getUltimoRegistro(p) {
+  try {
+    const hist = JSON.parse(p.HistoricoStatus || '[]');
+    if (!hist.length) return '';
+    const ult = hist[hist.length - 1];
+    return ult.data ? ult.data.split('T')[0] : '';
+  } catch(e) { return ''; }
+}
+
 function renderProcessosRows(lista) {
-  if (!lista.length) return `<tr><td colspan="9"><div class="empty-state"><i class="bi bi-folder-x"></i><p>Nenhum processo encontrado.</p></div></td></tr>`;
+  if (!lista.length) return `<tr><td colspan="10"><div class="empty-state"><i class="bi bi-folder-x"></i><p>Nenhum processo encontrado.</p></div></td></tr>`;
   const selected = window._selectedProcessos || new Set();
-  return lista.sort((a,b) => (b.DataAbertura||'').localeCompare(a.DataAbertura||'')).map(p => {
+  const sf = window._processosSortField || 'DataAbertura';
+  const sd = window._processosSortDir   || 'desc';
+  const sorted = [...lista].sort((a, b) => {
+    let va = sf === '_ultimoRegistro' ? _getUltimoRegistro(a) : (a[sf] || '');
+    let vb = sf === '_ultimoRegistro' ? _getUltimoRegistro(b) : (b[sf] || '');
+    va = String(va).toLowerCase(); vb = String(vb).toLowerCase();
+    if (va < vb) return sd === 'asc' ? -1 : 1;
+    if (va > vb) return sd === 'asc' ?  1 : -1;
+    return 0;
+  });
+  return sorted.map(p => {
     const b = statusBadge(p.Status);
     const isChecked = selected.has(String(p.id));
+    const ultimoReg = _getUltimoRegistro(p);
     return `<tr style="cursor:pointer" onclick="navigate('processos/detalhe',{id:'${p.id}'})">
       <td onclick="event.stopPropagation()"><input type="checkbox" class="chk-processo" data-id="${p.id}" ${isChecked?'checked':''} onchange="toggleSelecaoProcesso('${p.id}',this.checked)" /></td>
       <td><strong>${esc(p.ClienteNome||'—')}</strong></td>
@@ -1944,6 +1988,7 @@ function renderProcessosRows(lista) {
       <td>${esc(p.NumeroProtocolo||'—')}</td>
       <td>${fmtDate(p.DataAbertura?p.DataAbertura.split('T')[0]:'')}</td>
       <td>${fmtDate(p.DataPrazo?p.DataPrazo.split('T')[0]:'')}</td>
+      <td style="font-size:12px;color:var(--text-muted)">${ultimoReg ? fmtDate(ultimoReg) : '—'}</td>
       <td>
         <span class="badge ${b.cls}">${b.txt}</span>
         ${p.Restituido ? '<span class="badge" style="background:#9333ea;color:#fff;margin-left:4px;font-size:11px"><i class="bi bi-arrow-return-left"></i> Restituído</span>' : ''}
@@ -1999,12 +2044,35 @@ async function excluirProcessosSelecionados() {
 }
 
 function filtrarProcessos() {
-  const q = document.getElementById('busca-proc').value.toLowerCase();
-  const s = document.getElementById('filtro-status').value;
-  let lista = window._processos_filtro;
+  const q = document.getElementById('busca-proc')?.value.toLowerCase() || '';
+  const s = document.getElementById('filtro-status')?.value || '';
+  let lista = window._processos_filtro || [];
   if (q) lista = lista.filter(p => (p.ClienteNome||'').toLowerCase().includes(q) || (p.TipoProcesso||'').toLowerCase().includes(q));
   if (s) lista = lista.filter(p => p.Status === s);
-  document.getElementById('tbody-processos').innerHTML = renderProcessosRows(lista);
+  const tbody = document.getElementById('tbody-processos');
+  if (tbody) tbody.innerHTML = renderProcessosRows(lista);
+}
+
+function sortProcessos(field) {
+  if (window._processosSortField === field) {
+    window._processosSortDir = window._processosSortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    window._processosSortField = field;
+    window._processosSortDir   = (field === 'DataAbertura' || field === '_ultimoRegistro') ? 'desc' : 'asc';
+  }
+  // Atualiza ícones dos headers
+  document.querySelectorAll('thead th[onclick]').forEach(th => {
+    const m = th.getAttribute('onclick').match(/sortProcessos\('(.+?)'\)/);
+    if (!m) return;
+    const f = m[1];
+    const active = f === window._processosSortField;
+    const span = th.querySelector('span');
+    if (span) {
+      span.textContent = active ? (window._processosSortDir === 'asc' ? ' ↑' : ' ↓') : ' ↕';
+      span.style.color = active ? 'var(--accent)' : '#9ca3af';
+    }
+  });
+  filtrarProcessos();
 }
 
 // ============================================================
@@ -2453,6 +2521,7 @@ function buildCamposTransferencia(armasOpts, tipo) {
 
   const acervoDestinoOpts = (_processoClienteCategoria.length ? _processoClienteCategoria : ['Caçador','Atirador','Colecionador']).map(v=>`<option>${v}</option>`).join('');
   const isMesmoTitular = tipo === 'Transferência de Arma SIGMA x SINARM' || tipo === 'Transferência de Arma SINARM x SIGMA';
+  const semAcervoDestino = ['Transferência de Arma SIGMA x SINARM', 'Transferência de Arma SINARM x SINARM'].includes(tipo);
   return `<div class="form-section"><div class="form-section-title">Transferência de Arma</div><div class="form-body">
     ${isMesmoTitular ? `
     <div style="margin-bottom:16px">
@@ -2464,7 +2533,7 @@ function buildCamposTransferencia(armasOpts, tipo) {
     </div>
     <div id="proc-mesmo-titular" style="display:none"><div class="form-grid">
       <div><label>Arma (do cliente)</label><select name="proc_armaIdMesmoTitular"><option value="">Selecione...</option>${armasOpts}</select></div>
-      <div><label>Acervo de Destino da Arma</label><select name="proc_acervoDestinoMesmoTitular"><option value="">Selecione...</option>${acervoDestinoOpts}</select></div>
+      ${!semAcervoDestino ? `<div><label>Acervo de Destino da Arma</label><select name="proc_acervoDestinoMesmoTitular"><option value="">Selecione...</option>${acervoDestinoOpts}</select></div>` : ''}
     </div></div>
     <div id="proc-outro-titular" style="display:none">` : ''}
     <div style="margin-bottom:16px">
@@ -2478,7 +2547,7 @@ function buildCamposTransferencia(armasOpts, tipo) {
     <div id="proc-vende" style="display:none">
       <div class="form-grid">
         <div><label>Arma (do cliente)</label><select name="proc_armaId"><option value="">Selecione...</option>${armasOpts}</select></div>
-        <div><label>Acervo de Destino da Arma</label><select name="proc_acervoDestinoVenda"><option value="">Selecione...</option><option>Atirador</option><option>Caçador</option><option>Colecionador</option></select></div>
+        ${!semAcervoDestino ? `<div><label>Acervo de Destino da Arma</label><select name="proc_acervoDestinoVenda"><option value="">Selecione...</option><option>Atirador</option><option>Caçador</option><option>Colecionador</option></select></div>` : ''}
         <div><label>Nome do Comprador</label><input name="proc_nomeComprador" /></div>
         <div><label>CPF do Comprador</label><input name="proc_cpfComprador" oninput="this.value=fmtCPF(this.value)" maxlength="14" /></div>
         <div><label>RG — UF</label><input name="proc_rgUFComprador" /></div>
@@ -2528,7 +2597,7 @@ function buildCamposTransferencia(armasOpts, tipo) {
       <div style="margin-bottom:20px">
         <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;padding-bottom:6px;border-bottom:1px solid var(--border)">Dados Da Arma</div>
         <div class="form-grid">
-          <div><label>Acervo de Destino</label><select name="proc_acervoDestino"><option value="">Selecione...</option><option>Colecionador</option><option>Atirador</option><option>Caçador</option></select></div>
+          ${!semAcervoDestino ? `<div><label>Acervo de Destino</label><select name="proc_acervoDestino"><option value="">Selecione...</option><option>Colecionador</option><option>Atirador</option><option>Caçador</option></select></div>` : ''}
           <div><label>Espécie</label><select name="proc_especie"><option value="">Selecione...</option>${especieOpts}</select></div>
           <div><label>Calibre</label><input name="proc_calibre" /></div>
           <div><label>Marca</label><input name="proc_marcaArma" /></div>
@@ -2883,7 +2952,7 @@ async function gerarTermoTransferencia() {
       const armaId = (dados.armaIdMesmoTitular||'').split('|')[0];
       if (armaId) {
         const a = await App.graph.getItem(CONFIG.listas.armas, armaId).catch(() => ({}));
-        arm = { especie: a.Especie||'', marca: a.Marca||'', serie: a.NumeroSerie||'', acabamento: a.Acabamento||'', calibre: a.Calibre||'', funcionamento: a.Funcionamento||'', numCanos: a.NumeroCanos||'', capacidade: a.CapacidadeTiro||'', comprCano: '', pais: a.PaisFabricacao||'', cadSinarm: a.NumeroSINARM||a.NumeroSIGMA||'' };
+        arm = { especie: a.Especie||'', marca: a.Marca||'', serie: a.NumeroSerie||'', acabamento: a.Acabamento||'', calibre: a.Calibre||'', funcionamento: a.Funcionamento||'', numCanos: a.NumeroCanos||'', capacidade: a.CapacidadeTiro||'', comprCano: a.ComprimentoCano||'', pais: a.PaisFabricacao||'', cadSinarm: a.NumeroSINARM||a.NumeroSIGMA||'' };
       }
     } else if (eTransf && dados.clienteVende === 'sim') {
       vend = { nome: c.Title||'', cpf: c.CPF||'', endereco: clienteEnd, cidadeUF: clienteCU };
@@ -2892,7 +2961,7 @@ async function gerarTermoTransferencia() {
       const armaId = (dados.armaId||'').split('|')[0];
       if (armaId) {
         const a = await App.graph.getItem(CONFIG.listas.armas, armaId).catch(() => ({}));
-        arm = { especie: a.Especie||'', marca: a.Marca||'', serie: a.NumeroSerie||'', acabamento: a.Acabamento||'', calibre: a.Calibre||'', funcionamento: a.Funcionamento||'', numCanos: a.NumeroCanos||'', capacidade: a.CapacidadeTiro||'', comprCano: '', pais: a.PaisFabricacao||'', cadSinarm: a.NumeroSINARM||a.NumeroSIGMA||'' };
+        arm = { especie: a.Especie||'', marca: a.Marca||'', serie: a.NumeroSerie||'', acabamento: a.Acabamento||'', calibre: a.Calibre||'', funcionamento: a.Funcionamento||'', numCanos: a.NumeroCanos||'', capacidade: a.CapacidadeTiro||'', comprCano: a.ComprimentoCano||'', pais: a.PaisFabricacao||'', cadSinarm: a.NumeroSINARM||a.NumeroSIGMA||'' };
       }
     } else {
       const vendEnd = _ef(dados.endVendedor||'', dados.numVendedor ? `n° ${dados.numVendedor}` : '', dados.bairroVendedor||'', dados.municipioVendedor||'', dados.ufVendedor||'', dados.cepVendedor ? `CEP ${dados.cepVendedor}` : '');
@@ -3198,6 +3267,7 @@ async function renderProcessoDetalhe(id) {
   const temCertidoes = checklist.some(item => CERTIDOES_CONFIG.some(c => item.nome.includes(c.keyword)));
 
   const statusOpts = STATUS_PROCESSO
+    .filter(s => s !== 'Deferido')
     .map(s => `<option value="${s}" ${processo.Status===s?'selected':''}>${s}</option>`).join('');
 
   const celular = (processo.ClienteNome ? '' : '');
@@ -3360,6 +3430,11 @@ async function renderProcessoDetalhe(id) {
                 <i class="bi bi-clock-history"></i> Registrar Status do Processo
               </button>
             </div>
+            <div style="margin-top:8px">
+              <button onclick="deferirProcesso('${id}')" style="background:#16a34a;color:#fff;border:none;width:100%;border-radius:6px;padding:8px 12px;cursor:pointer;font-size:13px;font-weight:500;display:flex;align-items:center;justify-content:center;gap:6px">
+                <i class="bi bi-check-circle"></i> Deferir Processo
+              </button>
+            </div>
           </div>
         </div>
 
@@ -3419,6 +3494,104 @@ async function atualizarStatus(id, novoStatus) {
     if (container) container.remove();
     if (novoStatus === 'Deferido') liberarProcessosFuturos(id);
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function deferirProcesso(id) {
+  const p = window._processoDetalhe;
+  if (!p) return;
+
+  // Popup de confirmação com data
+  const modal = document.createElement('div');
+  modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center';
+  const hoje = new Date().toISOString().split('T')[0];
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:10px;padding:24px;max-width:380px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.2)">
+      <h3 style="margin:0 0 8px;font-size:16px;color:#15803d"><i class="bi bi-check-circle me-2"></i>Deferir Processo</h3>
+      <p style="font-size:13px;color:#374151;margin:0 0 16px">Confirma o deferimento de <strong>${esc(p.TipoProcesso)}</strong> para <strong>${esc(p.ClienteNome||'')}</strong>?</p>
+      <label style="font-size:12px;font-weight:600">Data de Deferimento</label>
+      <input type="date" id="modal-data-deferimento" value="${hoje}" style="margin-top:4px;margin-bottom:16px;width:100%;box-sizing:border-box" />
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button id="btn-cancelar-deferimento" class="btn btn-outline">Cancelar</button>
+        <button id="btn-confirmar-deferimento" style="background:#16a34a;color:#fff;border:none;border-radius:6px;padding:8px 16px;cursor:pointer;font-size:13px;font-weight:500">Confirmar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  modal.querySelector('#btn-cancelar-deferimento').onclick = () => document.body.removeChild(modal);
+  modal.querySelector('#btn-confirmar-deferimento').onclick = async () => {
+    const dataDef = modal.querySelector('#modal-data-deferimento').value;
+    if (!dataDef) { toast('Informe a data de deferimento.', 'warning'); return; }
+    document.body.removeChild(modal);
+    showLoading();
+    try {
+      // Registra no histórico
+      const historico = JSON.parse(p.HistoricoStatus || '[]');
+      historico.push({ status: 'Deferido', data: dataDef, usuario: getCurrentUserName(), obs: '' });
+      const updates = {
+        Status: 'Deferido',
+        DataDeferimento: dataDef,
+        HistoricoStatus: JSON.stringify(historico),
+      };
+      if (p.ProcessoFuturoId) { updates.ProcessoFuturoId = null; updates.ProcessoFuturoNome = null; }
+      await App.graph.updateItem(CONFIG.listas.processos, id, updates);
+      App.invalidateCache('processos');
+      if (window._processoDetalhe) { window._processoDetalhe.Status = 'Deferido'; window._processoDetalhe.HistoricoStatus = JSON.stringify(historico); }
+
+      // Auto-ações ao deferir
+      const tipo = p.TipoProcesso;
+      const dados = p.DadosEspecificosJSON ? JSON.parse(p.DadosEspecificosJSON) : {};
+      if (tipo === 'Aquisição de Arma SIGMA' || tipo === 'Aquisição de Arma PF') {
+        // Salvar arma no acervo do cliente
+        try {
+          const camposArma = {
+            ClienteId:         Number(p.ClienteId),
+            ClienteNome:       p.ClienteNome || '',
+            Especie:           dados.especie           || dados.proc_especie || '',
+            Calibre:           dados.calibre           || '',
+            Marca:             dados.marcaArma         || '',
+            Modelo:            dados.modeloArma        || dados.modelo || '',
+            NumeroSerie:       dados.serieArma         || '',
+            NumeroSIGMA:       dados.numSigma          || '',
+            AtividadeCadastrada: dados.acervo          || '',
+            GrupoCalibre:      dados.grupoCalibre       || '',
+            PaisFabricacao:    dados.paisFabricacao     || '',
+            CapacidadeTiro:    dados.capacidadeTiros    || dados.capacidadeCartucho || '',
+            NumeroCanos:       dados.numeroCanos        || '',
+            AlmaCano:          dados.almaCano           || dados.alma || '',
+            NumeroRaias:       dados.numeroRaias        || '',
+            SentidoRaias:      dados.sentidoRaias       || '',
+            ComprimentoCano:   dados.comprimentoCano    || dados.comprCano || '',
+            Acabamento:        dados.acabamento         || '',
+            Funcionamento:     dados.funcionamento      || '',
+          };
+          await App.graph.createItem(CONFIG.listas.armas, camposArma);
+          App.invalidateCache('armas');
+          toast('Processo deferido! Arma salva automaticamente no acervo do cliente.', 'success');
+        } catch(e2) {
+          toast('Deferido, mas não foi possível salvar a arma: ' + e2.message, 'warning');
+        }
+      } else if (tipo === 'Mudança de Acervo') {
+        // Alterar acervo da arma
+        try {
+          const armaId = (dados.armaId || dados.armaIdMesmoTitular || '').split('|')[0];
+          const novoAcervo = dados.acervoDestino || dados.proc_acervoDestino || '';
+          if (armaId && novoAcervo) {
+            await App.graph.updateItem(CONFIG.listas.armas, armaId, { AtividadeCadastrada: novoAcervo });
+            App.invalidateCache('armas');
+            toast(`Processo deferido! Acervo da arma alterado para "${novoAcervo}".`, 'success');
+          } else {
+            toast('Processo deferido!', 'success');
+          }
+        } catch(e2) {
+          toast('Deferido, mas não foi possível atualizar o acervo: ' + e2.message, 'warning');
+        }
+      } else {
+        toast('Processo deferido!', 'success');
+      }
+
+      liberarProcessosFuturos(id);
+      await renderProcessoDetalhe(id);
+    } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+  };
 }
 
 async function mostrarSeletorProcessoFuturo(processoId) {
@@ -5216,7 +5389,10 @@ async function renderOrcamentoForm(clienteId = null) {
             &nbsp;·&nbsp; Cartão: em até 10x com juros da máquina
           </div>
         </div>
-        <div style="text-align:right">
+        <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap">
+          <button id="orc-salvar-btn" class="btn btn-primary" onclick="salvarOrcamento()" style="pointer-events:none;opacity:0.45">
+            <i class="bi bi-floppy"></i> Salvar Orçamento
+          </button>
           <a id="orc-wa-btn" class="btn btn-whatsapp" href="#" target="_blank" style="pointer-events:none;opacity:0.45">
             <i class="bi bi-whatsapp"></i> Enviar Orçamento ao Cliente
           </a>
@@ -5269,6 +5445,13 @@ function atualizarOrcamento() {
   }
 
   const celularLimpo = celular.replace(/\D/g, '');
+  const salvarBtn = document.getElementById('orc-salvar-btn');
+  if (linhas.length > 0) {
+    if (salvarBtn) { salvarBtn.style.pointerEvents = ''; salvarBtn.style.opacity = '1'; }
+  } else {
+    if (salvarBtn) { salvarBtn.style.pointerEvents = 'none'; salvarBtn.style.opacity = '0.45'; }
+  }
+
   if (linhas.length > 0 && celularLimpo) {
     const msg =
       'Segue valores de orçamento referente aos serviços solicitados:\n\n' +
@@ -5283,6 +5466,90 @@ function atualizarOrcamento() {
   } else {
     if (waBtn) { waBtn.href = '#'; waBtn.style.pointerEvents = 'none'; waBtn.style.opacity = '0.45'; }
   }
+}
+
+async function salvarOrcamento() {
+  const sel = document.getElementById('orc-cliente-sel');
+  const parts = (sel?.value || '').split('|');
+  const clienteId   = parts[0] || '';
+  const clienteNome = parts[1] || '';
+
+  const linhas = [];
+  let total = 0;
+  TIPOS_PROCESSO.forEach((tipo, i) => {
+    const chkEl = document.getElementById(`orc-chk-${i}`);
+    if (!chkEl?.checked) return;
+    const qtd = parseInt(document.getElementById(`orc-qty-${i}`)?.value || '1');
+    const valor = VALORES_PROCESSO[tipo] || 0;
+    const subtotal = qtd * valor;
+    total += subtotal;
+    linhas.push({ tipo, qtd, valor, subtotal });
+  });
+  if (!linhas.length) { toast('Selecione ao menos um serviço.', 'warning'); return; }
+
+  showLoading();
+  try {
+    const todos = await App.graph._readFile('orcamentos').catch(() => []);
+    const lista = Array.isArray(todos) ? todos : [];
+    const novo = {
+      id:          `${Date.now()}${Math.random().toString(36).substr(2,5)}`,
+      clienteId,
+      clienteNome,
+      data:        new Date().toISOString().split('T')[0],
+      itens:       linhas,
+      total,
+      criadoPor:   getCurrentUserName(),
+    };
+    lista.push(novo);
+    await App.graph._writeFile('orcamentos', lista);
+    toast('Orçamento salvo com sucesso!', 'success');
+  } catch(e) { toast('Erro ao salvar: ' + e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function renderPerfilOrcamentos(clienteId) {
+  let orcamentos = [];
+  try {
+    const todos = await App.graph._readFile('orcamentos').catch(() => []);
+    orcamentos = (Array.isArray(todos) ? todos : []).filter(o => String(o.clienteId) === String(clienteId));
+  } catch(e) {}
+  orcamentos.sort((a,b) => (b.data||'').localeCompare(a.data||''));
+
+  if (!orcamentos.length) {
+    return `<div class="form-section"><div class="form-body"><p style="color:var(--text-muted);font-style:italic">Nenhum orçamento salvo para este cliente.</p></div></div>`;
+  }
+  return `<div class="form-section">
+    <div class="form-body" style="padding:0">
+      <div class="table-wrapper">
+        <table>
+          <thead><tr><th>Data</th><th>Serviços</th><th>Total</th><th>Por</th><th>Ações</th></tr></thead>
+          <tbody>
+            ${orcamentos.map(o => `
+              <tr>
+                <td style="white-space:nowrap">${fmtDate(o.data)}</td>
+                <td style="font-size:12px">${(o.itens||[]).map(i => `${i.qtd>1?i.qtd+'× ':''}${esc(i.tipo)}`).join('<br>')}</td>
+                <td style="white-space:nowrap;font-weight:600">${fmtMoeda(o.total)}</td>
+                <td><span class="badge badge-blue">${esc(o.criadoPor||'—')}</span></td>
+                <td>
+                  <button class="btn btn-danger btn-sm" onclick="excluirOrcamento('${o.id}','${clienteId}')" title="Excluir"><i class="bi bi-trash"></i></button>
+                </td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function excluirOrcamento(orcId, clienteId) {
+  if (!confirm('Excluir este orçamento?')) return;
+  showLoading();
+  try {
+    const todos = await App.graph._readFile('orcamentos').catch(() => []);
+    const lista = (Array.isArray(todos) ? todos : []).filter(o => o.id !== orcId);
+    await App.graph._writeFile('orcamentos', lista);
+    toast('Orçamento excluído.', 'success');
+    navigate('clientes/perfil', { id: clienteId, tab: 'orcamentos' });
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 // ============================================================
@@ -5741,6 +6008,10 @@ const _BM_CERTIDOES = `(async function(){
     tryFill(byAttr('nasc')||byLabel('nascimento'),dateISO(d.dataNascimento),'DataNasc');
     tryFill(byAttr('mae')||byLabel('m\\u00e3e')||byLabel('mae'),d.nomeMae,'NomeMae');
     tryFill(byAttr('pai')||byLabel('pai'),d.nomePai,'NomePai');
+  }else if(h.includes('pc.rs.gov.br')){
+    tryFill(byAttr('nome')||byLabel('nome completo')||byLabel('nome'),d.nome,'Nome');
+    tryFill(byAttr('cpf')||byLabel('cpf'),d.cpf,'CPF');
+    tryFill(byAttr('nasc')||byLabel('nascimento')||byLabel('data de nasc'),dateISO(d.dataNascimento),'DataNasc');
   }else{
     var cpfEl2=byAttr('cpf')||byLabel('cpf');tryFill(cpfEl2,d.cpf,'CPF');
   }
