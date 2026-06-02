@@ -240,6 +240,7 @@ async function renderPage() {
       case 'pagamentos-gru':       await renderPagamentosGRU(); break;
       case 'valores-processos':    await renderValoresProcessos(); break;
       case 'pagamentos-extras':        await renderPagamentosExtras(); break;
+      case 'prazos-processos':         await renderPrazosProcessos(); break;
       case 'registro-movimentacoes':   await renderRegistroMovimentacoes(); break;
       case 'orcamento/novo':       await renderOrcamentoForm(params.clienteId); break;
       default:                     await renderDashboard();
@@ -1076,9 +1077,10 @@ function renderPerfilIBAMA(c) {
             <div><label>Data de Validade *</label><input type="date" name="DataValidade" required /></div>
             <div><label>Nome da Propriedade *</label><input name="NomePropriedade" required /></div>
             <div><label>CAR da Propriedade</label><input name="CARPropriedade" /></div>
+            <div><label>Nome do Proprietário</label><input name="NomeProprietario" /></div>
+            <div><label>CPF do Proprietário</label><input name="CPFProprietario" oninput="this.value=fmtCPF(this.value)" maxlength="14" /></div>
             <div><label>Cidade</label><input name="CidadeSimaf" /></div>
             <div><label>UF</label><input name="UFSimaf" maxlength="2" style="text-transform:uppercase" /></div>
-            <div><label>CPF do Proprietário</label><input name="CPFProprietario" oninput="this.value=fmtCPF(this.value)" maxlength="14" /></div>
           </div>
           <div class="btn-group" style="margin-top:12px;margin-bottom:16px">
             <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-check-lg"></i> Salvar SIMAF</button>
@@ -1086,21 +1088,26 @@ function renderPerfilIBAMA(c) {
           </div>
         </form>
       </div>
+      <div id="simaf-edit-wrap-${c.id}" style="display:none;padding:16px 20px 0"></div>
       <div class="form-body">
         ${simafList.length === 0
           ? '<div class="empty-state" style="padding:20px"><i class="bi bi-file-earmark-x"></i><p>Nenhum SIMAF cadastrado.</p></div>'
           : `<div class="table-wrapper"><table>
-              <thead><tr><th>Propriedade</th><th>CAR</th><th>CPF Proprietário</th><th>Cidade/UF</th><th>Validade</th><th>Ações</th></tr></thead>
+              <thead><tr><th>Propriedade</th><th>CAR</th><th>Proprietário</th><th>CPF Proprietário</th><th>Cidade/UF</th><th>Validade</th><th>Ações</th></tr></thead>
               <tbody>
                 ${simafList.map((s, i) => {
                   const vs = validadeStatus(s.DataValidade || null);
                   return `<tr>
                     <td>${esc(s.NomePropriedade||'—')}</td>
                     <td>${esc(s.CARPropriedade||'—')}</td>
+                    <td>${esc(s.NomeProprietario||'—')}</td>
                     <td>${esc(s.CPFProprietario||'—')}</td>
                     <td>${esc(s.CidadeSimaf||'')}${s.UFSimaf?' - '+esc(s.UFSimaf):''}</td>
                     <td><span class="badge ${vs.cls}">${vs.txt}</span></td>
-                    <td><button class="btn btn-ghost btn-sm" onclick="deletarSIMAF('${c.id}',${i})"><i class="bi bi-trash" style="color:var(--danger)"></i></button></td>
+                    <td style="white-space:nowrap">
+                      <button class="btn btn-ghost btn-sm" onclick="editarSIMAF('${c.id}',${i})" title="Editar"><i class="bi bi-pencil" style="color:var(--accent)"></i></button>
+                      <button class="btn btn-ghost btn-sm" onclick="deletarSIMAF('${c.id}',${i})" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>
+                    </td>
                   </tr>`;
                 }).join('')}
               </tbody>
@@ -2567,9 +2574,28 @@ function buildCamposTransferencia(armasOpts, tipo) {
     </div>
 
     <div id="proc-vende" style="display:none">
-      <div class="form-grid">
+      <div class="form-grid" style="margin-bottom:16px">
         <div><label>Arma (do cliente)</label><select name="proc_armaId"><option value="">Selecione...</option>${armasOpts}</select></div>
         ${!semAcervoDestino ? `<div><label>Acervo de Destino da Arma</label><select name="proc_acervoDestinoVenda"><option value="">Selecione...</option><option>Atirador</option><option>Caçador</option><option>Colecionador</option></select></div>` : ''}
+      </div>
+      <div style="margin-bottom:16px">
+        <label style="font-size:14px;font-weight:600;display:block;margin-bottom:8px">O comprador está cadastrado no sistema?</label>
+        <div class="checkbox-group">
+          <label class="checkbox-item"><input type="radio" name="proc_compradorSistema" value="sim" onchange="onCompradorSistemaChange(this.value)" /> Sim</label>
+          <label class="checkbox-item"><input type="radio" name="proc_compradorSistema" value="nao" onchange="onCompradorSistemaChange(this.value)" checked /> Não</label>
+        </div>
+      </div>
+      <div id="proc-comprador-cadastrado" style="display:none;margin-bottom:12px">
+        <div class="form-grid">
+          <div><label>Selecionar Comprador</label>
+            <select name="proc_compradorClienteId" id="sel-comprador-cliente" onchange="document.querySelector('[name=proc_nomeComprador]').value=this.options[this.selectedIndex]?.dataset?.nome||''">
+              <option value="">Carregando...</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div id="proc-comprador-manual">
+      <div class="form-grid">
         <div><label>Nome do Comprador</label><input name="proc_nomeComprador" /></div>
         <div><label>CPF do Comprador</label><input name="proc_cpfComprador" oninput="this.value=fmtCPF(this.value)" maxlength="14" /></div>
         <div><label>RG — UF</label><input name="proc_rgUFComprador" /></div>
@@ -2613,9 +2639,32 @@ function buildCamposTransferencia(armasOpts, tipo) {
           <div><label>Bairro</label><input name="proc_bairroResidComprador" /></div>
         </div>
       </div>
+      </div><!-- /proc-comprador-manual -->
     </div>
 
     <div id="proc-compra" style="display:none">
+      <div style="margin-bottom:16px">
+        <label style="font-size:14px;font-weight:600;display:block;margin-bottom:8px">O vendedor está cadastrado no sistema?</label>
+        <div class="checkbox-group">
+          <label class="checkbox-item"><input type="radio" name="proc_vendedorSistema" value="sim" onchange="onVendedorSistemaChange(this.value)" /> Sim</label>
+          <label class="checkbox-item"><input type="radio" name="proc_vendedorSistema" value="nao" onchange="onVendedorSistemaChange(this.value)" checked /> Não</label>
+        </div>
+      </div>
+      <div id="proc-vendedor-cadastrado" style="display:none;margin-bottom:16px">
+        <div class="form-grid">
+          <div><label>Selecionar Vendedor</label>
+            <select name="proc_vendedorClienteId" id="sel-vendedor-cliente" onchange="carregarArmasSelector(this.value,'sel-arma-vendedor')">
+              <option value="">Carregando...</option>
+            </select>
+          </div>
+          <div><label>Arma do Vendedor</label>
+            <select name="proc_armaIdVendedor" id="sel-arma-vendedor">
+              <option value="">Selecione o vendedor primeiro...</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div id="proc-vendedor-manual">
       <div style="margin-bottom:20px">
         <div style="font-size:13px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;padding-bottom:6px;border-bottom:1px solid var(--border)">Dados Da Arma</div>
         <div class="form-grid">
@@ -2625,12 +2674,11 @@ function buildCamposTransferencia(armasOpts, tipo) {
           <div><label>Marca</label><input name="proc_marcaArma" /></div>
           <div><label>Modelo</label><input name="proc_modeloArma" /></div>
           <div><label>N° Série</label><input name="proc_serieArma" /></div>
-          <div><label>Cad. Sinarm</label><input name="proc_cadSinarm" /></div>
-          <div><label>N° Registro</label><input name="proc_numRegistro" /></div>
+          ${!['Transferência de Arma SIGMA x SIGMA','Transferência de Arma SIGMA x SINARM'].includes(tipo) ? `<div><label>Cad. Sinarm</label><input name="proc_cadSinarm" /></div><div><label>N° Registro</label><input name="proc_numRegistro" /></div>` : ''}
+          ${!['Transferência de Arma SINARM x SIGMA','Transferência de Arma SINARM x SINARM'].includes(tipo) ? `<div><label>N° SIGMA</label><input name="proc_numSigma" /></div>` : ''}
           <div><label>País de Fabricação</label><input name="proc_paisFabricacao" /></div>
           <div><label>Capacidade de Tiros</label><input type="number" min="0" name="proc_capacidadeTiros" /></div>
           <div><label>N° de Canos</label><input type="number" min="0" name="proc_numeroCanos" /></div>
-          <div><label>N° SIGMA</label><input name="proc_numSigma" /></div>
           <div><label>Alma</label><select name="proc_alma"><option value="">Selecione...</option>${almOpts}</select></div>
           <div><label>N° Raias</label><input type="number" min="0" name="proc_numRaias" /></div>
           <div><label>Sentido das Raias</label><select name="proc_sentidoRaias"><option value="">Selecione...</option>${sentOpts}</select></div>
@@ -2677,6 +2725,7 @@ function buildCamposTransferencia(armasOpts, tipo) {
           <div><label>Bairro</label><input name="proc_bairroComercialAdicional" /></div>
         </div>
       </div>
+      </div><!-- /proc-vendedor-manual -->
     </div>
   ${isMesmoTitular ? '</div>' : ''}</div></div>`;
 }
@@ -2689,6 +2738,44 @@ function onMesmoTitularRadio(value) {
 function onClienteVendeRadio(value) {
   document.getElementById('proc-vende').style.display  = value === 'sim' ? '' : 'none';
   document.getElementById('proc-compra').style.display = value === 'nao' ? '' : 'none';
+}
+
+async function onCompradorSistemaChange(value) {
+  const cad = document.getElementById('proc-comprador-cadastrado');
+  const man = document.getElementById('proc-comprador-manual');
+  if (cad) cad.style.display = value === 'sim' ? '' : 'none';
+  if (man) man.style.display = value === 'nao' ? '' : 'none';
+  if (value === 'sim') await carregarClientesSelector('sel-comprador-cliente');
+}
+
+async function onVendedorSistemaChange(value) {
+  const cad = document.getElementById('proc-vendedor-cadastrado');
+  const man = document.getElementById('proc-vendedor-manual');
+  if (cad) cad.style.display = value === 'sim' ? '' : 'none';
+  if (man) man.style.display = value === 'nao' ? '' : 'none';
+  if (value === 'sim') await carregarClientesSelector('sel-vendedor-cliente');
+}
+
+async function carregarClientesSelector(selectorId) {
+  const sel = document.getElementById(selectorId);
+  if (!sel) return;
+  try {
+    const clientes = await App.getClientes();
+    sel.innerHTML = '<option value="">Selecione...</option>' +
+      clientes.map(c => `<option value="${c.id}" data-nome="${esc(c.Title||'')}">${esc(c.Title||'—')} — ${esc(c.CPF||'')}</option>`).join('');
+  } catch(e) { sel.innerHTML = '<option value="">Erro ao carregar</option>'; }
+}
+
+async function carregarArmasSelector(clienteId, selectorId) {
+  const sel = document.getElementById(selectorId);
+  if (!sel) return;
+  if (!clienteId) { sel.innerHTML = '<option value="">Selecione o vendedor primeiro...</option>'; return; }
+  try {
+    const todasArmas = await App.getArmas();
+    const armas = todasArmas.filter(a => String(a.ClienteId) === String(clienteId));
+    sel.innerHTML = '<option value="">Selecione...</option>' +
+      armas.map(a => `<option value="${a.id}|${a.ClienteId}|${esc(a.Especie||'')}|${esc(a.Calibre||'')}">${esc(a.Especie||'')} ${esc(a.Calibre||'')} ${esc(a.Marca||'')} — Série: ${esc(a.NumeroSerie||'')}</option>`).join('');
+  } catch(e) { sel.innerHTML = '<option value="">Erro ao carregar</option>'; }
 }
 
 function renderChecklistForm(items) {
@@ -3385,6 +3472,7 @@ async function renderProcessoDetalhe(id) {
               <div class="checklist-item ${item.concluido?'done':''}" id="clp-${i}">
                 <input type="checkbox" ${item.concluido?'checked':''} onchange="atualizarChecklistItem('${id}',${i},this.checked,document.getElementById('clpobs-${i}').value)" />
                 <div class="checklist-nome" style="display:flex;align-items:center;gap:6px">
+                  <span style="min-width:22px;font-weight:600;color:var(--text-muted);flex-shrink:0">${i+1}.</span>
                   <span>${esc(item.nome)}</span>
                   ${certCfg      ? `<button onclick="abrirCertidao('${certCfg.keyword}')" ${btnStyle} title="Abrir site e copiar dados"><i class="bi bi-box-arrow-up-right"></i> Emitir</button>` : ''}
                   ${temReqSINARM ? `<button onclick="window.open('https://servicos.dpf.gov.br/sinarm-internet/faces/publico/incluirReqRegistroArmaFogo/consultarRequerimentoRegistro.seam','_blank')" ${btnStyle} title="Abrir site do SINARM"><i class="bi bi-box-arrow-up-right"></i> Acessar</button>` : ''}
@@ -3542,6 +3630,29 @@ async function deferirProcesso(id) {
   const p = window._processoDetalhe;
   if (!p) return;
 
+  // Validação: N° Protocolo e GRU Paga são obrigatórios
+  const faltando = [];
+  if (!p.NumeroProtocolo) faltando.push('N° de Protocolo');
+  if (!p.GruPaga)         faltando.push('GRU Paga');
+  if (faltando.length) {
+    const aviso = document.createElement('div');
+    aviso.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center';
+    aviso.innerHTML = `
+      <div style="background:#fff;border-radius:10px;padding:24px;max-width:400px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.2)">
+        <h3 style="margin:0 0 12px;font-size:16px;color:#b45309"><i class="bi bi-exclamation-triangle-fill me-2"></i>Não é possível deferir</h3>
+        <p style="font-size:13px;color:#374151;margin:0 0 8px">Preencha os seguintes campos antes de deferir o processo:</p>
+        <ul style="font-size:13px;color:#374151;margin:0 0 16px;padding-left:20px">
+          ${faltando.map(f => `<li><strong>${f}</strong></li>`).join('')}
+        </ul>
+        <div style="text-align:right">
+          <button onclick="this.closest('[style*=fixed]').remove()" style="background:#b45309;color:#fff;border:none;border-radius:6px;padding:8px 20px;cursor:pointer;font-size:13px;font-weight:500">Entendido</button>
+        </div>
+      </div>`;
+    document.body.appendChild(aviso);
+    aviso.addEventListener('click', e => { if (e.target === aviso) aviso.remove(); });
+    return;
+  }
+
   // Popup de confirmação com data
   const modal = document.createElement('div');
   modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center';
@@ -3593,7 +3704,7 @@ async function deferirProcesso(id) {
             Modelo:            dados.modeloArma        || dados.modelo || '',
             NumeroSerie:       dados.serieArma         || '',
             NumeroSIGMA:       dados.numSigma          || '',
-            AtividadeCadastrada: dados.acervo          || '',
+            AtividadeCadastrada: tipo === 'Aquisição de Arma PF' ? 'PF Defesa Pessoal' : (dados.acervo || ''),
             GrupoCalibre:      dados.grupoCalibre       || '',
             PaisFabricacao:    dados.paisFabricacao     || '',
             CapacidadeTiro:    dados.capacidadeTiros    || dados.capacidadeCartucho || '',
@@ -3611,6 +3722,111 @@ async function deferirProcesso(id) {
         } catch(e2) {
           toast('Deferido, mas não foi possível salvar a arma: ' + e2.message, 'warning');
         }
+      } else if (tipo === 'Guia de Tráfego') {
+        try {
+          const armaId = (dados.armaId || '').split('|')[0];
+          let armaDesc = '';
+          if (armaId) {
+            try { const arma = await App.graph.getItem(CONFIG.listas.armas, armaId); armaDesc = `${arma.Especie||''} ${arma.Calibre||''} ${arma.Marca||''}`.trim(); } catch(e3) {}
+          }
+          await App.graph.createItem(CONFIG.listas.documentos, {
+            ClienteId:    Number(p.ClienteId),
+            ClienteNome:  p.ClienteNome || '',
+            TipoDocumento: 'Guia de Tráfego',
+            ArmaVinculadaId:   armaId ? Number(armaId) : null,
+            ArmaVinculadaDesc: armaDesc,
+            TipoGuia:     dados.tipoGuia || '',
+            CidadeGuia:   dados.cidadeGuia || '',
+            UFGuia:       dados.ufGuia || '',
+            NomeClubeTiro:     dados.nomeClube || '',
+            CRClubeTiro:       dados.crClube || '',
+            EnderecoClubeTiro: dados.enderecoClube || '',
+          });
+          App.invalidateCache('documentos');
+          toast('Processo deferido! Guia de Tráfego adicionada aos documentos do cliente.', 'success');
+        } catch(e2) { toast('Deferido, mas não foi possível criar a Guia: ' + e2.message, 'warning'); }
+      } else if (tipo === 'Renovação de CRAF') {
+        try {
+          const armaId = (dados.armaId || '').split('|')[0];
+          let armaDesc = '';
+          if (armaId) {
+            try { const arma = await App.graph.getItem(CONFIG.listas.armas, armaId); armaDesc = `${arma.Especie||''} ${arma.Calibre||''} ${arma.Marca||''}`.trim(); } catch(e3) {}
+          }
+          await App.graph.createItem(CONFIG.listas.documentos, {
+            ClienteId:    Number(p.ClienteId),
+            ClienteNome:  p.ClienteNome || '',
+            TipoDocumento: 'CRAF',
+            ArmaVinculadaId:   armaId ? Number(armaId) : null,
+            ArmaVinculadaDesc: armaDesc,
+          });
+          App.invalidateCache('documentos');
+          toast('Processo deferido! CRAF adicionado aos documentos do cliente.', 'success');
+        } catch(e2) { toast('Deferido, mas não foi possível criar o CRAF: ' + e2.message, 'warning'); }
+      } else if (TIPOS_TRANSFERENCIA.includes(tipo)) {
+        try {
+          const mesmoTitular  = dados.mesmoTitular;
+          const clienteVende  = dados.clienteVende;
+          if (mesmoTitular === 'sim') {
+            // Transferência mesma titularidade — troca acervo
+            const armaId = (dados.armaIdMesmoTitular || '').split('|')[0];
+            const novoAcervo = dados.acervoDestinoMesmoTitular || '';
+            if (armaId && novoAcervo) {
+              await App.graph.updateItem(CONFIG.listas.armas, armaId, { AtividadeCadastrada: novoAcervo });
+              App.invalidateCache('armas');
+              toast(`Processo deferido! Acervo da arma alterado para "${novoAcervo}".`, 'success');
+            } else { toast('Processo deferido!', 'success'); }
+          } else if (clienteVende === 'sim') {
+            // Cliente vendendo: remove arma do vendedor; se comprador cadastrado, transfere para ele
+            const armaId = (dados.armaId || '').split('|')[0];
+            const compradorClienteId = dados.compradorClienteId || '';
+            if (armaId) {
+              if (compradorClienteId) {
+                const comprador = await App.graph.getItem(CONFIG.listas.clientes, compradorClienteId);
+                await App.graph.updateItem(CONFIG.listas.armas, armaId, {
+                  ClienteId:   Number(compradorClienteId),
+                  ClienteNome: comprador.Title || '',
+                  AtividadeCadastrada: dados.acervoDestinoVenda || undefined,
+                });
+                toast('Processo deferido! Arma transferida para o comprador.', 'success');
+              } else {
+                await App.graph.deleteItem(CONFIG.listas.armas, armaId);
+                toast('Processo deferido! Arma removida do perfil do cliente.', 'success');
+              }
+              App.invalidateCache('armas');
+            } else { toast('Processo deferido!', 'success'); }
+          } else if (clienteVende === 'nao') {
+            // Cliente comprando: cria arma no perfil; se vendedor cadastrado e arma selecionada, remove do vendedor
+            const camposArma = {
+              ClienteId:   Number(p.ClienteId),
+              ClienteNome: p.ClienteNome || '',
+              Especie:     dados.especie || '',
+              Calibre:     dados.calibre || '',
+              Marca:       dados.marcaArma || '',
+              Modelo:      dados.modeloArma || '',
+              NumeroSerie: dados.serieArma || '',
+              AtividadeCadastrada: dados.acervoDestino || '',
+              PaisFabricacao: dados.paisFabricacao || '',
+              CapacidadeTiro: dados.capacidadeTiros || '',
+              NumeroCanos:    dados.numeroCanos || '',
+              AlmaCano:       dados.alma || '',
+              NumeroRaias:    dados.numRaias || '',
+              SentidoRaias:   dados.sentidoRaias || '',
+              Acabamento:     dados.acabamento || '',
+              Funcionamento:  dados.funcionamento || '',
+            };
+            await App.graph.createItem(CONFIG.listas.armas, camposArma);
+            App.invalidateCache('armas');
+            const vendedorClienteId = dados.vendedorClienteId || '';
+            const armaVendedorId = (dados.armaIdVendedor || '').split('|')[0];
+            if (vendedorClienteId && armaVendedorId) {
+              await App.graph.deleteItem(CONFIG.listas.armas, armaVendedorId);
+              App.invalidateCache('armas');
+              toast('Processo deferido! Arma adicionada ao cliente e removida do vendedor.', 'success');
+            } else {
+              toast('Processo deferido! Arma adicionada ao perfil do cliente.', 'success');
+            }
+          } else { toast('Processo deferido!', 'success'); }
+        } catch(e2) { toast('Deferido, mas não foi possível atualizar armas: ' + e2.message, 'warning'); }
       } else if (tipo === 'Mudança de Acervo') {
         // Alterar acervo da arma
         try {
@@ -4640,6 +4856,83 @@ function onExtraPagoDataChange(responsavel, value) {
 }
 
 // ============================================================
+// PRAZOS DE PROCESSOS
+// ============================================================
+async function renderPrazosProcessos() {
+  document.getElementById('page-title').textContent = 'Prazos de Processos';
+  showLoading();
+  try {
+    const processos = await App.getProcessos();
+    const deferidos = processos.filter(p => p.Status === 'Deferido' && p.DataAbertura);
+
+    function diffDias(isoA, isoB) {
+      if (!isoA || !isoB) return null;
+      const a = new Date(isoA.split('T')[0]);
+      const b = new Date(isoB.split('T')[0]);
+      const d = Math.round((b - a) / 86400000);
+      return d >= 0 ? d : null;
+    }
+    function avg(arr) {
+      const v = arr.filter(x => x !== null);
+      return v.length ? Math.round(v.reduce((a, b) => a + b, 0) / v.length) : null;
+    }
+    function fmtDias(n) {
+      if (n === null) return '<span style="color:var(--text-muted)">—</span>';
+      return `<strong>${n}</strong> dia${n !== 1 ? 's' : ''}`;
+    }
+
+    const linhas = TIPOS_PROCESSO.map(tipo => {
+      const procs = deferidos.filter(p => p.TipoProcesso === tipo);
+      if (!procs.length) return { tipo, total: 0, avgAP: null, avgAD: null, avgPD: null };
+      return {
+        tipo,
+        total: procs.length,
+        avgAP: avg(procs.map(p => diffDias(p.DataAbertura, p.DataProtocoloSistema))),
+        avgAD: avg(procs.map(p => diffDias(p.DataAbertura, p.DataDeferimento))),
+        avgPD: avg(procs.map(p => diffDias(p.DataProtocoloSistema, p.DataDeferimento))),
+      };
+    }).filter(l => l.total > 0);
+
+    const el = document.getElementById('page-content');
+    el.innerHTML = `
+      <div class="card">
+        <div class="card-header">
+          <h3><i class="bi bi-clock-history me-2"></i>Prazos Médios por Tipo de Processo</h3>
+          <span style="font-size:12px;color:var(--text-muted)">${deferidos.length} processo(s) deferido(s) no total</span>
+        </div>
+        <div class="card-body" style="padding:0">
+          ${linhas.length === 0
+            ? '<div class="empty-state"><i class="bi bi-clock"></i><p>Nenhum processo deferido encontrado.</p></div>'
+            : `<div class="table-wrapper"><table>
+                <thead>
+                  <tr>
+                    <th>Tipo de Processo</th>
+                    <th style="text-align:center">Processos</th>
+                    <th style="text-align:center">Abertura → Protocolo</th>
+                    <th style="text-align:center">Abertura → Deferimento</th>
+                    <th style="text-align:center">Protocolo → Deferimento</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${linhas.map(l => `
+                    <tr>
+                      <td style="font-weight:600">${esc(l.tipo)}</td>
+                      <td style="text-align:center">${l.total}</td>
+                      <td style="text-align:center">${fmtDias(l.avgAP)}</td>
+                      <td style="text-align:center">${fmtDias(l.avgAD)}</td>
+                      <td style="text-align:center">${fmtDias(l.avgPD)}</td>
+                    </tr>`).join('')}
+                </tbody>
+              </table></div>`
+          }
+        </div>
+      </div>`;
+  } catch(e) {
+    document.getElementById('page-content').innerHTML = `<div class="empty-state"><i class="bi bi-exclamation-triangle"></i><p>Erro: ${esc(e.message)}</p></div>`;
+  } finally { hideLoading(); }
+}
+
+// ============================================================
 // VALORES DOS PROCESSOS (restrito a Matheus e Simone)
 // ============================================================
 async function renderValoresProcessos() {
@@ -5161,14 +5454,68 @@ async function salvarSIMAF(e, clienteId) {
       DataValidade:    fd.get('DataValidade') || null,
       NomePropriedade: fd.get('NomePropriedade') || '',
       CARPropriedade:  fd.get('CARPropriedade') || '',
+      NomeProprietario: fd.get('NomeProprietario') || '',
+      CPFProprietario: fd.get('CPFProprietario') || '',
       CidadeSimaf:     fd.get('CidadeSimaf') || '',
       UFSimaf:         (fd.get('UFSimaf') || '').toUpperCase(),
-      CPFProprietario: fd.get('CPFProprietario') || '',
     });
     await App.graph.updateItem(CONFIG.listas.clientes, clienteId, { SIMAFs: JSON.stringify(simafList) });
     App.invalidateCache('clientes');
     toast('SIMAF adicionado!', 'success');
     registrarMovimentacao('Novo SIMAF', `${fd.get('NomePropriedade')||''} — ${cliente.Title||''}`);
+    await renderClientePerfil(clienteId, 'ibama');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function editarSIMAF(clienteId, index) {
+  showLoading();
+  try {
+    const cliente = await App.graph.getItem(CONFIG.listas.clientes, clienteId);
+    const simafList = JSON.parse(cliente.SIMAFs || '[]');
+    const s = simafList[index];
+    if (!s) return;
+    const wrap = document.getElementById(`simaf-edit-wrap-${clienteId}`);
+    if (!wrap) return;
+    wrap.style.display = '';
+    wrap.innerHTML = `
+      <form onsubmit="salvarEdicaoSIMAF(event,'${clienteId}',${index})">
+        <div style="font-size:13px;font-weight:700;margin-bottom:10px;color:var(--accent)"><i class="bi bi-pencil me-1"></i>Editando SIMAF: ${esc(s.NomePropriedade||'')}</div>
+        <div class="form-grid">
+          <div><label>Data de Validade *</label><input type="date" name="DataValidade" value="${s.DataValidade||''}" required /></div>
+          <div><label>Nome da Propriedade *</label><input name="NomePropriedade" value="${esc(s.NomePropriedade||'')}" required /></div>
+          <div><label>CAR da Propriedade</label><input name="CARPropriedade" value="${esc(s.CARPropriedade||'')}" /></div>
+          <div><label>Nome do Proprietário</label><input name="NomeProprietario" value="${esc(s.NomeProprietario||'')}" /></div>
+          <div><label>CPF do Proprietário</label><input name="CPFProprietario" value="${esc(s.CPFProprietario||'')}" oninput="this.value=fmtCPF(this.value)" maxlength="14" /></div>
+          <div><label>Cidade</label><input name="CidadeSimaf" value="${esc(s.CidadeSimaf||'')}" /></div>
+          <div><label>UF</label><input name="UFSimaf" value="${esc(s.UFSimaf||'')}" maxlength="2" style="text-transform:uppercase" /></div>
+        </div>
+        <div class="btn-group" style="margin-top:12px;margin-bottom:16px">
+          <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-check-lg"></i> Salvar Alterações</button>
+          <button type="button" class="btn btn-outline btn-sm" onclick="document.getElementById('simaf-edit-wrap-${clienteId}').style.display='none'">Cancelar</button>
+        </div>
+      </form>`;
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function salvarEdicaoSIMAF(e, clienteId, index) {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  showLoading();
+  try {
+    const cliente = await App.graph.getItem(CONFIG.listas.clientes, clienteId);
+    const simafList = JSON.parse(cliente.SIMAFs || '[]');
+    simafList[index] = {
+      DataValidade:    fd.get('DataValidade') || null,
+      NomePropriedade: fd.get('NomePropriedade') || '',
+      CARPropriedade:  fd.get('CARPropriedade') || '',
+      NomeProprietario: fd.get('NomeProprietario') || '',
+      CPFProprietario: fd.get('CPFProprietario') || '',
+      CidadeSimaf:     fd.get('CidadeSimaf') || '',
+      UFSimaf:         (fd.get('UFSimaf') || '').toUpperCase(),
+    };
+    await App.graph.updateItem(CONFIG.listas.clientes, clienteId, { SIMAFs: JSON.stringify(simafList) });
+    App.invalidateCache('clientes');
+    toast('SIMAF atualizado!', 'success');
     await renderClientePerfil(clienteId, 'ibama');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }

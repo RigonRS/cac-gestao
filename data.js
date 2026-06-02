@@ -64,6 +64,7 @@ const CHECKLIST_TRANSFERENCIA = [
 
 const CHECKLIST_TRANSFERENCIA_SIGMA_SIGMA = [
   ...CHECKLIST_TRANSFERENCIA,
+  'Termo de Transferência',
   'Autorização de Caça'
 ];
 
