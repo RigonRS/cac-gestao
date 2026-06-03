@@ -64,7 +64,6 @@ const CHECKLIST_TRANSFERENCIA = [
 
 const CHECKLIST_TRANSFERENCIA_SIGMA_SIGMA = [
   ...CHECKLIST_TRANSFERENCIA,
-  'Termo de Transferência',
   'Autorização de Caça'
 ];
 
@@ -160,6 +159,8 @@ const COLUMNS_CLIENTES = [
   _text('Nacionalidade'), _text('Naturalidade'), _text('UFNaturalidade'),
   _text('Profissao'), _text('Celular'), _text('Email'),
   _text('NomeMae'), _text('NomePai'), _text('Categoria'),
+  _date('ValidadeAvaliPsi'), _date('ValidadeTesteTiro'),
+  _text('NaoRenovarCTF'),
   _text('CEP1'), _text('Endereco1'), _text('Numero1'),
   _text('Complemento1'), _text('Bairro1'), _text('Cidade1'), _text('UF1Endereco'),
   _text('CEP2'), _text('Endereco2'), _text('Numero2'),

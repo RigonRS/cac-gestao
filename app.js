@@ -785,8 +785,19 @@ async function renderClienteForm(id = null, importParams = {}) {
         <div class="form-grid">
           <div><label>Data de Validade CTF</label><input type="date" name="DataValidadeCTF" value="${dateVal('DataValidadeCTF')}" /></div>
         </div>
+        <input type="hidden" name="NaoRenovarCTF" value="${val('NaoRenovarCTF')}" />
       </div>
     </div>
+    </div>
+
+    <div class="form-section">
+      <div class="form-section-title">Avaliações</div>
+      <div class="form-body">
+        <div class="form-grid">
+          <div><label>Validade Avaliação Psicológica</label><input type="date" name="ValidadeAvaliPsi" value="${dateVal('ValidadeAvaliPsi')}" /></div>
+          <div><label>Validade Teste de Tiro</label><input type="date" name="ValidadeTesteTiro" value="${dateVal('ValidadeTesteTiro')}" /></div>
+        </div>
+      </div>
     </div>
 
     <div class="form-section">
@@ -890,7 +901,10 @@ async function salvarCliente(e, id) {
     NumeroFiliacao:   fd.get('NumeroFiliacao') || null,
     DataFiliacao:     fd.get('DataFiliacao') || null,
     Categoria:        cats.join(','),
-    DataValidadeCTF:  fd.get('DataValidadeCTF') || null,
+    DataValidadeCTF:    fd.get('DataValidadeCTF') || null,
+    NaoRenovarCTF:      fd.get('NaoRenovarCTF') || null,
+    ValidadeAvaliPsi:   fd.get('ValidadeAvaliPsi') || null,
+    ValidadeTesteTiro:  fd.get('ValidadeTesteTiro') || null,
     CEP1:             fd.get('CEP1'),
     Endereco1:        toTitleCase(fd.get('Endereco1')),
     Numero1:          fd.get('Numero1'),
@@ -1009,6 +1023,13 @@ function renderPerfilDados(c) {
       </div></div>
     </div>
     <div class="form-section">
+      <div class="form-section-title">Avaliações</div>
+      <div class="form-body"><div class="info-grid">
+        ${dateRow('Validade Avaliação Psicológica', 'ValidadeAvaliPsi')}
+        ${dateRow('Validade Teste de Tiro', 'ValidadeTesteTiro')}
+      </div></div>
+    </div>
+    <div class="form-section">
       <div class="form-section-title">CR e Categorias</div>
       <div class="form-body"><div class="info-grid">
         ${row('N° CR', c.NumeroCR)} ${dateRow('Validade CR', 'DataValidadeCR')}
@@ -1059,9 +1080,15 @@ function renderPerfilIBAMA(c) {
       <div class="form-body"><div class="info-grid">
         <div class="info-item"><label>Data de Validade CTF</label>
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-            <div class="value ${!c.DataValidadeCTF?'empty':''}">${c.DataValidadeCTF ? fmtDate(c.DataValidadeCTF.split('T')[0]) : 'Não informado'}</div>
-            <button class="btn btn-primary btn-sm" onclick="renovarCTF('${c.id}')"><i class="bi bi-arrow-clockwise"></i> Renovar +3m</button>
+            <div class="value ${!c.DataValidadeCTF?'empty':''}">${c.DataValidadeCTF ? fmtDate(c.DataValidadeCTF.split('T')[0]) : (c.NaoRenovarCTF === 'sim' ? '<span style="color:#dc2626;font-weight:600">Não Renovar</span>' : 'Não informado')}</div>
+            <button class="btn btn-primary btn-sm" onclick="renovarCTF('${c.id}')" ${c.NaoRenovarCTF === 'sim' ? 'disabled style="opacity:0.4;cursor:not-allowed"' : ''}><i class="bi bi-arrow-clockwise"></i> Renovar +3m</button>
             <a href="https://servicos.ibama.gov.br/ctf/sistema.php" target="_blank" class="btn btn-outline btn-sm"><i class="bi bi-box-arrow-up-right me-1"></i>Acessar Site do IBAMA</a>
+          </div>
+          <div style="margin-top:10px">
+            <label class="checkbox-item" style="font-size:13px">
+              <input type="checkbox" ${c.NaoRenovarCTF === 'sim' ? 'checked' : ''} onchange="toggleNaoRenovarCTF('${c.id}',this.checked)" />
+              Não Renovar
+            </label>
           </div>
         </div>
       </div></div>
@@ -2969,7 +2996,7 @@ async function gerarAnexoC() {
     const hoje = new Date().toISOString().split('T')[0];
     const html = `
       <h2>DECLARAÇÃO DE INEXISTÊNCIA DE INQUÉRITOS POLICIAIS<br>OU PROCESSOS CRIMINAIS</h2>
-      <p>Eu, <strong>${esc(d.nome)}</strong>, ${esc(usaComp ? 'Brasileiro(a)' : (c.Nacionalidade||''))}, ${esc(d.profissao)}, natural de
+      <p>Eu, <strong>${esc(d.nome)}</strong>, ${esc(usaComp ? 'Brasileiro(a)' : ((c.Nacionalidade||'').toLowerCase().includes('brasil') ? 'Brasileiro(a)' : (c.Nacionalidade||'')))}, ${esc(d.profissao)}, natural de
       ${esc(d.nat)}${d.ufNat ? '/' + esc(d.ufNat) : ''}, nascido em ${esc(d.dataNasc)}, com endereço em
       ${esc(endFmt)}, portador do RG ${esc(d.rg)}${d.orgao ? ' ' + esc(d.orgao) : ''}${d.ufRG ? '/' + esc(d.ufRG) : ''} e CPF nº ${esc(d.cpf)},
       declaro que não existem inquéritos policiais ou processos criminais em meu nome, tanto no estado de domicílio quanto nos demais entes federativos.</p>
@@ -2996,7 +3023,7 @@ async function gerarDSA(usarComprador) {
     const hoje = new Date().toISOString().split('T')[0];
     const html = `
       <h2>DECLARAÇÃO DE SEGURANÇA DO ACERVO (DSA) — ENDEREÇO DE ACERVO</h2>
-      <p>Eu, <strong>${esc(d.nome)}</strong>, ${esc(usaComp ? 'Brasileiro(a)' : (c.Nacionalidade||''))}, ${esc(d.profissao)}, natural de
+      <p>Eu, <strong>${esc(d.nome)}</strong>, ${esc(usaComp ? 'Brasileiro(a)' : ((c.Nacionalidade||'').toLowerCase().includes('brasil') ? 'Brasileiro(a)' : (c.Nacionalidade||'')))}, ${esc(d.profissao)}, natural de
       ${esc(d.nat)}${d.ufNat ? '/' + esc(d.ufNat) : ''}, nascido em ${esc(d.dataNasc)}, com endereço em
       ${esc(endFmt)}, portador do RG ${esc(d.rg)}${d.orgao ? ' ' + esc(d.orgao) : ''}${d.ufRG ? '/' + esc(d.ufRG) : ''} e CPF nº ${esc(d.cpf)},
       DECLARO, para fins de <strong>${esc(p.TipoProcesso)} NA POLÍCIA FEDERAL</strong> que o local de guarda do meu acervo de
@@ -3023,7 +3050,7 @@ async function gerarProcuracao() {
     const hoje = new Date().toISOString().split('T')[0];
     const html = `
       <h1>PROCURAÇÃO</h1>
-      <p><strong>Outorgante</strong> Eu, <strong>${esc(d.nome)}</strong>, ${esc(usaComp ? 'Brasileiro(a)' : (c.Nacionalidade||''))}, ${esc(d.profissao)},
+      <p><strong>Outorgante</strong> Eu, <strong>${esc(d.nome)}</strong>, ${esc(usaComp ? 'Brasileiro(a)' : ((c.Nacionalidade||'').toLowerCase().includes('brasil') ? 'Brasileiro(a)' : (c.Nacionalidade||'')))}, ${esc(d.profissao)},
       natural de ${esc(d.nat)}${d.ufNat ? '/' + esc(d.ufNat) : ''}, nascido em ${esc(d.dataNasc)},
       com endereço em ${esc(endFmt)},
       portador do RG ${esc(d.rg)}${d.orgao ? ' ' + esc(d.orgao) : ''}${d.ufRG ? '/' + esc(d.ufRG) : ''} e CPF nº ${esc(d.cpf)}.</p>
@@ -3367,7 +3394,41 @@ async function renderProcessoDetalhe(id) {
       try { _clubeDetalhe = await App.graph.getItem(CONFIG.listas.clubes, _clienteDetalhe.ClubeId); } catch(e) {}
     }
   } catch(e) {}
-  const dadosEsp  = JSON.parse(processo.DadosEspecificosJSON || '{}');
+  const dadosEspRaw = JSON.parse(processo.DadosEspecificosJSON || '{}');
+
+  // Pré-processa dadosEsp: resolve IDs de cliente para nomes e IDs de arma para descrição
+  const dadosEsp = {};
+  {
+    const _resolveArma = async (armaIdStr) => {
+      if (!armaIdStr || !armaIdStr.includes('|')) return armaIdStr;
+      const parts = armaIdStr.split('|');
+      try {
+        const a = await App.graph.getItem(CONFIG.listas.armas, parts[0]);
+        return [a.Especie||parts[2], a.Marca||'', a.Modelo||'', a.Calibre||parts[3]].filter(Boolean).join(' ').trim();
+      } catch(e) {
+        return [parts[2], parts[3]].filter(Boolean).join(' ') || armaIdStr;
+      }
+    };
+    for (const [k, v] of Object.entries(dadosEspRaw)) {
+      if (!v && v !== 0) continue;
+      if (k === 'compradorClienteId') {
+        // nomeComprador já está em dadosEspRaw; só ignora o ID
+        continue;
+      }
+      if (k === 'vendedorClienteId') {
+        if (!dadosEspRaw.nomeVendedor) {
+          try { const cli = await App.graph.getItem(CONFIG.listas.clientes, v); dadosEsp['nomeVendedor'] = cli.Title || String(v); } catch(e) { dadosEsp['nomeVendedor'] = String(v); }
+        }
+        continue;
+      }
+      if (k === 'armaId' || k === 'armaIdVendedor' || k === 'armaIdMesmoTitular') {
+        dadosEsp[k] = await _resolveArma(v);
+        continue;
+      }
+      dadosEsp[k] = v;
+    }
+  }
+
   const b = statusBadge(processo.Status);
 
   const progTotal    = checklist.length;
@@ -3383,6 +3444,8 @@ async function renderProcessoDetalhe(id) {
   const fnRestituir = jaDeferido ? 'alertaJaDeferido' : 'restituirProcesso';
   const fnRegistrar = jaDeferido ? 'alertaJaDeferido' : 'registrarStatusHistorico';
   const fnDeferir   = jaDeferido ? 'alertaJaDeferido' : 'deferirProcesso';
+
+  const gruPagaSalva = JSON.parse(processo.HistoricoStatus || '[]').some(h => (h.status||'').includes('Pagamento GRU'));
 
   const celular = (processo.ClienteNome ? '' : '');
 
@@ -3429,13 +3492,13 @@ async function renderProcessoDetalhe(id) {
           <div class="card-body">
             <div class="info-grid">
               ${Object.entries(dadosEsp).filter(([,v]) => v).map(([k,v]) => {
-                let displayV = v;
-                if (k === 'armaId' && v && v.includes('|')) {
-                  const parts = v.split('|');
-                  displayV = parts.length >= 4 ? `${parts[2]} ${parts[3]}`.trim() : (parts[2] || v);
-                }
-                const label = k === 'armaId' ? 'Arma' : esc(k.replace(/([A-Z])/g,' $1').trim());
-                return `<div class="info-item"><label>${label}</label><div class="value">${esc(displayV)}</div></div>`;
+                const LABELS_DADOS = {
+                  armaId: 'Arma', armaIdVendedor: 'Arma do Vendedor', armaIdMesmoTitular: 'Arma',
+                  nomeComprador: 'Nome do Comprador', nomeVendedor: 'Nome do Vendedor',
+                  compradorSistema: 'Comprador no Sistema', vendedorSistema: 'Vendedor no Sistema',
+                };
+                const label = LABELS_DADOS[k] || esc(k.replace(/([A-Z])/g,' $1').trim());
+                return `<div class="info-item"><label>${label}</label><div class="value">${esc(String(v))}</div></div>`;
               }).join('')}
             </div>
           </div>
@@ -3511,7 +3574,15 @@ async function renderProcessoDetalhe(id) {
             <div id="container-processo-futuro" style="margin-top:8px;padding:10px;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:8px">
               <div style="font-size:12px;color:#7c3aed"><i class="bi bi-hourglass me-1"></i>Aguardando: <strong>${esc(processo.ProcessoFuturoNome||'—')}</strong></div>
             </div>` : ''}
-            <div style="margin-top:12px">
+            <div style="margin-top:12px" id="gru-paga-wrapper">
+              ${gruPagaSalva ? `
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+                <i class="bi bi-check-circle-fill" style="color:#16a34a"></i>
+                <span style="font-size:13px;font-weight:600;color:#16a34a">GRU Paga</span>
+              </div>
+              ${processo.DataPagamentoGRU ? `<div style="font-size:12px;color:var(--text-muted)">Data: <strong>${fmtDate(processo.DataPagamentoGRU.split('T')[0])}</strong></div>` : ''}
+              <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#16a34a;margin-top:6px"><i class="bi bi-lock-fill"></i> Pagamento registrado</div>
+              ` : `
               <label class="checkbox-item" style="font-size:13px;font-weight:600">
                 <input type="checkbox" id="chk-gru-paga" ${processo.GruPaga ? 'checked' : ''} onchange="onGruPagaChange('${id}',this.checked)" />
                 GRU Paga
@@ -3521,6 +3592,7 @@ async function renderProcessoDetalhe(id) {
                 <input type="date" id="input-gru-data" value="${processo.DataPagamentoGRU ? processo.DataPagamentoGRU.split('T')[0] : ''}" style="margin-top:4px" onchange="salvarGRU('${id}',this.value)" />
                 <button type="button" onclick="salvarPagamentoGRUHistorico('${id}')" class="btn btn-outline btn-sm" style="margin-top:6px;width:100%"><i class="bi bi-floppy me-1"></i>Salvar Pagamento</button>
               </div>
+              `}
             </div>
             ${processo.Restituido ? `<div style="margin-top:12px;padding:12px;background:#fdf4ff;border:1px solid #d8b4fe;border-radius:8px">
               <div style="font-size:12px;font-weight:700;color:#9333ea;margin-bottom:8px"><i class="bi bi-arrow-return-left me-1"></i>Processo Restituído</div>
@@ -3556,13 +3628,21 @@ async function renderProcessoDetalhe(id) {
         <div class="card" style="margin-top:16px">
           <div class="card-header"><h3><i class="bi bi-calendar3 me-2"></i>Datas</h3></div>
           <div class="card-body">
-            <form onsubmit="salvarDatasProcesso(event,'${id}')">
+            ${processo.NumeroProtocolo ? `
+            <div id="protocolo-travado" style="padding:8px 0">
+              <div style="font-size:12px;color:var(--text-muted);margin-bottom:2px">N° Protocolo</div>
+              <div style="font-weight:600;margin-bottom:8px">${esc(processo.NumeroProtocolo)}</div>
+              <div style="font-size:12px;color:var(--text-muted);margin-bottom:2px">Data do Protocolo no Sistema</div>
+              <div style="font-weight:600;margin-bottom:8px">${processo.DataProtocoloSistema ? fmtDate(processo.DataProtocoloSistema.split('T')[0]) : '—'}</div>
+              <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#16a34a"><i class="bi bi-lock-fill"></i> Protocolo registrado</div>
+            </div>` : `
+            <form id="form-protocolo" onsubmit="salvarDatasProcesso(event,'${id}')">
               <label style="font-size:12px">N° Protocolo</label>
-              <input type="text" inputmode="numeric" pattern="[0-9]*" name="NumeroProtocolo" value="${esc(processo.NumeroProtocolo||'')}" placeholder="Apenas números" style="margin-bottom:10px" oninput="this.value=this.value.replace(/\D/g,'')" />
+              <input type="text" inputmode="numeric" pattern="[0-9]*" name="NumeroProtocolo" value="" placeholder="Apenas números" style="margin-bottom:10px" oninput="this.value=this.value.replace(/\\D/g,'')" />
               <label style="font-size:12px">Data do Protocolo no Sistema</label>
-              <input type="date" name="DataProtocoloSistema" value="${processo.DataProtocoloSistema?processo.DataProtocoloSistema.split('T')[0]:''}" style="margin-bottom:14px" />
+              <input type="date" name="DataProtocoloSistema" value="" style="margin-bottom:14px" />
               <button type="submit" class="btn btn-outline" style="width:100%"><i class="bi bi-floppy"></i> Salvar Protocolo</button>
-            </form>
+            </form>`}
           </div>
         </div>
 
@@ -3575,11 +3655,15 @@ async function renderProcessoDetalhe(id) {
       </div>
     </div>
 
-    ${processo.Observacoes ? `
     <div class="card" style="margin-top:20px">
       <div class="card-header"><h3><i class="bi bi-chat-text me-2"></i>Observações</h3></div>
-      <div class="card-body"><p style="margin:0;font-size:13px;white-space:pre-wrap">${esc(processo.Observacoes)}</p></div>
-    </div>` : ''}`;
+      <div class="card-body">
+        <textarea id="obs-processo-textarea" rows="4" style="width:100%;box-sizing:border-box;font-size:13px;resize:vertical" placeholder="Nenhuma observação registrada...">${esc(processo.Observacoes||'')}</textarea>
+        <div style="margin-top:8px;text-align:right">
+          <button onclick="salvarObservacoesProcesso('${id}')" class="btn btn-outline btn-sm"><i class="bi bi-floppy me-1"></i>Salvar Observações</button>
+        </div>
+      </div>
+    </div>`;
 
   window._processoDetalhe = processo;
   window._clienteDetalhe  = _clienteDetalhe;
@@ -3590,6 +3674,33 @@ async function atualizarStatus(id, novoStatus) {
   if (novoStatus === 'Processo Futuro') {
     mostrarSeletorProcessoFuturo(id);
     return;
+  }
+  const statusRestritos = ['Pronto para Análise', 'Em análise'];
+  if (statusRestritos.includes(novoStatus)) {
+    const p = window._processoDetalhe;
+    const faltando = [];
+    if (!p?.NumeroProtocolo) faltando.push('N° de Protocolo');
+    if (!p?.GruPaga)         faltando.push('GRU Paga');
+    if (faltando.length) {
+      const sel = document.getElementById('sel-status');
+      if (sel) sel.value = p?.Status || '';
+      const aviso = document.createElement('div');
+      aviso.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center';
+      aviso.innerHTML = `
+        <div style="background:#fff;border-radius:10px;padding:24px;max-width:400px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.2)">
+          <h3 style="margin:0 0 12px;font-size:16px;color:#b45309"><i class="bi bi-exclamation-triangle-fill me-2"></i>Status não permitido</h3>
+          <p style="font-size:13px;color:#374151;margin:0 0 8px">Para definir o status <strong>${esc(novoStatus)}</strong> é necessário preencher:</p>
+          <ul style="font-size:13px;color:#374151;margin:0 0 16px;padding-left:20px">
+            ${faltando.map(f => `<li><strong>${f}</strong></li>`).join('')}
+          </ul>
+          <div style="text-align:right">
+            <button onclick="this.closest('[style*=fixed]').remove()" style="background:#b45309;color:#fff;border:none;border-radius:6px;padding:8px 20px;cursor:pointer;font-size:13px;font-weight:500">Entendido</button>
+          </div>
+        </div>`;
+      document.body.appendChild(aviso);
+      aviso.addEventListener('click', e => { if (e.target === aviso) aviso.remove(); });
+      return;
+    }
   }
   showLoading();
   try {
@@ -4048,8 +4159,24 @@ async function salvarDatasProcesso(e, id) {
       HistoricoStatus:      JSON.stringify(historico)
     });
     App.invalidateCache('processos');
+    if (window._processoDetalhe) {
+      window._processoDetalhe.NumeroProtocolo      = numProt;
+      window._processoDetalhe.DataProtocoloSistema = dataProt;
+    }
     const body = document.getElementById('historico-status-body');
     if (body) body.innerHTML = renderHistoricoStatus(historico, id);
+    // Trava o formulário de protocolo substituindo pelo display bloqueado
+    const formArea = document.getElementById('form-protocolo')?.closest('.card-body');
+    if (formArea) {
+      formArea.innerHTML = `
+        <div id="protocolo-travado" style="padding:8px 0">
+          <div style="font-size:12px;color:var(--text-muted);margin-bottom:2px">N° Protocolo</div>
+          <div style="font-weight:600;margin-bottom:8px">${esc(numProt)}</div>
+          <div style="font-size:12px;color:var(--text-muted);margin-bottom:2px">Data do Protocolo no Sistema</div>
+          <div style="font-weight:600;margin-bottom:8px">${dataProt ? fmtDate(dataProt) : '—'}</div>
+          <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#16a34a"><i class="bi bi-lock-fill"></i> Protocolo registrado</div>
+        </div>`;
+    }
     toast('Protocolo salvo!', 'success');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
@@ -4074,6 +4201,17 @@ async function salvarPagamento(e, id) {
     const wrapper = document.getElementById('dados-pagamento-wrapper');
     if (wrapper) wrapper.innerHTML = renderDadosPagamento(updatedProc);
     toast('Pagamento salvo!', 'success');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function salvarObservacoesProcesso(id) {
+  const obs = document.getElementById('obs-processo-textarea')?.value || '';
+  showLoading();
+  try {
+    await App.graph.updateItem(CONFIG.listas.processos, id, { Observacoes: obs || null });
+    App.invalidateCache('processos');
+    if (window._processoDetalhe) window._processoDetalhe.Observacoes = obs;
+    toast('Observações salvas!', 'success');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
@@ -4262,6 +4400,17 @@ async function salvarPagamentoGRUHistorico(id) {
     App.invalidateCache('processos');
     const body = document.getElementById('historico-status-body');
     if (body) body.innerHTML = renderHistoricoStatus(historico, id);
+    // Trava o painel de GRU
+    const wrapper = document.getElementById('gru-paga-wrapper');
+    if (wrapper) {
+      wrapper.innerHTML = `
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <i class="bi bi-check-circle-fill" style="color:#16a34a"></i>
+          <span style="font-size:13px;font-weight:600;color:#16a34a">GRU Paga</span>
+        </div>
+        ${data ? `<div style="font-size:12px;color:var(--text-muted)">Data: <strong>${fmtDate(data)}</strong></div>` : ''}
+        <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#16a34a;margin-top:6px"><i class="bi bi-lock-fill"></i> Pagamento registrado</div>`;
+    }
     toast('Pagamento GRU registrado no histórico!', 'success');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
@@ -5436,6 +5585,47 @@ async function renovarCTF(clienteId) {
     toast('CTF renovado! Nova validade: ' + fmtDate(novaValidade), 'success');
     await renderClientePerfil(clienteId, 'dados');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function toggleNaoRenovarCTF(clienteId, checked) {
+  if (checked) {
+    const modal = document.createElement('div');
+    modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center';
+    modal.innerHTML = `
+      <div style="background:#fff;border-radius:10px;padding:24px;max-width:380px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.2)">
+        <h3 style="margin:0 0 12px;font-size:16px;color:#dc2626"><i class="bi bi-x-circle me-2"></i>Não Renovar CTF</h3>
+        <p style="font-size:14px;color:#374151;margin:0 0 20px">O cliente não deseja que o CTF seja renovado?</p>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button id="btn-nao-renovar-nao" class="btn btn-outline">Não</button>
+          <button id="btn-nao-renovar-sim" style="background:#dc2626;color:#fff;border:none;border-radius:6px;padding:8px 20px;cursor:pointer;font-size:13px;font-weight:500">Sim</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', e => { if (e.target === modal) { modal.remove(); document.querySelector('[onchange*="toggleNaoRenovarCTF"]').checked = false; } });
+    document.getElementById('btn-nao-renovar-nao').onclick = () => {
+      modal.remove();
+      const chk = document.querySelector('[onchange*="toggleNaoRenovarCTF"]');
+      if (chk) chk.checked = false;
+    };
+    document.getElementById('btn-nao-renovar-sim').onclick = async () => {
+      modal.remove();
+      showLoading();
+      try {
+        await App.graph.updateItem(CONFIG.listas.clientes, clienteId, { NaoRenovarCTF: 'sim', DataValidadeCTF: null });
+        App.invalidateCache('clientes');
+        toast('CTF marcado como Não Renovar.', 'info');
+        await renderClientePerfil(clienteId, 'dados');
+      } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+    };
+  } else {
+    showLoading();
+    try {
+      await App.graph.updateItem(CONFIG.listas.clientes, clienteId, { NaoRenovarCTF: '' });
+      App.invalidateCache('clientes');
+      toast('Renovação de CTF liberada.', 'success');
+      await renderClientePerfil(clienteId, 'dados');
+    } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+  }
 }
 
 function toggleSIMAFForm(clienteId) {
