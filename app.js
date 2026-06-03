@@ -2196,7 +2196,7 @@ async function deletarProcesso(id, clienteNome) {
 async function renderProcessoForm(clienteId = null) {
   document.getElementById('page-title').textContent = 'Novo Processo';
   const clientes = await App.getClientes();
-  const clientesOpts = clientes.map(c => `<option value="${c.id}" ${String(c.id)===String(clienteId)?'selected':''}>${esc(c.Title)}</option>`).join('');
+  const clientesOpts = [...clientes].sort((a,b) => (a.Title||'').localeCompare(b.Title||'','pt-BR')).map(c => `<option value="${c.id}" ${String(c.id)===String(clienteId)?'selected':''}>${esc(c.Title)}</option>`).join('');
 
   document.getElementById('page-content').innerHTML = `
   <form id="form-processo" onsubmit="salvarProcesso(event)">
@@ -3589,7 +3589,7 @@ async function renderProcessoDetalhe(id) {
               </label>
               <div id="campo-gru-data-pag" style="display:${processo.GruPaga ? '' : 'none'};margin-top:8px">
                 <label style="font-size:12px">Data de Pagamento GRU</label>
-                <input type="date" id="input-gru-data" value="${processo.DataPagamentoGRU ? processo.DataPagamentoGRU.split('T')[0] : ''}" style="margin-top:4px" onchange="salvarGRU('${id}',this.value)" />
+                <input type="date" id="input-gru-data" value="${processo.DataPagamentoGRU ? processo.DataPagamentoGRU.split('T')[0] : ''}" style="margin-top:4px" />
                 <button type="button" onclick="salvarPagamentoGRUHistorico('${id}')" class="btn btn-outline btn-sm" style="margin-top:6px;width:100%"><i class="bi bi-floppy me-1"></i>Salvar Pagamento</button>
               </div>
               `}
@@ -3704,7 +3704,16 @@ async function atualizarStatus(id, novoStatus) {
   }
   showLoading();
   try {
-    const updates = { Status: novoStatus };
+    const proc = await App.graph.getItem(CONFIG.listas.processos, id);
+    const historico = JSON.parse(proc.HistoricoStatus || '[]');
+    const agora = new Date();
+    historico.push({
+      data:    agora.toLocaleDateString('pt-BR'),
+      hora:    agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+      status:  novoStatus,
+      usuario: App.account?.name || App.account?.username || 'Desconhecido'
+    });
+    const updates = { Status: novoStatus, HistoricoStatus: JSON.stringify(historico) };
     if (window._processoDetalhe?.ProcessoFuturoId) {
       updates.ProcessoFuturoId   = null;
       updates.ProcessoFuturoNome = null;
@@ -3714,6 +3723,8 @@ async function atualizarStatus(id, novoStatus) {
     const b = statusBadge(novoStatus);
     const badge = document.querySelector('#page-content .badge');
     if (badge) { badge.className = `badge ${b.cls}`; badge.textContent = b.txt; }
+    const histBody = document.getElementById('historico-status-body');
+    if (histBody) histBody.innerHTML = renderHistoricoStatus(historico, id);
     toast('Status atualizado!', 'success');
     if (window._processoDetalhe) window._processoDetalhe.Status = novoStatus;
     const container = document.getElementById('container-processo-futuro');
@@ -4142,6 +4153,28 @@ async function salvarDatasProcesso(e, id) {
   }
   if (!numProt) { alert('Preencha o N° Protocolo.'); return; }
   if (!dataProt) { alert('Preencha a Data do Protocolo no Sistema.'); return; }
+  const confirmar = await new Promise(resolve => {
+    const modal = document.createElement('div');
+    modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center';
+    modal.innerHTML = `
+      <div style="background:#fff;border-radius:10px;padding:24px;max-width:380px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.2)">
+        <h3 style="margin:0 0 12px;font-size:16px"><i class="bi bi-file-earmark-check me-2" style="color:#2563eb"></i>Confirmar Registro do Protocolo</h3>
+        <p style="font-size:13px;color:#374151;margin:0 0 6px">Deseja registrar o protocolo com as informações abaixo?</p>
+        <ul style="font-size:13px;color:#374151;margin:0 0 16px;padding-left:20px">
+          <li><strong>N° Protocolo:</strong> ${esc(numProt)}</li>
+          <li><strong>Data:</strong> ${fmtDate(dataProt)}</li>
+        </ul>
+        <div style="display:flex;justify-content:flex-end;gap:10px">
+          <button id="btn-prot-nao" style="background:#f3f4f6;color:#374151;border:1px solid #d1d5db;border-radius:6px;padding:8px 18px;cursor:pointer;font-size:13px">Cancelar</button>
+          <button id="btn-prot-sim" style="background:#2563eb;color:#fff;border:none;border-radius:6px;padding:8px 18px;cursor:pointer;font-size:13px;font-weight:600">Confirmar</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', ev => { if (ev.target === modal) { modal.remove(); resolve(false); } });
+    document.getElementById('btn-prot-nao').onclick = () => { modal.remove(); resolve(false); };
+    document.getElementById('btn-prot-sim').onclick = () => { modal.remove(); resolve(true); };
+  });
+  if (!confirmar) return;
   showLoading();
   try {
     const proc = await App.graph.getItem(CONFIG.listas.processos, id);
@@ -4366,11 +4399,11 @@ async function onGruPagaChange(id, checked) {
   showLoading();
   try {
     await App.graph.updateItem(CONFIG.listas.processos, id, {
-      GruPaga:         checked,
-      DataPagamentoGRU: checked ? (document.getElementById('input-gru-data')?.value || null) : null
+      GruPaga:          checked,
+      DataPagamentoGRU: checked ? null : null
     });
     App.invalidateCache('processos');
-    toast(checked ? 'GRU marcada como paga!' : 'GRU desmarcada.', 'success');
+    toast(checked ? 'GRU marcada — clique em Salvar Pagamento para confirmar.' : 'GRU desmarcada.', 'info');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
@@ -4384,9 +4417,28 @@ async function salvarGRU(id, data) {
 }
 
 async function salvarPagamentoGRUHistorico(id) {
+  const data = document.getElementById('input-gru-data')?.value || '';
+  const dataFmt = data ? fmtDate(data) : 'sem data';
+  const confirmar = await new Promise(resolve => {
+    const modal = document.createElement('div');
+    modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center';
+    modal.innerHTML = `
+      <div style="background:#fff;border-radius:10px;padding:24px;max-width:380px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.2)">
+        <h3 style="margin:0 0 12px;font-size:16px"><i class="bi bi-cash-coin me-2" style="color:#16a34a"></i>Confirmar Pagamento da GRU</h3>
+        <p style="font-size:13px;color:#374151;margin:0 0 16px">Deseja confirmar o pagamento da GRU${data ? ' com data <strong>' + dataFmt + '</strong>' : ''}?</p>
+        <div style="display:flex;justify-content:flex-end;gap:10px">
+          <button id="btn-gru-nao" style="background:#f3f4f6;color:#374151;border:1px solid #d1d5db;border-radius:6px;padding:8px 18px;cursor:pointer;font-size:13px">Cancelar</button>
+          <button id="btn-gru-sim" style="background:#16a34a;color:#fff;border:none;border-radius:6px;padding:8px 18px;cursor:pointer;font-size:13px;font-weight:600">Confirmar</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', e => { if (e.target === modal) { modal.remove(); resolve(false); } });
+    document.getElementById('btn-gru-nao').onclick = () => { modal.remove(); resolve(false); };
+    document.getElementById('btn-gru-sim').onclick = () => { modal.remove(); resolve(true); };
+  });
+  if (!confirmar) return;
   showLoading();
   try {
-    const data = document.getElementById('input-gru-data')?.value || '';
     const proc = await App.graph.getItem(CONFIG.listas.processos, id);
     const historico = JSON.parse(proc.HistoricoStatus || '[]');
     const agora = new Date();
@@ -4396,11 +4448,15 @@ async function salvarPagamentoGRUHistorico(id) {
       status:  `Pagamento GRU${data ? ' — ' + fmtDate(data) : ''}`,
       usuario: App.account?.name || App.account?.username || 'Desconhecido'
     });
-    await App.graph.updateItem(CONFIG.listas.processos, id, { HistoricoStatus: JSON.stringify(historico) });
+    await App.graph.updateItem(CONFIG.listas.processos, id, {
+      GruPaga:          true,
+      DataPagamentoGRU: data || null,
+      HistoricoStatus:  JSON.stringify(historico)
+    });
     App.invalidateCache('processos');
+    if (window._processoDetalhe) { window._processoDetalhe.GruPaga = true; window._processoDetalhe.DataPagamentoGRU = data || null; }
     const body = document.getElementById('historico-status-body');
     if (body) body.innerHTML = renderHistoricoStatus(historico, id);
-    // Trava o painel de GRU
     const wrapper = document.getElementById('gru-paga-wrapper');
     if (wrapper) {
       wrapper.innerHTML = `
@@ -4411,7 +4467,7 @@ async function salvarPagamentoGRUHistorico(id) {
         ${data ? `<div style="font-size:12px;color:var(--text-muted)">Data: <strong>${fmtDate(data)}</strong></div>` : ''}
         <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#16a34a;margin-top:6px"><i class="bi bi-lock-fill"></i> Pagamento registrado</div>`;
     }
-    toast('Pagamento GRU registrado no histórico!', 'success');
+    toast('Pagamento GRU registrado!', 'success');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
@@ -5583,7 +5639,7 @@ async function renovarCTF(clienteId) {
     await App.graph.updateItem(CONFIG.listas.clientes, clienteId, { DataValidadeCTF: novaValidade });
     App.invalidateCache('clientes');
     toast('CTF renovado! Nova validade: ' + fmtDate(novaValidade), 'success');
-    await renderClientePerfil(clienteId, 'dados');
+    await renderClientePerfil(clienteId, 'ibama');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
@@ -5614,7 +5670,7 @@ async function toggleNaoRenovarCTF(clienteId, checked) {
         await App.graph.updateItem(CONFIG.listas.clientes, clienteId, { NaoRenovarCTF: 'sim', DataValidadeCTF: null });
         App.invalidateCache('clientes');
         toast('CTF marcado como Não Renovar.', 'info');
-        await renderClientePerfil(clienteId, 'dados');
+        await renderClientePerfil(clienteId, 'ibama');
       } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
     };
   } else {
@@ -5623,7 +5679,7 @@ async function toggleNaoRenovarCTF(clienteId, checked) {
       await App.graph.updateItem(CONFIG.listas.clientes, clienteId, { NaoRenovarCTF: '' });
       App.invalidateCache('clientes');
       toast('Renovação de CTF liberada.', 'success');
-      await renderClientePerfil(clienteId, 'dados');
+      await renderClientePerfil(clienteId, 'ibama');
     } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
   }
 }
