@@ -24,7 +24,8 @@ const TIPOS_PROCESSO = [
   'Transferência de Arma SIGMA x SINARM',
   'Transferência de Arma SINARM x SINARM',
   'Transferência de Arma SIGMA x SIGMA',
-  'Transferência de Arma SINARM x SIGMA'
+  'Transferência de Arma SINARM x SIGMA',
+  'Cancelamento de CR'
 ];
 
 const TIPOS_TRANSFERENCIA = [
@@ -117,7 +118,7 @@ const CHECKLISTS = {
   'Inclusão de Atividade':  CHECKLIST_CR_INCLUSAO_RENOVCRAF,
   'Exclusão de Atividade':  ['Documento de Identificação'],
   'Mudança de Acervo': [
-    'Documento de Identificação','Certidão Justiça Federal',
+    'Documento de Identificação','CRAF da arma','Certidão Justiça Federal',
     'Certidão Justiça Estadual','Certidão Justiça Militar',
     'Certidão Justiça Eleitoral','Comprovante de Ocupação',
     'Comprovante de Residência','Anexo C','DSA','CTF + SIMAF',
@@ -128,7 +129,8 @@ const CHECKLISTS = {
   'Transferência de Arma SIGMA x SINARM':  CHECKLIST_TRANSFERENCIA_SIGMA_SINARM,
   'Transferência de Arma SINARM x SINARM': CHECKLIST_TRANSFERENCIA_SINARM_SINARM,
   'Transferência de Arma SIGMA x SIGMA':   CHECKLIST_TRANSFERENCIA_SIGMA_SIGMA,
-  'Transferência de Arma SINARM x SIGMA':  CHECKLIST_TRANSFERENCIA
+  'Transferência de Arma SINARM x SIGMA':  CHECKLIST_TRANSFERENCIA,
+  'Cancelamento de CR': ['Documento de identificação']
 };
 
 function getChecklist(tipoProcesso, subTipo = null) {
