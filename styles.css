@@ -33,10 +33,10 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #1a2e44 0%, #2e5080 100%);
+  background: #518DD9;
 }
 .login-card {
-  background: white;
+  background: #233041;
   border-radius: 12px;
   padding: 40px 40px 48px;
   text-align: center;
@@ -44,21 +44,21 @@ body {
   box-shadow: 0 20px 60px rgba(0,0,0,.5);
 }
 .login-card .logo { margin-bottom: 12px; line-height: 1; }
-.login-card h1 { font-size: 22px; font-weight: 700; margin: 0 0 4px; color: #1a2e44; }
-.login-card p  { color: var(--text-muted); margin: 0 0 32px; font-size: 13px; }
+.login-card h1 { font-size: 22px; font-weight: 700; margin: 0 0 4px; color: #ffffff; }
+.login-card p  { color: rgba(255,255,255,.6); margin: 0 0 32px; font-size: 13px; }
 .btn-ms {
   display: flex; align-items: center; justify-content: center; gap: 10px;
   width: 100%; padding: 12px 20px;
-  background: #0078d4; color: white; border: none; border-radius: 6px;
+  background: #377D22; color: white; border: none; border-radius: 6px;
   font-size: 14px; font-weight: 600; cursor: pointer; transition: background .2s;
 }
-.btn-ms:hover { background: #006ac1; }
+.btn-ms:hover { background: #2d6a1b; }
 
 /* ---- SETUP (criação inicial das listas) ---- */
 #setup-screen {
   min-height: 100vh;
   display: flex; align-items: center; justify-content: center;
-  background: linear-gradient(135deg, #1a2e44 0%, #2e5080 100%);
+  background: #518DD9;
 }
 .setup-card {
   background: white; border-radius: 12px; padding: 40px;

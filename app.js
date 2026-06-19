@@ -230,6 +230,7 @@ async function renderPage() {
       case 'documentos/novo':      await renderDocumentoForm(params.clienteId); break;
       case 'documentos/editar':    await renderDocumentoForm(params.clienteId, params.id); break;
       case 'processos':            await renderProcessosList(); break;
+      case 'consulta-processos':   await renderConsultaProcessos(); break;
       case 'meus-processos':       await renderMeusProcessos(); break;
       case 'anotacoes':            await renderAnotacoes(); break;
       case 'processos/novo':       await renderProcessoForm(params.clienteId); break;
@@ -490,6 +491,7 @@ const STATUS_PROCESSO = [
   'Pronto para Análise',
   'Em análise',
   'Aguardando Assinatura',
+  'Aguardando Protocolo (email)',
   'Indeferido',
   'Desistência Cliente',
 ];
@@ -511,6 +513,7 @@ const VALORES_PROCESSO = {
   'Transferência de Arma SINARM x SINARM':     1117.00,
   'Transferência de Arma SIGMA x SIGMA':       1117.00,
   'Transferência de Arma SINARM x SIGMA':      1117.00,
+  'Cancelamento de CR':                         150.00,
 };
 
 const TAXAS_PROCESSO = {
@@ -529,6 +532,7 @@ const TAXAS_PROCESSO = {
   'Transferência de Arma SINARM x SINARM':       88,
   'Transferência de Arma SIGMA x SIGMA':         88,
   'Transferência de Arma SINARM x SIGMA':        88,
+  'Cancelamento de CR':                          50,
 };
 
 const CERTIDOES_CONFIG = [
@@ -1701,23 +1705,6 @@ async function salvarArma(e, clienteId, id) {
   const atividade  = fd.get('AtividadeCadastrada');
   const grupoCal   = fd.get('GrupoCalibre');
 
-  // Valida limites de acervo (só para novas armas)
-  if (!id) {
-    const todasArmas = await App.getArmas();
-    if (atividade === 'Caçador') {
-      const armCac = todasArmas.filter(a => String(a.ClienteId) === String(clienteId) && a.AtividadeCadastrada === 'Caçador');
-      if (armCac.length >= 6) { toast('Limite atingido: acervo Caçador permite no máximo 6 armas.', 'error'); return; }
-      if (grupoCal === 'Restrito') {
-        const resCac = armCac.filter(a => a.GrupoCalibre === 'Restrito');
-        if (resCac.length >= 2) { toast('Limite atingido: acervo Caçador permite no máximo 2 armas de calibre Restrito.', 'error'); return; }
-      }
-    }
-    if (atividade === 'Atirador' && grupoCal === 'Permitido') {
-      const permAti = todasArmas.filter(a => String(a.ClienteId) === String(clienteId) && a.AtividadeCadastrada === 'Atirador' && a.GrupoCalibre === 'Permitido');
-      if (permAti.length >= 4) { toast('Limite atingido: acervo Atirador permite no máximo 4 armas de calibre Permitido.', 'error'); return; }
-    }
-  }
-
   const cliente = await App.graph.getItem(CONFIG.listas.clientes, clienteId);
   const fields = {
     Title:             `${fd.get('Marca')||''} ${fd.get('Modelo')||''} - ${fd.get('NumeroSerie')||''}`.trim(),
@@ -2111,6 +2098,91 @@ function sortProcessos(field) {
     }
   });
   filtrarProcessos();
+}
+
+// ============================================================
+// CONSULTA DE PROCESSOS
+// ============================================================
+const STATUS_CONSULTA = ['Em análise', 'Pronto para Análise', 'Aguardando Pagamento GRU', 'Aguardando Protocolo (email)'];
+
+function _getUltimoRegistroISO(p) {
+  try {
+    const hist = JSON.parse(p.HistoricoStatus || '[]');
+    if (!hist.length) return '';
+    const ult = hist[hist.length - 1];
+    if (!ult.data) return '';
+    const raw = String(ult.data).split('T')[0];
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(raw)) return toISO(raw);
+    return '';
+  } catch(e) { return ''; }
+}
+
+async function renderConsultaProcessos() {
+  document.getElementById('page-title').textContent = 'Consulta de Processos';
+  const processos = await App.getProcessos();
+
+  const hoje = new Date(); hoje.setHours(0,0,0,0);
+  const hojeISO = hoje.toISOString().split('T')[0];
+
+  const lista = processos.filter(p => {
+    if (STATUS_FECHADOS.includes(p.Status)) return false;
+    const statusOk = STATUS_CONSULTA.includes(p.Status) || p.Restituido;
+    if (!statusOk) return false;
+    const ultISO = _getUltimoRegistroISO(p);
+    if (!ultISO) return true;
+    return ultISO < hojeISO;
+  });
+
+  lista.sort((a, b) => {
+    const ua = _getUltimoRegistroISO(a) || '0000-00-00';
+    const ub = _getUltimoRegistroISO(b) || '0000-00-00';
+    return ua < ub ? -1 : ua > ub ? 1 : 0;
+  });
+
+  const el = document.getElementById('page-content');
+
+  if (!lista.length) {
+    el.innerHTML = `<div class="empty-state"><i class="bi bi-check-circle" style="font-size:48px;color:var(--success)"></i><p style="margin-top:12px">Nenhum processo pendente de registro.</p></div>`;
+    return;
+  }
+
+  el.innerHTML = `
+    <div class="card">
+      <div class="card-header">
+        <h3><i class="bi bi-search me-2"></i>Processos pendentes de registro (${lista.length})</h3>
+      </div>
+      <div class="table-wrapper">
+        <table>
+          <thead><tr>
+            <th>Cliente</th>
+            <th>Tipo de Processo</th>
+            <th>Responsável</th>
+            <th>Abertura</th>
+            <th>Último Registro</th>
+            <th>Status</th>
+            <th>Ações</th>
+          </tr></thead>
+          <tbody>
+            ${lista.map(p => {
+              const b = statusBadge(p.Status);
+              const ultReg = _getUltimoRegistro(p);
+              return `<tr style="cursor:pointer" onclick="navigate('processos/detalhe',{id:'${p.id}'})">
+                <td><strong>${esc(p.ClienteNome||'—')}</strong></td>
+                <td>${esc(p.TipoProcesso||'—')}${p.Restituido ? ' <span class="badge" style="background:#9333ea;color:#fff;font-size:11px"><i class="bi bi-arrow-return-left"></i> Restituído</span>' : ''}</td>
+                <td>${p.Responsavel ? `<span class="badge badge-blue">${esc(p.Responsavel)}</span>` : '<span style="color:var(--text-muted)">—</span>'}</td>
+                <td>${fmtDate(p.DataAbertura?p.DataAbertura.split('T')[0]:'')}</td>
+                <td style="font-size:12px;color:${ultReg ? 'var(--danger)' : 'var(--text-muted)'}"><strong>${ultReg || '—'}</strong></td>
+                <td><span class="badge ${b.cls}">${b.txt}</span></td>
+                <td onclick="event.stopPropagation()">
+                  <button class="btn btn-outline btn-sm" onclick="navigate('processos/detalhe',{id:'${p.id}'})"><i class="bi bi-eye"></i></button>
+                </td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
 }
 
 // ============================================================
@@ -3817,17 +3889,19 @@ async function deferirProcesso(id) {
       if (tipo === 'Aquisição de Arma SIGMA' || tipo === 'Aquisição de Arma PF') {
         // Salvar arma no acervo do cliente
         try {
+          const normalizeGrupo = g => g === 'Uso Permitido' ? 'Permitido' : g === 'Uso Restrito' ? 'Restrito' : (g || '');
           const camposArma = {
-            ClienteId:         Number(p.ClienteId),
+            Title:             `${dados.marcaArma||dados.marca||''} ${dados.modeloArma||dados.modelo||''}`.trim(),
+            ClienteId:         p.ClienteId,
             ClienteNome:       p.ClienteNome || '',
             Especie:           dados.especie           || dados.proc_especie || '',
             Calibre:           dados.calibre           || '',
-            Marca:             dados.marcaArma         || '',
+            Marca:             dados.marcaArma         || dados.marca || '',
             Modelo:            dados.modeloArma        || dados.modelo || '',
             NumeroSerie:       dados.serieArma         || '',
             NumeroSIGMA:       dados.numSigma          || '',
             AtividadeCadastrada: tipo === 'Aquisição de Arma PF' ? 'PF Defesa Pessoal' : (dados.acervo || ''),
-            GrupoCalibre:      dados.grupoCalibre       || '',
+            GrupoCalibre:      normalizeGrupo(dados.grupoCalibre),
             PaisFabricacao:    dados.paisFabricacao     || '',
             CapacidadeTiro:    dados.capacidadeTiros    || dados.capacidadeCartucho || '',
             NumeroCanos:       dados.numeroCanos        || '',
@@ -3852,10 +3926,10 @@ async function deferirProcesso(id) {
             try { const arma = await App.graph.getItem(CONFIG.listas.armas, armaId); armaDesc = `${arma.Especie||''} ${arma.Calibre||''} ${arma.Marca||''}`.trim(); } catch(e3) {}
           }
           await App.graph.createItem(CONFIG.listas.documentos, {
-            ClienteId:    Number(p.ClienteId),
+            ClienteId:    p.ClienteId,
             ClienteNome:  p.ClienteNome || '',
             TipoDocumento: 'Guia de Tráfego',
-            ArmaVinculadaId:   armaId ? Number(armaId) : null,
+            ArmaVinculadaId:   armaId || null,
             ArmaVinculadaDesc: armaDesc,
             TipoGuia:     dados.tipoGuia || '',
             CidadeGuia:   dados.cidadeGuia || '',
@@ -3875,10 +3949,10 @@ async function deferirProcesso(id) {
             try { const arma = await App.graph.getItem(CONFIG.listas.armas, armaId); armaDesc = `${arma.Especie||''} ${arma.Calibre||''} ${arma.Marca||''}`.trim(); } catch(e3) {}
           }
           await App.graph.createItem(CONFIG.listas.documentos, {
-            ClienteId:    Number(p.ClienteId),
+            ClienteId:    p.ClienteId,
             ClienteNome:  p.ClienteNome || '',
             TipoDocumento: 'CRAF',
-            ArmaVinculadaId:   armaId ? Number(armaId) : null,
+            ArmaVinculadaId:   armaId || null,
             ArmaVinculadaDesc: armaDesc,
           });
           App.invalidateCache('documentos');
@@ -3905,7 +3979,7 @@ async function deferirProcesso(id) {
               if (compradorClienteId) {
                 const comprador = await App.graph.getItem(CONFIG.listas.clientes, compradorClienteId);
                 await App.graph.updateItem(CONFIG.listas.armas, armaId, {
-                  ClienteId:   Number(compradorClienteId),
+                  ClienteId:   compradorClienteId,
                   ClienteNome: comprador.Title || '',
                   AtividadeCadastrada: dados.acervoDestinoVenda || undefined,
                 });
@@ -3919,14 +3993,17 @@ async function deferirProcesso(id) {
           } else if (clienteVende === 'nao') {
             // Cliente comprando: cria arma no perfil; se vendedor cadastrado e arma selecionada, remove do vendedor
             const camposArma = {
-              ClienteId:   Number(p.ClienteId),
+              Title:       `${dados.marcaArma||''} ${dados.modeloArma||''}`.trim(),
+              ClienteId:   p.ClienteId,
               ClienteNome: p.ClienteNome || '',
               Especie:     dados.especie || '',
               Calibre:     dados.calibre || '',
               Marca:       dados.marcaArma || '',
               Modelo:      dados.modeloArma || '',
               NumeroSerie: dados.serieArma || '',
+              NumeroSINARM: dados.cadSinarm || '',
               AtividadeCadastrada: dados.acervoDestino || '',
+              GrupoCalibre: dados.grupoCalibre || '',
               PaisFabricacao: dados.paisFabricacao || '',
               CapacidadeTiro: dados.capacidadeTiros || '',
               NumeroCanos:    dados.numeroCanos || '',
