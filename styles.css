@@ -40,8 +40,7 @@ body {
   border-radius: 12px;
   padding: 32px 32px 40px;
   text-align: center;
-  width: fit-content;
-  min-width: 280px;
+  width: 400px;
   max-width: 90vw;
   box-shadow: 0 20px 60px rgba(0,0,0,.5);
 }
