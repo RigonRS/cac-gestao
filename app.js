@@ -6148,6 +6148,13 @@ async function initAuth() {
   await App.msal.initialize();
   App.graph = new GraphService(App.msal);
 
+  // Processa retorno de loginRedirect (fallback Firefox)
+  const redirectResult = await App.msal.handleRedirectPromise();
+  if (redirectResult) {
+    App.account = redirectResult.account;
+    return true;
+  }
+
   // Verifica se já há conta logada
   const accounts = App.msal.getAllAccounts();
   if (accounts.length > 0) {
@@ -6159,13 +6166,22 @@ async function initAuth() {
 
 async function fazerLogin() {
   showLoading();
+  let redirecting = false;
   try {
     const res = await App.msal.loginPopup(CONFIG.loginRequest);
     App.account = res.account;
     await iniciarApp();
   } catch(e) {
+    // Firefox bloqueia popup ou retorna janela vazia — usa redirect como fallback
+    if (e.errorCode === 'popup_window_error' || e.errorCode === 'empty_window_error') {
+      redirecting = true;
+      await App.msal.loginRedirect(CONFIG.loginRequest);
+      return;
+    }
     toast('Erro ao fazer login: ' + e.message, 'error');
-  } finally { hideLoading(); }
+  } finally {
+    if (!redirecting) hideLoading();
+  }
 }
 
 function fazerLogout() {
