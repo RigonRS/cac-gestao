@@ -4371,6 +4371,22 @@ async function gerarAutorizacaoCaca(clienteId, simafIndex) {
     const s = simafList[simafIndex];
     if (!s) { toast('SIMAF não encontrado.', 'error'); return; }
 
+    // Validação de campos obrigatórios
+    const camposFaltando = [];
+    if (!s.NomeProprietario)     camposFaltando.push('Nome do Proprietário');
+    if (!s.CPFProprietario)      camposFaltando.push('CPF do Proprietário');
+    if (!s.TelefoneProprietario) camposFaltando.push('Telefone do Proprietário');
+    if (!s.NomePropriedade)      camposFaltando.push('Nome da Propriedade');
+    if (!s.CARPropriedade)       camposFaltando.push('N° do CAR');
+    if (!s.CidadeSimaf)          camposFaltando.push('Cidade');
+    if (!s.UFSimaf)              camposFaltando.push('UF');
+    if (!cliente.CPF)            camposFaltando.push('CPF do Cliente');
+    if (camposFaltando.length) {
+      hideLoading();
+      alert('Campos obrigatórios não preenchidos:\n\n• ' + camposFaltando.join('\n• '));
+      return;
+    }
+
     hideLoading();
     const opcao = confirm('Clique em OK para "Prazo Indeterminado" ou Cancelar para escolher uma data de validade.');
     let validade;
@@ -4387,37 +4403,36 @@ async function gerarAutorizacaoCaca(clienteId, simafIndex) {
     const dataHoje = dataPorExtenso(hoje.toISOString().split('T')[0]);
 
     const html = `
-      <div style="text-align:center;margin-bottom:16px">
-        <img src="logo-pr.png" alt="P&amp;R" style="height:80px;object-fit:contain" onerror="this.style.display='none'" />
-        <div style="font-size:10pt;font-weight:bold;margin-top:6px">PEGORARO &amp; RIGON<br>DESPACHANTE BÉLICO<br>CR Nº 343831 3ªRM</div>
+      <div style="text-align:center;margin-bottom:8px">
+        <img src="logo-pr-autorizacao.png" alt="P&amp;R" style="height:90px;object-fit:contain" onerror="this.style.display='none'" />
       </div>
-      <h1 style="font-size:14pt;text-decoration:underline">AUTORIZAÇÃO PARA CAÇA DE JAVALI</h1>
-      <p style="margin-top:20px">
-        Eu, <strong>${esc(s.NomeProprietario||'[Nome do Proprietário]')}</strong>, portador do CPF <strong>${esc(s.CPFProprietario||'[CPF do Proprietário]')}</strong>, <strong><u>AUTORIZO</u></strong>,
-        <strong>${esc(cliente.Title||'[Nome do Cliente]')}</strong>, CPF <strong>${esc(cliente.CPF||'[CPF do Cliente]')}</strong>, a realizar o manejo de fauna exótica invasora e acessar a minha
+      <h1 style="font-size:14pt;text-decoration:underline;margin-top:6px;margin-bottom:10px">AUTORIZAÇÃO PARA CAÇA DE JAVALI</h1>
+      <p style="margin-top:10px">
+        Eu, <strong>${esc(s.NomeProprietario)}</strong>, portador do CPF <strong>${esc(s.CPFProprietario)}</strong>, <strong><u>AUTORIZO</u></strong>,
+        <strong>${esc(cliente.Title)}</strong>, CPF <strong>${esc(cliente.CPF)}</strong>, a realizar o manejo de fauna exótica invasora e acessar a minha
         propriedade, pela qual possuo poderes legais sobre as extensões territoriais, e fica expressamente
         <strong>PROIBIDO</strong> repassar informações de número de CAR para terceiros, ou incluir participantes para manejo
         e acesso a minha propriedade sem autorização. O controle/manejo da fauna exótica será no seguinte endereço:
       </p>
-      <p style="margin-left:40px">
-        <strong>Nome da Propriedade: ${esc(s.NomePropriedade||'[Nome da propriedade]')}</strong><br>
-        <strong>N° do CAR: ${esc(s.CARPropriedade||'[Número do CAR]')}</strong><br>
-        <strong>Cidade: ${esc(cidadeUF||'[Cidade/UF]')}</strong><br>
-        <strong>Telefone do Proprietário: ${esc(s.TelefoneProprietario||'[Telefone Proprietário]')}</strong>
+      <p style="margin-left:40px;margin-top:6px">
+        <strong>Nome da Propriedade: ${esc(s.NomePropriedade)}</strong><br>
+        <strong>N° do CAR: ${esc(s.CARPropriedade)}</strong><br>
+        <strong>Cidade: ${esc(cidadeUF)}</strong><br>
+        <strong>Telefone do Proprietário: ${esc(s.TelefoneProprietario)}</strong>
       </p>
-      <p style="font-size:14pt">Validade da autorização: ${esc(validade)}</p>
-      <p style="text-align:right;margin-top:40px">${esc(cidadeUF||'[Cidade/UF]')}, ${esc(dataHoje)}</p>
-      <div style="margin-top:80px;text-align:center">
-        <div style="border-top:1px solid #000;width:400px;margin:0 auto 8px"></div>
+      <p style="font-size:13pt;margin-top:6px">Validade da autorização: ${esc(validade)}</p>
+      <p style="text-align:right;margin-top:24px">${esc(cidadeUF)}, ${esc(dataHoje)}</p>
+      <div style="margin-top:50px;text-align:center">
+        <div style="border-top:1px solid #000;width:400px;margin:0 auto 6px"></div>
       </div>
-      <p style="color:#cc0000;font-weight:bold">ATENÇÃO: Esta autorização somente terá validade com firma reconhecida em tabelionato, seja por autenticidade ou por semelhança.</p>
-      <p><strong>NOTA: Documentos necessários para portar junto com esta autorização:</strong><br>
-      <span style="font-size:10pt">1) Certificado de registro (CR); 2) Certificado de registro de arma de fogo (CRAF); 3) Guia de trânsito (GT); 4) Certificado Técnico Federal junto do IBAMA (CTF), 5) Autorização de Manejo do Javali. (SIMAF), 6) Documento de identificação válido, 7) No caso de uso de cães: certificado anual de vacinação dos animais (em dia) e atestado de saúde - assinado por médico veterinário com validade máxima de 30 dias.</span></p>
-      <p style="color:#cc6600;font-weight:bold">⚠ Atenção: Cabe ao portador, a responsabilidade de garantir que toda a documentação esteja válida.</p>
-      <div style="text-align:center;margin-top:20px;font-size:10pt;font-weight:bold">
+      <p style="color:#cc0000;font-weight:bold;margin-top:10px">ATENÇÃO: Esta autorização somente terá validade com firma reconhecida em tabelionato, seja por autenticidade ou por semelhança.</p>
+      <p style="margin-top:6px"><strong>NOTA: Documentos necessários para portar junto com esta autorização:</strong><br>
+      <span style="font-size:9.5pt">1) Certificado de registro (CR); 2) Certificado de registro de arma de fogo (CRAF); 3) Guia de trânsito (GT); 4) Certificado Técnico Federal junto do IBAMA (CTF), 5) Autorização de Manejo do Javali. (SIMAF), 6) Documento de identificação válido, 7) No caso de uso de cães: certificado anual de vacinação dos animais (em dia) e atestado de saúde - assinado por médico veterinário com validade máxima de 30 dias.</span></p>
+      <p style="color:#cc6600;font-weight:bold;margin-top:6px">⚠ Atenção: Cabe ao portador, a responsabilidade de garantir que toda a documentação esteja válida.</p>
+      <div style="text-align:center;margin-top:12px;font-size:10pt;font-weight:bold">
         PEGORARO &amp; RIGON<br>DESPACHANTE BÉLICO<br>CR Nº 343831 3ªRM
       </div>`;
-    imprimirDocumento(html, 'Autorização de Caça de Javali');
+    imprimirDocumento(html, 'Autorização de Caça de Javali', 'body{margin:1.2cm 2cm;line-height:1.5}');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
