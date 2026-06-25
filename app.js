@@ -4387,52 +4387,92 @@ async function gerarAutorizacaoCaca(clienteId, simafIndex) {
       return;
     }
 
+    // Dados prontos — mostrar modal para escolher validade
+    // (não usar confirm+prompt pois browser bloqueia window.open após diálogos nativos)
+    const cidadeUF   = [s.CidadeSimaf, s.UFSimaf].filter(Boolean).join('/');
+    const hoje       = new Date();
+    const dataHoje   = dataPorExtenso(hoje.toISOString().split('T')[0]);
+    const nomeCliente = esc(cliente.Title);
+    const cpfCliente  = esc(cliente.CPF);
+
     hideLoading();
-    const opcao = confirm('Clique em OK para "Prazo Indeterminado" ou Cancelar para escolher uma data de validade.');
-    let validade;
-    if (opcao) {
-      validade = 'Prazo Indeterminado';
-    } else {
-      const dataVal = prompt('Digite a data de validade (DD/MM/AAAA):');
-      if (!dataVal) return;
-      validade = dataVal;
-    }
 
-    const cidadeUF = [s.CidadeSimaf, s.UFSimaf].filter(Boolean).join('/');
-    const hoje = new Date();
-    const dataHoje = dataPorExtenso(hoje.toISOString().split('T')[0]);
+    const existente = document.getElementById('modal-validade-caca');
+    if (existente) existente.remove();
 
-    const html = `
-      <div style="text-align:center;margin-bottom:8px">
-        <img src="logo-pr-autorizacao.png" alt="P&amp;R" style="height:90px;object-fit:contain" onerror="this.style.display='none'" />
-      </div>
-      <h1 style="font-size:14pt;text-decoration:underline;margin-top:6px;margin-bottom:10px">AUTORIZAÇÃO PARA CAÇA DE JAVALI</h1>
-      <p style="margin-top:10px">
-        Eu, <strong>${esc(s.NomeProprietario)}</strong>, portador do CPF <strong>${esc(s.CPFProprietario)}</strong>, <strong><u>AUTORIZO</u></strong>,
-        <strong>${esc(cliente.Title)}</strong>, CPF <strong>${esc(cliente.CPF)}</strong>, a realizar o manejo de fauna exótica invasora e acessar a minha
-        propriedade, pela qual possuo poderes legais sobre as extensões territoriais, e fica expressamente
-        <strong>PROIBIDO</strong> repassar informações de número de CAR para terceiros, ou incluir participantes para manejo
-        e acesso a minha propriedade sem autorização. O controle/manejo da fauna exótica será no seguinte endereço:
-      </p>
-      <p style="margin-left:40px;margin-top:6px">
-        <strong>Nome da Propriedade: ${esc(s.NomePropriedade)}</strong><br>
-        <strong>N° do CAR: ${esc(s.CARPropriedade)}</strong><br>
-        <strong>Cidade: ${esc(cidadeUF)}</strong><br>
-        <strong>Telefone do Proprietário: ${esc(s.TelefoneProprietario)}</strong>
-      </p>
-      <p style="font-size:13pt;margin-top:6px">Validade da autorização: ${esc(validade)}</p>
-      <p style="text-align:right;margin-top:24px">${esc(cidadeUF)}, ${esc(dataHoje)}</p>
-      <div style="margin-top:50px;text-align:center">
-        <div style="border-top:1px solid #000;width:400px;margin:0 auto 6px"></div>
-      </div>
-      <p style="color:#cc0000;font-weight:bold;margin-top:10px">ATENÇÃO: Esta autorização somente terá validade com firma reconhecida em tabelionato, seja por autenticidade ou por semelhança.</p>
-      <p style="margin-top:6px"><strong>NOTA: Documentos necessários para portar junto com esta autorização:</strong><br>
-      <span style="font-size:9.5pt">1) Certificado de registro (CR); 2) Certificado de registro de arma de fogo (CRAF); 3) Guia de trânsito (GT); 4) Certificado Técnico Federal junto do IBAMA (CTF), 5) Autorização de Manejo do Javali. (SIMAF), 6) Documento de identificação válido, 7) No caso de uso de cães: certificado anual de vacinação dos animais (em dia) e atestado de saúde - assinado por médico veterinário com validade máxima de 30 dias.</span></p>
-      <p style="color:#cc6600;font-weight:bold;margin-top:6px">⚠ Atenção: Cabe ao portador, a responsabilidade de garantir que toda a documentação esteja válida.</p>
-      <div style="text-align:center;margin-top:12px;font-size:10pt;font-weight:bold">
-        PEGORARO &amp; RIGON<br>DESPACHANTE BÉLICO<br>CR Nº 343831 3ªRM
+    const modal = document.createElement('div');
+    modal.id = 'modal-validade-caca';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+    modal.innerHTML = `
+      <div style="background:#fff;border-radius:12px;padding:28px 24px;max-width:380px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.3)">
+        <h3 style="margin:0 0 18px;font-size:15px;color:#1e293b"><i class="bi bi-file-earmark-pdf" style="color:#dc2626;margin-right:6px"></i>Validade da Autorização</h3>
+        <label style="display:flex;align-items:center;gap:10px;font-size:14px;cursor:pointer;margin-bottom:12px">
+          <input type="radio" name="rdo-validade" value="indeterminado" checked /> Prazo Indeterminado
+        </label>
+        <label style="display:flex;align-items:center;gap:10px;font-size:14px;cursor:pointer;margin-bottom:8px">
+          <input type="radio" name="rdo-validade" value="data" /> Escolher data
+        </label>
+        <input type="date" id="inp-validade-caca" style="display:none;margin:4px 0 16px 28px;padding:6px 10px;border:1.5px solid #e2e8f0;border-radius:6px;font-size:14px;width:calc(100% - 28px)" />
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+          <button id="btn-caca-cancelar" style="padding:8px 16px;border:1.5px solid #e2e8f0;border-radius:6px;background:#fff;cursor:pointer;font-size:13px">Cancelar</button>
+          <button id="btn-caca-gerar" style="padding:8px 20px;background:#dc2626;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600">Gerar PDF</button>
+        </div>
       </div>`;
-    imprimirDocumento(html, 'Autorização de Caça de Javali', 'body{margin:1.2cm 2cm;line-height:1.5}');
+    document.body.appendChild(modal);
+
+    modal.querySelectorAll('input[name="rdo-validade"]').forEach(r => {
+      r.addEventListener('change', () => {
+        document.getElementById('inp-validade-caca').style.display = r.value === 'data' ? '' : 'none';
+      });
+    });
+
+    document.getElementById('btn-caca-cancelar').onclick = () => modal.remove();
+
+    document.getElementById('btn-caca-gerar').onclick = () => {
+      const tipo = modal.querySelector('input[name="rdo-validade"]:checked').value;
+      let validade;
+      if (tipo === 'indeterminado') {
+        validade = 'Prazo Indeterminado';
+      } else {
+        const dtVal = document.getElementById('inp-validade-caca').value;
+        if (!dtVal) { alert('Informe a data de validade.'); return; }
+        const [y, m, d] = dtVal.split('-');
+        validade = `${d}/${m}/${y}`;
+      }
+      modal.remove();
+
+      const html = `
+        <div style="text-align:center;margin-bottom:8px">
+          <img src="logo-pr-autorizacao.png" alt="P&amp;R" style="height:90px;object-fit:contain" onerror="this.style.display='none'" />
+        </div>
+        <h1 style="font-size:14pt;text-decoration:underline;margin-top:6px;margin-bottom:10px">AUTORIZAÇÃO PARA CAÇA DE JAVALI</h1>
+        <p style="margin-top:10px">
+          Eu, <strong>${esc(s.NomeProprietario)}</strong>, portador do CPF <strong>${esc(s.CPFProprietario)}</strong>, <strong><u>AUTORIZO</u></strong>,
+          <strong>${nomeCliente}</strong>, CPF <strong>${cpfCliente}</strong>, a realizar o manejo de fauna exótica invasora e acessar a minha
+          propriedade, pela qual possuo poderes legais sobre as extensões territoriais, e fica expressamente
+          <strong>PROIBIDO</strong> repassar informações de número de CAR para terceiros, ou incluir participantes para manejo
+          e acesso a minha propriedade sem autorização. O controle/manejo da fauna exótica será no seguinte endereço:
+        </p>
+        <p style="margin-left:40px;margin-top:6px">
+          <strong>Nome da Propriedade: ${esc(s.NomePropriedade)}</strong><br>
+          <strong>N° do CAR: ${esc(s.CARPropriedade)}</strong><br>
+          <strong>Cidade: ${esc(cidadeUF)}</strong><br>
+          <strong>Telefone do Proprietário: ${esc(s.TelefoneProprietario)}</strong>
+        </p>
+        <p style="font-size:13pt;margin-top:6px">Validade da autorização: ${esc(validade)}</p>
+        <p style="text-align:right;margin-top:24px">${esc(cidadeUF)}, ${esc(dataHoje)}</p>
+        <div style="margin-top:50px;text-align:center">
+          <div style="border-top:1px solid #000;width:400px;margin:0 auto 6px"></div>
+        </div>
+        <p style="color:#cc0000;font-weight:bold;margin-top:10px">ATENÇÃO: Esta autorização somente terá validade com firma reconhecida em tabelionato, seja por autenticidade ou por semelhança.</p>
+        <p style="margin-top:6px"><strong>NOTA: Documentos necessários para portar junto com esta autorização:</strong><br>
+        <span style="font-size:9.5pt">1) Certificado de registro (CR); 2) Certificado de registro de arma de fogo (CRAF); 3) Guia de trânsito (GT); 4) Certificado Técnico Federal junto do IBAMA (CTF), 5) Autorização de Manejo do Javali. (SIMAF), 6) Documento de identificação válido, 7) No caso de uso de cães: certificado anual de vacinação dos animais (em dia) e atestado de saúde - assinado por médico veterinário com validade máxima de 30 dias.</span></p>
+        <p style="color:#cc6600;font-weight:bold;margin-top:6px">⚠ Atenção: Cabe ao portador, a responsabilidade de garantir que toda a documentação esteja válida.</p>
+        <div style="text-align:center;margin-top:12px;font-size:10pt;font-weight:bold">
+          PEGORARO &amp; RIGON<br>DESPACHANTE BÉLICO<br>CR Nº 343831 3ªRM
+        </div>`;
+      imprimirDocumento(html, 'Autorização de Caça de Javali', 'body{margin:1.2cm 2cm;line-height:1.5}');
+    };
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
