@@ -243,6 +243,7 @@ async function renderPage() {
       case 'pagamentos-extras':        await renderPagamentosExtras(); break;
       case 'prazos-processos':         await renderPrazosProcessos(); break;
       case 'registro-movimentacoes':   await renderRegistroMovimentacoes(); break;
+      case 'acessos-portal':           await renderRegistroAcessosPortal(); break;
       case 'orcamento/novo':       await renderOrcamentoForm(params.clienteId); break;
       default:                     await renderDashboard();
     }
@@ -1110,6 +1111,7 @@ function renderPerfilIBAMA(c) {
             <div><label>CAR da Propriedade</label><input name="CARPropriedade" /></div>
             <div><label>Nome do Proprietário</label><input name="NomeProprietario" /></div>
             <div><label>CPF do Proprietário</label><input name="CPFProprietario" oninput="this.value=fmtCPF(this.value)" maxlength="14" /></div>
+            <div><label>Telefone do Proprietário</label><input name="TelefoneProprietario" oninput="this.value=fmtCelular(this.value)" maxlength="15" /></div>
             <div><label>Cidade</label><input name="CidadeSimaf" /></div>
             <div><label>UF</label><input name="UFSimaf" maxlength="2" style="text-transform:uppercase" /></div>
           </div>
@@ -1124,7 +1126,7 @@ function renderPerfilIBAMA(c) {
         ${simafList.length === 0
           ? '<div class="empty-state" style="padding:20px"><i class="bi bi-file-earmark-x"></i><p>Nenhum SIMAF cadastrado.</p></div>'
           : `<div class="table-wrapper"><table>
-              <thead><tr><th>Propriedade</th><th>CAR</th><th>Proprietário</th><th>CPF Proprietário</th><th>Cidade/UF</th><th>Validade</th><th>Ações</th></tr></thead>
+              <thead><tr><th>Propriedade</th><th>CAR</th><th>Proprietário</th><th>CPF Proprietário</th><th>Tel. Proprietário</th><th>Cidade/UF</th><th>Validade</th><th>Ações</th></tr></thead>
               <tbody>
                 ${simafList.map((s, i) => {
                   const vs = validadeStatus(s.DataValidade || null);
@@ -1133,9 +1135,11 @@ function renderPerfilIBAMA(c) {
                     <td>${esc(s.CARPropriedade||'—')}</td>
                     <td>${esc(s.NomeProprietario||'—')}</td>
                     <td>${esc(s.CPFProprietario||'—')}</td>
+                    <td>${esc(s.TelefoneProprietario||'—')}</td>
                     <td>${esc(s.CidadeSimaf||'')}${s.UFSimaf?' - '+esc(s.UFSimaf):''}</td>
                     <td><span class="badge ${vs.cls}">${vs.txt}</span></td>
                     <td style="white-space:nowrap">
+                      <button class="btn btn-ghost btn-sm" onclick="gerarAutorizacaoCaca('${c.id}',${i})" title="Gerar Autorização de Caça"><i class="bi bi-file-earmark-pdf" style="color:#dc2626"></i></button>
                       <button class="btn btn-ghost btn-sm" onclick="editarSIMAF('${c.id}',${i})" title="Editar"><i class="bi bi-pencil" style="color:var(--accent)"></i></button>
                       <button class="btn btn-ghost btn-sm" onclick="deletarSIMAF('${c.id}',${i})" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>
                     </td>
@@ -3675,9 +3679,9 @@ async function renderProcessoDetalhe(id) {
               </form>
             </div>` : ''}
             <div style="margin-top:${processo.Restituido?'8':'16'}px">
-              <button class="btn btn-whatsapp" style="width:100%" onclick="abrirWhatsApp('${id}')">
-                <i class="bi bi-whatsapp"></i> Avisar Cliente via WhatsApp
-              </button>
+              ${STATUS_BLOQUEIO_WHATSAPP.includes(processo.Status)
+                ? `<button class="btn btn-whatsapp" style="width:100%;opacity:.45;cursor:not-allowed" disabled title="Não disponível para este status"><i class="bi bi-whatsapp"></i> Avisar Cliente via WhatsApp</button>`
+                : `<button class="btn btn-whatsapp" style="width:100%" onclick="abrirWhatsApp('${id}')"><i class="bi bi-whatsapp"></i> Avisar Cliente via WhatsApp</button>`}
             </div>
             <div style="margin-top:8px">
               <button onclick="${fnRestituir}('${id}')" style="background:#9333ea;color:#fff;border:none;width:100%;border-radius:6px;padding:8px 12px;cursor:pointer;font-size:13px;font-weight:500;display:flex;align-items:center;justify-content:center;gap:6px${jaDeferido?';opacity:.5':''}">
@@ -4325,16 +4329,96 @@ async function salvarObservacoesProcesso(id) {
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
+const STATUS_BLOQUEIO_WHATSAPP = [
+  'Aguardando Pagamento Cliente','Parado','Processo Futuro','Aguardando Documentos',
+  'Aguardando Pagamento GRU','Desistência Cliente','Aguardando Assinatura','Indeferido'
+];
+
 async function abrirWhatsApp(processoId) {
   const p = window._processoDetalhe;
   if (!p) return;
+  const status = p.Status || '';
+  if (STATUS_BLOQUEIO_WHATSAPP.includes(status)) {
+    toast('Envio de WhatsApp não disponível para este status.', 'warning');
+    return;
+  }
   const cliente = await App.graph.getItem(CONFIG.listas.clientes, p.ClienteId);
   const celular = (cliente.Celular || '').replace(/\D/g, '');
   if (!celular) { toast('Cliente sem número de celular cadastrado.', 'warning'); return; }
 
-  const status = p.Status || '';
-  const msg = `Olá, ${cliente.Title}!\n\nInformamos que seu processo de *${p.TipoProcesso}* (Protocolo: ${p.NumeroProtocolo || 'N/A'}) teve seu status atualizado para: *${status}*.\n\nEm caso de dúvidas, entre em contato conosco.\n\n${CONFIG.nomeEscritorio}`;
+  const nome  = cliente.Title || '';
+  const tipo  = p.TipoProcesso || '';
+  let msg;
+  if (status === 'Pronto para Análise') {
+    msg = `Olá, ${nome}! Informamos que seu processo de *${tipo}* está com o status de: *${status}*. Isso significa que o processo está na fila para ser analisado. Para qualquer dúvida, favor entrar em contato conosco, atenciosamente *P&R Despachante Belico*.`;
+  } else if (status === 'Em análise') {
+    msg = `Olá, ${nome}! Informamos que seu processo de *${tipo}* está com o status de: *${status}*. Isso significa que o processo está sendo analisado. Para qualquer dúvida, favor entrar em contato conosco, atenciosamente *P&R Despachante Belico*.`;
+  } else if (status === 'Aguardando Protocolo (email)') {
+    msg = `Olá, ${nome}! Informamos que seu processo de *${tipo}* está com o status de: *${status}*. Isso significa que o processo foi enviado por email e está aguardando retorno da PF com o número de protocolo. Para qualquer dúvida, favor entrar em contato conosco, atenciosamente *P&R Despachante Belico*.`;
+  } else if (status === 'Deferido') {
+    msg = `Olá, ${nome}! Informamos que seu processo de *${tipo}* foi Deferido. Isso significa que o processo está pronto, e se houver emissão de documentação, favor informar se deseja retirá-la de forma física em nosso escritório ou se deseja ter acesso de forma digital em nosso portal exclusivo para os clientes. Para qualquer dúvida, favor entrar em contato conosco, atenciosamente *P&R Despachante Belico*.`;
+  } else {
+    msg = `Olá, ${nome}! Informamos que seu processo de *${tipo}* (Protocolo: ${p.NumeroProtocolo || 'N/A'}) teve seu status atualizado para: *${status}*.\n\nEm caso de dúvidas, entre em contato conosco.\n\n${CONFIG.nomeEscritorio}`;
+  }
   window.open(`https://wa.me/55${celular}?text=${encodeURIComponent(msg)}`, '_blank');
+}
+
+async function gerarAutorizacaoCaca(clienteId, simafIndex) {
+  showLoading();
+  try {
+    const cliente = await App.graph.getItem(CONFIG.listas.clientes, clienteId);
+    const simafList = JSON.parse(cliente.SIMAFs || '[]');
+    const s = simafList[simafIndex];
+    if (!s) { toast('SIMAF não encontrado.', 'error'); return; }
+
+    hideLoading();
+    const opcao = confirm('Clique em OK para "Prazo Indeterminado" ou Cancelar para escolher uma data de validade.');
+    let validade;
+    if (opcao) {
+      validade = 'Prazo Indeterminado';
+    } else {
+      const dataVal = prompt('Digite a data de validade (DD/MM/AAAA):');
+      if (!dataVal) return;
+      validade = dataVal;
+    }
+
+    const cidadeUF = [s.CidadeSimaf, s.UFSimaf].filter(Boolean).join('/');
+    const hoje = new Date();
+    const dataHoje = dataPorExtenso(hoje.toISOString().split('T')[0]);
+
+    const html = `
+      <div style="text-align:center;margin-bottom:16px">
+        <img src="logo-pr.png" alt="P&amp;R" style="height:80px;object-fit:contain" onerror="this.style.display='none'" />
+        <div style="font-size:10pt;font-weight:bold;margin-top:6px">PEGORARO &amp; RIGON<br>DESPACHANTE BÉLICO<br>CR Nº 343831 3ªRM</div>
+      </div>
+      <h1 style="font-size:14pt;text-decoration:underline">AUTORIZAÇÃO PARA CAÇA DE JAVALI</h1>
+      <p style="margin-top:20px">
+        Eu, <strong>${esc(s.NomeProprietario||'[Nome do Proprietário]')}</strong>, portador do CPF <strong>${esc(s.CPFProprietario||'[CPF do Proprietário]')}</strong>, <strong><u>AUTORIZO</u></strong>,
+        <strong>${esc(cliente.Title||'[Nome do Cliente]')}</strong>, CPF <strong>${esc(cliente.CPF||'[CPF do Cliente]')}</strong>, a realizar o manejo de fauna exótica invasora e acessar a minha
+        propriedade, pela qual possuo poderes legais sobre as extensões territoriais, e fica expressamente
+        <strong>PROIBIDO</strong> repassar informações de número de CAR para terceiros, ou incluir participantes para manejo
+        e acesso a minha propriedade sem autorização. O controle/manejo da fauna exótica será no seguinte endereço:
+      </p>
+      <p style="margin-left:40px">
+        <strong>Nome da Propriedade: ${esc(s.NomePropriedade||'[Nome da propriedade]')}</strong><br>
+        <strong>N° do CAR: ${esc(s.CARPropriedade||'[Número do CAR]')}</strong><br>
+        <strong>Cidade: ${esc(cidadeUF||'[Cidade/UF]')}</strong><br>
+        <strong>Telefone do Proprietário: ${esc(s.TelefoneProprietario||'[Telefone Proprietário]')}</strong>
+      </p>
+      <p style="font-size:14pt">Validade da autorização: ${esc(validade)}</p>
+      <p style="text-align:right;margin-top:40px">${esc(cidadeUF||'[Cidade/UF]')}, ${esc(dataHoje)}</p>
+      <div style="margin-top:80px;text-align:center">
+        <div style="border-top:1px solid #000;width:400px;margin:0 auto 8px"></div>
+      </div>
+      <p style="color:#cc0000;font-weight:bold">ATENÇÃO: Esta autorização somente terá validade com firma reconhecida em tabelionato, seja por autenticidade ou por semelhança.</p>
+      <p><strong>NOTA: Documentos necessários para portar junto com esta autorização:</strong><br>
+      <span style="font-size:10pt">1) Certificado de registro (CR); 2) Certificado de registro de arma de fogo (CRAF); 3) Guia de trânsito (GT); 4) Certificado Técnico Federal junto do IBAMA (CTF), 5) Autorização de Manejo do Javali. (SIMAF), 6) Documento de identificação válido, 7) No caso de uso de cães: certificado anual de vacinação dos animais (em dia) e atestado de saúde - assinado por médico veterinário com validade máxima de 30 dias.</span></p>
+      <p style="color:#cc6600;font-weight:bold">⚠ Atenção: Cabe ao portador, a responsabilidade de garantir que toda a documentação esteja válida.</p>
+      <div style="text-align:center;margin-top:20px;font-size:10pt;font-weight:bold">
+        PEGORARO &amp; RIGON<br>DESPACHANTE BÉLICO<br>CR Nº 343831 3ªRM
+      </div>`;
+    imprimirDocumento(html, 'Autorização de Caça de Javali');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 function solicitarDeclaracao(tipo) {
@@ -4439,11 +4523,13 @@ async function excluirItemHistorico(processoId, index) {
   if (!proc) return;
   const hist = JSON.parse(proc.HistoricoStatus || '[]');
   hist.splice(index, 1);
+  const novoStatus = hist.length ? hist[hist.length - 1].status : proc.Status;
   showLoading();
   try {
-    await App.graph.updateItem(CONFIG.listas.processos, processoId, { HistoricoStatus: JSON.stringify(hist) });
+    await App.graph.updateItem(CONFIG.listas.processos, processoId, { HistoricoStatus: JSON.stringify(hist), Status: novoStatus });
     App.invalidateCache('processos');
     proc.HistoricoStatus = JSON.stringify(hist);
+    proc.Status = novoStatus;
     const body = document.getElementById('historico-status-body');
     if (body) body.innerHTML = renderHistoricoStatus(hist, processoId);
     toast('Registro excluído.', 'success');
@@ -4936,11 +5022,13 @@ function getDataDeferido(p) {
   try {
     const hist = JSON.parse(p.HistoricoStatus || '[]');
     const entry = [...hist].reverse().find(h => h.status === 'Deferido');
-    if (!entry || !entry.data) return null;
-    const parts = entry.data.split('/');
-    if (parts.length !== 3) return null;
-    return `${parts[2]}-${parts[1].padStart(2,'0')}-${parts[0].padStart(2,'0')}`;
-  } catch(e) { return null; }
+    if (entry && entry.data) {
+      const parts = entry.data.split('/');
+      if (parts.length === 3) return `${parts[2]}-${parts[1].padStart(2,'0')}-${parts[0].padStart(2,'0')}`;
+    }
+  } catch(e) {}
+  if (p.DataDeferimento) return normISO(p.DataDeferimento);
+  return null;
 }
 
 function getProcessoDescExtra(p) {
@@ -5774,13 +5862,14 @@ async function salvarSIMAF(e, clienteId) {
     const cliente = await App.graph.getItem(CONFIG.listas.clientes, clienteId);
     const simafList = JSON.parse(cliente.SIMAFs || '[]');
     simafList.push({
-      DataValidade:    fd.get('DataValidade') || null,
-      NomePropriedade: fd.get('NomePropriedade') || '',
-      CARPropriedade:  fd.get('CARPropriedade') || '',
-      NomeProprietario: fd.get('NomeProprietario') || '',
-      CPFProprietario: fd.get('CPFProprietario') || '',
-      CidadeSimaf:     fd.get('CidadeSimaf') || '',
-      UFSimaf:         (fd.get('UFSimaf') || '').toUpperCase(),
+      DataValidade:         fd.get('DataValidade') || null,
+      NomePropriedade:      fd.get('NomePropriedade') || '',
+      CARPropriedade:       fd.get('CARPropriedade') || '',
+      NomeProprietario:     fd.get('NomeProprietario') || '',
+      CPFProprietario:      fd.get('CPFProprietario') || '',
+      TelefoneProprietario: fd.get('TelefoneProprietario') || '',
+      CidadeSimaf:          fd.get('CidadeSimaf') || '',
+      UFSimaf:              (fd.get('UFSimaf') || '').toUpperCase(),
     });
     await App.graph.updateItem(CONFIG.listas.clientes, clienteId, { SIMAFs: JSON.stringify(simafList) });
     App.invalidateCache('clientes');
@@ -5809,6 +5898,7 @@ async function editarSIMAF(clienteId, index) {
           <div><label>CAR da Propriedade</label><input name="CARPropriedade" value="${esc(s.CARPropriedade||'')}" /></div>
           <div><label>Nome do Proprietário</label><input name="NomeProprietario" value="${esc(s.NomeProprietario||'')}" /></div>
           <div><label>CPF do Proprietário</label><input name="CPFProprietario" value="${esc(s.CPFProprietario||'')}" oninput="this.value=fmtCPF(this.value)" maxlength="14" /></div>
+          <div><label>Telefone do Proprietário</label><input name="TelefoneProprietario" value="${esc(s.TelefoneProprietario||'')}" oninput="this.value=fmtCelular(this.value)" maxlength="15" /></div>
           <div><label>Cidade</label><input name="CidadeSimaf" value="${esc(s.CidadeSimaf||'')}" /></div>
           <div><label>UF</label><input name="UFSimaf" value="${esc(s.UFSimaf||'')}" maxlength="2" style="text-transform:uppercase" /></div>
         </div>
@@ -5828,13 +5918,14 @@ async function salvarEdicaoSIMAF(e, clienteId, index) {
     const cliente = await App.graph.getItem(CONFIG.listas.clientes, clienteId);
     const simafList = JSON.parse(cliente.SIMAFs || '[]');
     simafList[index] = {
-      DataValidade:    fd.get('DataValidade') || null,
-      NomePropriedade: fd.get('NomePropriedade') || '',
-      CARPropriedade:  fd.get('CARPropriedade') || '',
-      NomeProprietario: fd.get('NomeProprietario') || '',
-      CPFProprietario: fd.get('CPFProprietario') || '',
-      CidadeSimaf:     fd.get('CidadeSimaf') || '',
-      UFSimaf:         (fd.get('UFSimaf') || '').toUpperCase(),
+      DataValidade:         fd.get('DataValidade') || null,
+      NomePropriedade:      fd.get('NomePropriedade') || '',
+      CARPropriedade:       fd.get('CARPropriedade') || '',
+      NomeProprietario:     fd.get('NomeProprietario') || '',
+      CPFProprietario:      fd.get('CPFProprietario') || '',
+      TelefoneProprietario: fd.get('TelefoneProprietario') || '',
+      CidadeSimaf:          fd.get('CidadeSimaf') || '',
+      UFSimaf:              (fd.get('UFSimaf') || '').toUpperCase(),
     };
     await App.graph.updateItem(CONFIG.listas.clientes, clienteId, { SIMAFs: JSON.stringify(simafList) });
     App.invalidateCache('clientes');
@@ -5944,6 +6035,53 @@ async function renderRegistroMovimentacoes() {
             </table>
           </div>`
       }
+    </div>`;
+}
+
+// ============================================================
+// REGISTRO DE ACESSOS DO PORTAL
+// ============================================================
+async function renderRegistroAcessosPortal() {
+  document.getElementById('page-title').textContent = 'Registro de Acessos Portal';
+  if (!isAdminUser()) {
+    document.getElementById('page-content').innerHTML = `<div class="empty-state"><i class="bi bi-lock" style="font-size:48px"></i><p>Acesso restrito.</p></div>`;
+    return;
+  }
+
+  showLoading();
+  let lista = [];
+  try {
+    const raw = await App.graph._readFile('acessos_portal');
+    if (Array.isArray(raw)) lista = raw;
+  } catch(e) {} finally { hideLoading(); }
+
+  const filtrados = lista.slice().reverse();
+
+  document.getElementById('page-content').innerHTML = `
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div class="card-icon" style="background:#eff6ff;color:#2563eb;width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center"><i class="bi bi-globe"></i></div>
+          <h3 style="margin:0;font-size:15px">Acessos ao Portal — portal.prbelico.com.br</h3>
+        </div>
+        <span style="font-size:12px;color:var(--text-muted)">${filtrados.length} acesso(s)</span>
+      </div>
+      <div class="card-body" style="padding:0">
+        ${filtrados.length === 0 ? `<div class="empty-state" style="padding:28px"><i class="bi bi-globe" style="font-size:40px"></i><p>Nenhum acesso registrado ainda.</p></div>` : `
+        <div class="table-wrapper">
+          <table>
+            <thead><tr><th>Cliente</th><th>CPF</th><th>Data</th><th>Hora</th></tr></thead>
+            <tbody>
+              ${filtrados.map(a => `<tr>
+                <td><strong>${esc(a.nome||'—')}</strong></td>
+                <td style="font-size:12px;color:var(--text-muted)">${esc(a.cpf||'—')}</td>
+                <td style="font-size:12px">${esc(a.data||'—')}</td>
+                <td style="font-size:12px;color:var(--text-muted)">${esc(a.hora||'—')}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>`}
+      </div>
     </div>`;
 }
 
@@ -6501,6 +6639,8 @@ async function iniciarApp() {
     if (navVal) navVal.style.display = '';
     const navMov = document.getElementById('nav-registro-movimentacoes');
     if (navMov) navMov.style.display = '';
+    const navAcessos = document.getElementById('nav-acessos-portal');
+    if (navAcessos) navAcessos.style.display = '';
   }
   if (isExtrasUser()) {
     const navExt = document.getElementById('nav-pagamentos-extras');
