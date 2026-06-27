@@ -1792,7 +1792,6 @@ async function renderDocumentoForm(clienteId, id = null) {
               <option value="Guia de Tráfego" ${tipoAtual==='Guia de Tráfego'?'selected':''}>Guia de Tráfego</option>
             </select>
           </div>
-          <div><label>Link do Arquivo (SharePoint)</label><input type="url" name="LinkArquivo" value="${esc(d.LinkArquivo||'')}" placeholder="https://..." /></div>
           <div><label>Data de Emissão</label><input type="date" name="DataEmissao" id="doc-emissao" value="${d.DataEmissao?d.DataEmissao.split('T')[0]:''}" onchange="onEmissaoChange(this.value)" /></div>
           <div><label>Data de Validade</label><input type="date" name="DataValidade" id="doc-validade" value="${d.DataValidade?d.DataValidade.split('T')[0]:''}" /></div>
         </div>
