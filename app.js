@@ -1140,6 +1140,7 @@ function renderPerfilIBAMA(c) {
                     <td><span class="badge ${vs.cls}">${vs.txt}</span></td>
                     <td style="white-space:nowrap">
                       <button class="btn btn-ghost btn-sm" onclick="gerarAutorizacaoCaca('${c.id}',${i})" title="Gerar Autorização de Caça"><i class="bi bi-file-earmark-pdf" style="color:#dc2626"></i></button>
+                      <button class="btn btn-ghost btn-sm" onclick="renovarSIMAF('${c.id}',${i})" title="Renovar Validade"><i class="bi bi-arrow-clockwise" style="color:#16a34a"></i></button>
                       <button class="btn btn-ghost btn-sm" onclick="editarSIMAF('${c.id}',${i})" title="Editar"><i class="bi bi-pencil" style="color:var(--accent)"></i></button>
                       <button class="btn btn-ghost btn-sm" onclick="deletarSIMAF('${c.id}',${i})" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>
                     </td>
@@ -1435,13 +1436,22 @@ function renderPerfilDocumentos(docs, clienteId) {
     <div class="card">
       <div class="table-wrapper">
         <table>
-          <thead><tr><th>Tipo</th><th>Emissão</th><th>Validade</th><th>Status</th><th>Ações</th></tr></thead>
+          <thead><tr><th>Tipo</th><th>Arma / Local</th><th>Emissão</th><th>Validade</th><th>Status</th><th>Ações</th></tr></thead>
           <tbody>${docs.length === 0
-            ? `<tr><td colspan="5"><div class="empty-state"><i class="bi bi-file-earmark-x"></i><p>Nenhum documento cadastrado.</p></div></td></tr>`
+            ? `<tr><td colspan="6"><div class="empty-state"><i class="bi bi-file-earmark-x"></i><p>Nenhum documento cadastrado.</p></div></td></tr>`
             : docs.map(d => {
                 const s = validadeStatus(d.DataValidade ? d.DataValidade.split('T')[0] : null);
+                let armaLocal = '—';
+                if (d.TipoDocumento === 'CRAF') {
+                  armaLocal = d.ArmaVinculadaDesc ? esc(d.ArmaVinculadaDesc) : '—';
+                } else if (d.TipoDocumento === 'Guia de Tráfego') {
+                  const arma = d.ArmaVinculadaDesc ? esc(d.ArmaVinculadaDesc) : '';
+                  const loc = d.CidadeGuia ? esc(d.CidadeGuia) + (d.UFGuia ? '/' + esc(d.UFGuia) : '') : (d.NomeClubeTiro ? esc(d.NomeClubeTiro) : '');
+                  armaLocal = [arma, loc].filter(Boolean).join('<br>') || '—';
+                }
                 return `<tr>
                   <td><strong>${esc(d.TipoDocumento||'—')}</strong></td>
+                  <td style="font-size:12px">${armaLocal}</td>
                   <td>${fmtDate(d.DataEmissao ? d.DataEmissao.split('T')[0] : '')}</td>
                   <td>${fmtDate(d.DataValidade ? d.DataValidade.split('T')[0] : '')}</td>
                   <td><span class="badge ${s.cls}">${s.txt}</span></td>
@@ -4361,6 +4371,54 @@ async function abrirWhatsApp(processoId) {
     msg = `Olá, ${nome}! Informamos que seu processo de *${tipo}* (Protocolo: ${p.NumeroProtocolo || 'N/A'}) teve seu status atualizado para: *${status}*.\n\nEm caso de dúvidas, entre em contato conosco.\n\n${CONFIG.nomeEscritorio}`;
   }
   window.open(`https://wa.me/55${celular}?text=${encodeURIComponent(msg)}`, '_blank');
+}
+
+async function renovarSIMAF(clienteId, simafIndex) {
+  showLoading();
+  let cliente, simafList;
+  try {
+    cliente = await App.graph.getItem(CONFIG.listas.clientes, clienteId);
+    simafList = JSON.parse(cliente.SIMAFs || '[]');
+  } catch(e) { toast(e.message, 'error'); hideLoading(); return; }
+  hideLoading();
+
+  const s = simafList[simafIndex];
+  if (!s) { toast('SIMAF não encontrado.', 'error'); return; }
+
+  document.getElementById('modal-renovar-simaf')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modal-renovar-simaf';
+  modal.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px">
+      <div style="background:#fff;border-radius:14px;padding:28px;max-width:420px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+        <h3 style="margin:0 0 12px;font-size:16px">Renovar SIMAF</h3>
+        <p style="margin:0 0 16px;font-size:14px;color:var(--text-muted)">Propriedade: <strong>${esc(s.NomePropriedade || '—')}</strong></p>
+        <p style="margin:0 0 8px;font-size:13px;font-weight:600">Nova data de vencimento:</p>
+        <input type="date" id="nova-validade-simaf" style="width:100%;padding:8px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;box-sizing:border-box;margin-bottom:20px" />
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+          <button onclick="document.getElementById('modal-renovar-simaf').remove()" style="padding:8px 18px;border:1px solid #cbd5e1;background:#fff;border-radius:8px;font-size:14px;cursor:pointer">Cancelar</button>
+          <button onclick="confirmarRenovarSIMAF('${clienteId}',${simafIndex})" style="padding:8px 18px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer">Salvar</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
+async function confirmarRenovarSIMAF(clienteId, simafIndex) {
+  const novaData = document.getElementById('nova-validade-simaf')?.value;
+  if (!novaData) { toast('Informe a nova data de vencimento.', 'error'); return; }
+  document.getElementById('modal-renovar-simaf')?.remove();
+  showLoading();
+  try {
+    const cliente = await App.graph.getItem(CONFIG.listas.clientes, clienteId);
+    const simafList = JSON.parse(cliente.SIMAFs || '[]');
+    if (!simafList[simafIndex]) { toast('SIMAF não encontrado.', 'error'); return; }
+    simafList[simafIndex].DataValidade = novaData;
+    await App.graph.updateItem(CONFIG.listas.clientes, clienteId, { SIMAFs: JSON.stringify(simafList) });
+    App.invalidateCache('clientes');
+    toast('Validade do SIMAF atualizada!', 'success');
+    navigate('clientes/perfil', { id: clienteId, tab: 'dados' });
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 async function gerarAutorizacaoCaca(clienteId, simafIndex) {
