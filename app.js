@@ -1899,6 +1899,9 @@ async function renderDocumentoForm(clienteId, id = null) {
 
   const todasArmas = (await App.getArmas()).filter(a => String(a.ClienteId) === String(clienteId));
   const todosClientes = await App.getClientes();
+  const clubesCadastrados = await App.getClubes();
+  window._clubesCadastrados = clubesCadastrados;
+  const clubesOptsDoc = clubesCadastrados.slice().sort((a,b)=>(a.Title||'').localeCompare(b.Title||'','pt-BR')).map(cl => `<option value="${cl.id}">${esc(cl.Title)}</option>`).join('');
 
   const armasOpts = todasArmas.map(a => `<option value="${a.id}|${esc(a.NumeroSerie||'')} ${esc(a.Marca||'')} ${esc(a.Modelo||'')}" ${String(d.ArmaVinculadaId)===String(a.id)?'selected':''}>${esc(a.NumeroSerie||'')} — ${esc(a.Marca||'')} ${esc(a.Modelo||'')}</option>`).join('');
   const clientesOpts = todosClientes.map(c => `<option value="${c.id}|${esc(c.Title)}" ${String(d.ClienteDonoCRAFId)===String(c.id)?'selected':''}>${esc(c.Title)}</option>`).join('');
@@ -1962,9 +1965,15 @@ async function renderDocumentoForm(clienteId, id = null) {
           </div>
           <div id="guia-clube" style="display:none;margin-top:8px">
             <div class="form-grid">
-              <div><label>Nome do Clube de Tiro</label><input name="NomeClubeTiro" value="${esc(d.NomeClubeTiro||'')}" /></div>
-              <div><label>CR do Clube de Tiro</label><input name="CRClubeTiro" value="${esc(d.CRClubeTiro||'')}" /></div>
-              <div style="grid-column:span 2"><label>Endereço do Clube</label><input name="EnderecoClubeTiro" value="${esc(d.EnderecoClubeTiro||'')}" /></div>
+              <div style="grid-column:span 2"><label>Clube de Tiro</label>
+                <select id="sel-clube-doc" onchange="preencherClubeGuia(this.value,'doc')">
+                  <option value="">Digitar manualmente...</option>
+                  ${clubesOptsDoc}
+                </select>
+              </div>
+              <div><label>Nome do Clube de Tiro</label><input id="doc-nomeClube" name="NomeClubeTiro" value="${esc(d.NomeClubeTiro||'')}" /></div>
+              <div><label>CR do Clube de Tiro</label><input id="doc-crClube" name="CRClubeTiro" value="${esc(d.CRClubeTiro||'')}" /></div>
+              <div style="grid-column:span 2"><label>Endereço do Clube</label><input id="doc-enderecoClube" name="EnderecoClubeTiro" value="${esc(d.EnderecoClubeTiro||'')}" /></div>
             </div>
           </div>
         </div>
@@ -1993,6 +2002,17 @@ function onEmissaoChange(val) {
 function onTipoGuiaChange(tipo) {
   document.getElementById('guia-caca').style.display  = tipo === 'Caça' ? '' : 'none';
   document.getElementById('guia-clube').style.display = (tipo === 'Caça-Treinamento Tiro' || tipo === 'Tiro Esportivo') ? '' : 'none';
+}
+function preencherClubeGuia(clubeId, prefix) {
+  const nomeEl = document.getElementById(`${prefix}-nomeClube`);
+  const crEl   = document.getElementById(`${prefix}-crClube`);
+  const endEl  = document.getElementById(`${prefix}-enderecoClube`);
+  if (!clubeId) { if(nomeEl) nomeEl.value=''; if(crEl) crEl.value=''; if(endEl) endEl.value=''; return; }
+  const cl = (window._clubesCadastrados || []).find(c => String(c.id) === String(clubeId));
+  if (!cl) return;
+  if (nomeEl) nomeEl.value = cl.Title || '';
+  if (crEl)   crEl.value   = cl.CertificadoRegistro || '';
+  if (endEl)  endEl.value  = cl.Endereco || '';
 }
 async function onClienteCRAFChange(val, clienteId) {
   if (!val) return;
@@ -2420,6 +2440,10 @@ async function renderProcessoForm(clienteId = null) {
 
   const clientesOpts = [...clientes].sort((a,b) => (a.Title||'').localeCompare(b.Title||'','pt-BR')).map(c => `<option value="${c.id}" ${String(c.id)===String(clienteId)?'selected':''} ${isClienteInativo(c)?'disabled':''}>${esc(c.Title)}${isClienteInativo(c)?' (Inativo)':''}</option>`).join('');
 
+  const clubesCadastrados = await App.getClubes();
+  window._clubesCadastrados = clubesCadastrados;
+  const clubesOptsProc = clubesCadastrados.slice().sort((a,b)=>(a.Title||'').localeCompare(b.Title||'','pt-BR')).map(cl => `<option value="${cl.id}">${esc(cl.Title)}</option>`).join('');
+
   document.getElementById('page-content').innerHTML = `
   <form id="form-processo" onsubmit="salvarProcesso(event)">
     <div class="form-section">
@@ -2682,9 +2706,15 @@ function buildCamposGuia(armasOpts, clienteId) {
       <div><label>UF</label><input name="proc_ufGuia" maxlength="2" style="text-transform:uppercase" /></div>
     </div></div>
     <div id="proc-guia-clube" style="display:none;margin-top:12px"><div class="form-grid">
-      <div><label>Nome do Clube de Tiro</label><input name="proc_nomeClube" /></div>
-      <div><label>CR do Clube</label><input name="proc_crClube" /></div>
-      <div style="grid-column:span 2"><label>Endereço do Clube</label><input name="proc_enderecoClube" /></div>
+      <div style="grid-column:span 2"><label>Clube de Tiro</label>
+        <select id="sel-clube-proc" onchange="preencherClubeGuia(this.value,'proc')">
+          <option value="">Digitar manualmente...</option>
+          ${clubesOptsProc}
+        </select>
+      </div>
+      <div><label>Nome do Clube de Tiro</label><input id="proc-nomeClube" name="proc_nomeClube" /></div>
+      <div><label>CR do Clube</label><input id="proc-crClube" name="proc_crClube" /></div>
+      <div style="grid-column:span 2"><label>Endereço do Clube</label><input id="proc-enderecoClube" name="proc_enderecoClube" /></div>
     </div></div>
   </div></div>`;
 }
