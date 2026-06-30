@@ -115,6 +115,15 @@ function imprimirDocumento(html, titulo, extraStyle) {
 }
 function chk(v) { return v ? '(X)' : '(  )'; }
 
+function isClienteInativo(c) { return !!c && c.Inativo === 'sim'; }
+function bloqueioClienteInativoHTML(nome) {
+  return `<div class="empty-state" style="padding:40px">
+    <i class="bi bi-person-x" style="font-size:48px;color:#dc2626"></i>
+    <p><strong>${esc(nome||'Cliente')}</strong> está inativado.</p>
+    <p style="font-size:13px;color:var(--text-muted)">Não é possível realizar esta ação para um cliente inativo. Ative o cliente no perfil para continuar.</p>
+  </div>`;
+}
+
 function getCurrentUserName() {
   const acc = App.account;
   const email = (acc?.username || '').toLowerCase();
@@ -646,8 +655,9 @@ function renderClientesRows(lista) {
     const cad = checarCadastroCliente(c);
     const dotColor = cad.completo ? '#22c55e' : '#ef4444';
     const dotTitle = cad.completo ? 'Cadastro completo' : `Faltando: ${cad.faltando.join(', ')}`;
+    const inativo = isClienteInativo(c);
     return `<tr>
-      <td><a style="font-weight:600;cursor:pointer;color:var(--accent)" onclick="navigate('clientes/perfil',{id:'${c.id}'})">${esc(c.Title)}</a></td>
+      <td><a style="font-weight:600;cursor:pointer;${inativo ? 'color:#dc2626;text-decoration:line-through' : 'color:var(--accent)'}" onclick="navigate('clientes/perfil',{id:'${c.id}'})" title="${inativo?'Cliente inativo':''}">${esc(c.Title)}</a></td>
       <td>
         <div class="copy-hover-wrap" style="display:flex;align-items:center;gap:4px">
           <span>${esc(c.CPF || '—')}</span>
@@ -717,6 +727,88 @@ async function confirmarDeleteCliente(id, nome) {
     App.invalidateCache();
     toast('Cliente excluído.', 'success');
     await renderClientesList();
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function inativarCliente(id) {
+  if (!confirm('Deseja inativar este cliente?\n\nIsso bloqueará novos processos, orçamentos, cadastro de armas e inclusão de documentos para este cliente. Os dados, processos e pagamentos já existentes são mantidos. O acesso ao Portal do Cliente também será bloqueado automaticamente.')) return;
+  showLoading();
+  try {
+    await App.graph.updateItem(CONFIG.listas.clientes, id, { Inativo: 'sim' });
+    App.invalidateCache('clientes');
+    toast('Cliente inativado.', 'success');
+    navigate('clientes/perfil', { id });
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function ativarCliente(id) {
+  if (!confirm('Deseja reativar este cliente?')) return;
+  showLoading();
+  try {
+    await App.graph.updateItem(CONFIG.listas.clientes, id, { Inativo: '' });
+    App.invalidateCache('clientes');
+    toast('Cliente reativado.', 'success');
+    navigate('clientes/perfil', { id });
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+function abrirModalBloquearPortal(clienteId) {
+  document.getElementById('modal-bloquear-portal')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modal-bloquear-portal';
+  modal.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px">
+      <div style="background:#fff;border-radius:14px;padding:28px;max-width:420px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+        <h3 style="margin:0 0 12px;font-size:16px"><i class="bi bi-shield-lock me-2"></i>Bloquear Acesso ao Portal</h3>
+        <p style="margin:0 0 16px;font-size:13px;color:var(--text-muted)">O cliente não conseguirá fazer login no portal.prbelico.com.br enquanto o bloqueio estiver ativo.</p>
+        <div style="margin-bottom:14px">
+          <label class="checkbox-item" style="font-size:13px;margin-bottom:6px">
+            <input type="radio" name="prazo-bloqueio" value="indeterminado" checked onchange="document.getElementById('data-bloqueio-wrap').style.display='none'" />
+            Sem prazo (até desbloquear manualmente)
+          </label>
+          <label class="checkbox-item" style="font-size:13px">
+            <input type="radio" name="prazo-bloqueio" value="data" onchange="document.getElementById('data-bloqueio-wrap').style.display=''" />
+            Bloquear até uma data específica
+          </label>
+        </div>
+        <div id="data-bloqueio-wrap" style="display:none;margin-bottom:20px">
+          <label style="font-size:13px;font-weight:600">Bloqueado até:</label>
+          <input type="date" id="data-bloqueio-portal" style="width:100%;padding:8px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;box-sizing:border-box;margin-top:4px" />
+        </div>
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+          <button onclick="document.getElementById('modal-bloquear-portal').remove()" style="padding:8px 18px;border:1px solid #cbd5e1;background:#fff;border-radius:8px;font-size:14px;cursor:pointer">Cancelar</button>
+          <button onclick="confirmarBloquearPortal('${clienteId}')" style="padding:8px 18px;background:#f59e0b;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer">Bloquear</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
+async function confirmarBloquearPortal(clienteId) {
+  const tipo = document.querySelector('input[name="prazo-bloqueio"]:checked')?.value;
+  const data = document.getElementById('data-bloqueio-portal')?.value;
+  if (tipo === 'data' && !data) { toast('Informe a data limite do bloqueio.', 'error'); return; }
+  document.getElementById('modal-bloquear-portal')?.remove();
+  showLoading();
+  try {
+    await App.graph.updateItem(CONFIG.listas.clientes, clienteId, {
+      PortalBloqueado: 'sim',
+      PortalBloqueadoAte: tipo === 'data' ? data : '',
+    });
+    App.invalidateCache('clientes');
+    toast('Acesso ao portal bloqueado.', 'success');
+    navigate('clientes/perfil', { id: clienteId });
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function desbloquearPortalCliente(clienteId) {
+  if (!confirm('Desbloquear o acesso deste cliente ao Portal?')) return;
+  showLoading();
+  try {
+    await App.graph.updateItem(CONFIG.listas.clientes, clienteId, { PortalBloqueado: '', PortalBloqueadoAte: '' });
+    App.invalidateCache('clientes');
+    toast('Acesso ao portal desbloqueado.', 'success');
+    navigate('clientes/perfil', { id: clienteId });
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
@@ -987,24 +1079,32 @@ async function renderClientePerfil(id, tab = 'dados') {
   if (tab === 'dados')           tabContent = renderPerfilDados(cliente);
   else if (tab === 'armas')      tabContent = renderPerfilArmas(armas, id, cliente);
   else if (tab === 'ibama')      tabContent = renderPerfilIBAMA(cliente);
-  else if (tab === 'documentos') tabContent = renderPerfilDocumentos(documentos, id);
+  else if (tab === 'documentos') tabContent = renderPerfilDocumentos(documentos, id, cliente);
   else if (tab === 'processos')  tabContent = renderPerfilProcessos(processos, id);
   else if (tab === 'pagamentos') tabContent = renderPerfilPagamentos(processos, id);
   else if (tab === 'orcamentos') tabContent = await renderPerfilOrcamentos(id);
 
+  const inativo = isClienteInativo(cliente);
+  const portalBloqueado = cliente.PortalBloqueado === 'sim' && !(cliente.PortalBloqueadoAte && new Date(cliente.PortalBloqueadoAte + 'T23:59:59') < new Date());
+
   document.getElementById('page-content').innerHTML = `
+    ${inativo ? `<div style="background:#fee2e2;color:#991b1b;padding:10px 16px;border-radius:8px;margin-bottom:12px;font-size:13px;font-weight:600"><i class="bi bi-person-x me-1"></i>Cliente Inativado — ações de criação bloqueadas para este cliente</div>` : ''}
+    ${portalBloqueado ? `<div style="background:#fef3c7;color:#92400e;padding:10px 16px;border-radius:8px;margin-bottom:12px;font-size:13px;font-weight:600"><i class="bi bi-shield-lock me-1"></i>Acesso ao Portal bloqueado${cliente.PortalBloqueadoAte ? ' até ' + fmtDate(cliente.PortalBloqueadoAte) : ' sem prazo definido'}</div>` : ''}
     <div class="profile-header">
       <div class="profile-avatar">${getInitials(cliente.Title)}</div>
       <div class="profile-info">
-        <h2>${esc(cliente.Title)}</h2>
+        <h2>${esc(cliente.Title)}${inativo ? ' <span class="badge badge-red" style="vertical-align:middle">Inativo</span>' : ''}</h2>
         <p>CPF: ${esc(cliente.CPF || '—')} &nbsp;·&nbsp; CR: ${esc(cliente.NumeroCR || '—')} &nbsp;·&nbsp; ${cats || '<span class="badge badge-gray">Sem categoria</span>'}</p>
       </div>
-      <div class="btn-group" style="margin-left:auto">
+      <div class="btn-group" style="margin-left:auto;flex-wrap:wrap">
         <button class="btn btn-outline btn-sm" onclick="imprimirDadosCliente('${id}')"><i class="bi bi-printer"></i> Imprimir Dados</button>
         <button class="btn btn-outline btn-sm" onclick="imprimirArmasCliente('${id}')"><i class="bi bi-printer"></i> Imprimir Armas</button>
         <button class="btn btn-outline btn-sm" onclick="navigate('clientes/editar',{id:'${id}'})"><i class="bi bi-pencil"></i> Editar</button>
+        ${!inativo ? `
         <button class="btn btn-primary btn-sm" onclick="navigate('processos/novo',{clienteId:'${id}'})"><i class="bi bi-plus-lg"></i> Novo Processo</button>
-        <button class="btn btn-sm" style="background:#f97316;color:#fff;border:1px solid #ea580c" onclick="novoOrcamentoComVerificacao('${id}')"><i class="bi bi-calculator"></i> Novo Orçamento</button>
+        <button class="btn btn-sm" style="background:#f97316;color:#fff;border:1px solid #ea580c" onclick="novoOrcamentoComVerificacao('${id}')"><i class="bi bi-calculator"></i> Novo Orçamento</button>` : ''}
+        <button class="btn btn-sm" style="background:${portalBloqueado?'#16a34a':'#f59e0b'};color:#fff;border:none" onclick="${portalBloqueado?`desbloquearPortalCliente('${id}')`:`abrirModalBloquearPortal('${id}')`}"><i class="bi bi-shield-lock"></i> ${portalBloqueado?'Desbloquear Portal':'Bloquear Portal'}</button>
+        ${isAdminUser() ? `<button class="btn btn-sm" style="background:${inativo?'#16a34a':'#dc2626'};color:#fff;border:none" onclick="${inativo?`ativarCliente('${id}')`:`inativarCliente('${id}')`}"><i class="bi bi-${inativo?'person-check':'person-x'}"></i> ${inativo?'Ativar Cliente':'Inativar Cliente'}</button>` : ''}
       </div>
     </div>
 
@@ -1394,7 +1494,7 @@ function renderPerfilArmas(armas, clienteId, cliente) {
   return `
     <div class="toolbar">
       <span style="font-size:13px;color:var(--text-muted)">${armas.length} arma(s) cadastrada(s)</span>
-      <button class="btn btn-primary" onclick="navigate('armas/novo',{clienteId:'${clienteId}'})"><i class="bi bi-plus-lg"></i> Adicionar Arma</button>
+      ${!isClienteInativo(cliente) ? `<button class="btn btn-primary" onclick="navigate('armas/novo',{clienteId:'${clienteId}'})"><i class="bi bi-plus-lg"></i> Adicionar Arma</button>` : ''}
     </div>
     ${resumoBlock}
     <div class="card">
@@ -1442,11 +1542,11 @@ async function deletarArma(id, clienteId) {
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
-function renderPerfilDocumentos(docs, clienteId) {
+function renderPerfilDocumentos(docs, clienteId, cliente) {
   return `
     <div class="toolbar">
       <span style="font-size:13px;color:var(--text-muted)">${docs.length} documento(s)</span>
-      <button class="btn btn-primary" onclick="navigate('documentos/novo',{clienteId:'${clienteId}'})"><i class="bi bi-plus-lg"></i> Adicionar Documento</button>
+      ${!isClienteInativo(cliente) ? `<button class="btn btn-primary" onclick="navigate('documentos/novo',{clienteId:'${clienteId}'})"><i class="bi bi-plus-lg"></i> Adicionar Documento</button>` : ''}
     </div>
     <div class="card">
       <div class="table-wrapper">
@@ -1606,6 +1706,11 @@ async function renderArmaForm(clienteId, id = null) {
   let a = {};
   if (id) a = await App.graph.getItem(CONFIG.listas.armas, id);
   const cliente = await App.graph.getItem(CONFIG.listas.clientes, clienteId);
+
+  if (!id && isClienteInativo(cliente)) {
+    document.getElementById('page-content').innerHTML = bloqueioClienteInativoHTML(cliente.Title);
+    return;
+  }
 
   const val = (f) => esc(a[f] || '');
   const sel = (f, v) => a[f] === v ? 'selected' : '';
@@ -1783,6 +1888,12 @@ async function salvarArma(e, clienteId, id) {
 async function renderDocumentoForm(clienteId, id = null) {
   document.getElementById('page-title').textContent = id ? 'Editar Documento' : 'Novo Documento';
   const cliente = await App.graph.getItem(CONFIG.listas.clientes, clienteId);
+
+  if (!id && isClienteInativo(cliente)) {
+    document.getElementById('page-content').innerHTML = bloqueioClienteInativoHTML(cliente.Title);
+    return;
+  }
+
   let d = {};
   if (id) d = await App.graph.getItem(CONFIG.listas.documentos, id);
 
@@ -2298,7 +2409,16 @@ async function deletarProcesso(id, clienteNome) {
 async function renderProcessoForm(clienteId = null) {
   document.getElementById('page-title').textContent = 'Novo Processo';
   const clientes = await App.getClientes();
-  const clientesOpts = [...clientes].sort((a,b) => (a.Title||'').localeCompare(b.Title||'','pt-BR')).map(c => `<option value="${c.id}" ${String(c.id)===String(clienteId)?'selected':''}>${esc(c.Title)}</option>`).join('');
+
+  if (clienteId) {
+    const clienteSel = clientes.find(c => String(c.id) === String(clienteId));
+    if (clienteSel && isClienteInativo(clienteSel)) {
+      document.getElementById('page-content').innerHTML = bloqueioClienteInativoHTML(clienteSel.Title);
+      return;
+    }
+  }
+
+  const clientesOpts = [...clientes].sort((a,b) => (a.Title||'').localeCompare(b.Title||'','pt-BR')).map(c => `<option value="${c.id}" ${String(c.id)===String(clienteId)?'selected':''} ${isClienteInativo(c)?'disabled':''}>${esc(c.Title)}${isClienteInativo(c)?' (Inativo)':''}</option>`).join('');
 
   document.getElementById('page-content').innerHTML = `
   <form id="form-processo" onsubmit="salvarProcesso(event)">
@@ -6324,6 +6444,8 @@ async function renderClubesList() {
 
 function renderClubesRows(lista) {
   if (!lista.length) return `<tr><td colspan="5"><div class="empty-state"><i class="bi bi-building"></i><p>Nenhum clube cadastrado.</p><button class="btn btn-primary" onclick="navigate('clubes/novo')">Cadastrar primeiro clube</button></div></td></tr>`;
+  window._clubesCacheDetalhe = {};
+  lista.forEach(cl => { window._clubesCacheDetalhe[cl.id] = cl; });
   return lista.map(cl => `<tr>
     <td><strong>${esc(cl.Title || '—')}</strong></td>
     <td>${esc(cl.CNPJ || '—')}</td>
@@ -6331,11 +6453,45 @@ function renderClubesRows(lista) {
     <td>${esc(cl.Whatsapp || '—')}</td>
     <td>
       <div class="btn-group">
+        <button class="btn btn-outline btn-sm" onclick="verDetalhesClube('${cl.id}')" title="Visualizar"><i class="bi bi-eye"></i></button>
         <button class="btn btn-outline btn-sm" onclick="navigate('clubes/editar',{id:'${cl.id}'})"><i class="bi bi-pencil"></i></button>
         <button class="btn btn-ghost btn-sm" onclick="confirmarDeleteClube('${cl.id}','${esc(cl.Title)}')"><i class="bi bi-trash" style="color:var(--danger)"></i></button>
       </div>
     </td>
   </tr>`).join('');
+}
+
+function verDetalhesClube(clubeId) {
+  const cl = (window._clubesCacheDetalhe || {})[clubeId];
+  if (!cl) return;
+  const row = (label, val) => val ? `<div class="info-item">
+    <label>${label}</label>
+    <div style="display:flex;align-items:center;gap:6px">
+      <div class="value">${esc(val)}</div>
+      <button class="btn-copy" onclick="copiarCampo(this)" data-val="${esc(val)}" title="Copiar"><i class="bi bi-clipboard"></i></button>
+    </div>
+  </div>` : '';
+  const modal = document.createElement('div');
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.35);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+  modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;padding:24px;max-width:560px;width:100%;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <h3 style="margin:0;font-size:16px;color:#111"><i class="bi bi-building me-2"></i>${esc(cl.Title||'')}</h3>
+        <button onclick="this.closest('[style*=fixed]').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:#666;line-height:1">×</button>
+      </div>
+      <div class="info-grid">
+        ${row('Nome do Clube', cl.Title)}
+        ${row('CNPJ', cl.CNPJ)}
+        ${row('Certificado de Registro', cl.CertificadoRegistro)}
+        ${row('Endereço Completo', cl.Endereco)}
+        ${row('WhatsApp', cl.Whatsapp)}
+      </div>
+      <div style="margin-top:16px;text-align:right">
+        <button onclick="this.closest('[style*=fixed]').remove()" class="btn btn-outline btn-sm">Fechar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
 }
 
 function filtrarClubes() {
@@ -6432,6 +6588,14 @@ async function renderOrcamentoForm(clienteId = null) {
   const clientes = await App.getClientes();
   const sorted = [...clientes].sort((a,b) => (a.Title||'').localeCompare(b.Title||''));
 
+  if (clienteId) {
+    const clienteSel = clientes.find(c => String(c.id) === String(clienteId));
+    if (clienteSel && isClienteInativo(clienteSel)) {
+      document.getElementById('page-content').innerHTML = bloqueioClienteInativoHTML(clienteSel.Title);
+      return;
+    }
+  }
+
   document.getElementById('page-content').innerHTML = `
     <div class="card">
       <div class="card-header"><h3><i class="bi bi-calculator me-2"></i>Novo Orçamento</h3></div>
@@ -6440,7 +6604,7 @@ async function renderOrcamentoForm(clienteId = null) {
           <label>Cliente</label>
           <select id="orc-cliente-sel" style="margin-top:4px" onchange="atualizarOrcamento()">
             <option value="">Selecione o cliente...</option>
-            ${sorted.map(c => `<option value="${esc(c.id)}|${esc(c.Title)}|${esc(c.Celular||'')}" ${String(c.id)===String(clienteId)?'selected':''}>${esc(c.Title)}</option>`).join('')}
+            ${sorted.map(c => `<option value="${esc(c.id)}|${esc(c.Title)}|${esc(c.Celular||'')}" ${String(c.id)===String(clienteId)?'selected':''} ${isClienteInativo(c)?'disabled':''}>${esc(c.Title)}${isClienteInativo(c)?' (Inativo)':''}</option>`).join('')}
           </select>
         </div>
         <div class="card" style="margin-bottom:16px">
