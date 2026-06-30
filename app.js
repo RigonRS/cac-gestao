@@ -882,9 +882,17 @@ async function renderClienteForm(id = null, importParams = {}) {
           <label>Categorias CAC</label>
           <div class="checkbox-group">
             <label class="checkbox-item"><input type="checkbox" name="cat_colecionador" ${checked('Colecionador')} /> Colecionador</label>
-            <label class="checkbox-item"><input type="checkbox" name="cat_atirador"     ${checked('Atirador')}     /> Atirador</label>
+            <label class="checkbox-item"><input type="checkbox" name="cat_atirador"     ${checked('Atirador')}     onchange="onCatAtiradorChange(this.checked)" /> Atirador</label>
             <label class="checkbox-item"><input type="checkbox" name="cat_cacador"      ${checked('Caçador')}      onchange="onCatCacadorChange(this.checked)" /> Caçador</label>
           </div>
+        </div>
+        <div id="secao-nivel-atirador" style="margin-top:16px;${cats.includes('Atirador') ? '' : 'display:none'}">
+          <label>Nível Atirador</label>
+          <select name="NivelAtirador">
+            <option value="I"   ${(c.NivelAtirador||'I')==='I'?'selected':''}>I</option>
+            <option value="II"  ${c.NivelAtirador==='II'?'selected':''}>II</option>
+            <option value="III" ${c.NivelAtirador==='III'?'selected':''}>III</option>
+          </select>
         </div>
       </div>
     </div>
@@ -1012,6 +1020,7 @@ async function salvarCliente(e, id) {
     NumeroFiliacao:   fd.get('NumeroFiliacao') || null,
     DataFiliacao:     fd.get('DataFiliacao') || null,
     Categoria:        cats.join(','),
+    NivelAtirador:    cats.includes('Atirador') ? (fd.get('NivelAtirador') || 'I') : null,
     DataValidadeCTF:    fd.get('DataValidadeCTF') || null,
     NaoRenovarCTF:      fd.get('NaoRenovarCTF') || null,
     ValidadeAvaliPsi:   fd.get('ValidadeAvaliPsi') || null,
@@ -1454,12 +1463,18 @@ function renderPerfilArmas(armas, clienteId, cliente) {
         <span style="font-size:11px;color:#b0b7c3">Não cadastrado</span>
       </div>`;
 
+  const nivelAtirador = cliente?.NivelAtirador || 'I';
+  const LIMITES_ATIRADOR = { I: { permitido: 4, restrito: null }, II: { permitido: 8, restrito: null }, III: { permitido: 12, restrito: 4 } };
+  const limAti = LIMITES_ATIRADOR[nivelAtirador] || LIMITES_ATIRADOR.I;
+  const barrasAtirador = nivelAtirador === 'III'
+    ? mkBar('Calibre Permitido', permAti.length, limAti.permitido) + mkBar('Calibre Restrito', resAti.length, limAti.restrito)
+    : mkBar(`Total de armas (Nível ${nivelAtirador})`, armAti.length, limAti.permitido);
+
   const boxAtirador = temAtirador
     ? `<div class="card" style="flex:1;min-width:220px">
-        <div class="card-header"><h3 style="font-size:13px"><i class="bi bi-bar-chart-fill me-1" style="color:var(--accent)"></i>Acervo Atirador</h3></div>
+        <div class="card-header"><h3 style="font-size:13px"><i class="bi bi-bar-chart-fill me-1" style="color:var(--accent)"></i>Acervo Atirador — Nível ${esc(nivelAtirador)}</h3></div>
         <div class="card-body">
-          ${mkBar('Total de armas', armAti.length, 6)}
-          ${mkBar('Calibre Restrito', resAti.length, 2)}
+          ${barrasAtirador}
           <div style="display:flex;gap:16px;margin-top:8px;font-size:12px;flex-wrap:wrap">
             <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#22c55e;margin-right:4px"></span>Permitido: <strong>${permAti.length}</strong></span>
             <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#ef4444;margin-right:4px"></span>Restrito: <strong>${resAti.length}</strong></span>
@@ -6090,6 +6105,11 @@ async function copiarCampo(btn) {
 
 function onCatCacadorChange(checked) {
   const el = document.getElementById('secao-ctf');
+  if (el) el.style.display = checked ? '' : 'none';
+}
+
+function onCatAtiradorChange(checked) {
+  const el = document.getElementById('secao-nivel-atirador');
   if (el) el.style.display = checked ? '' : 'none';
 }
 
