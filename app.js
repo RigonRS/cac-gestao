@@ -72,6 +72,21 @@ function addMonths(isoDate, months) {
   d.setMonth(d.getMonth() + months);
   return d.toISOString().split('T')[0];
 }
+// Calcula a data de vencimento de uma parcela somando meses a partir de uma data base.
+// Usa aritmética inteira (sem passar por Date→UTC) para evitar deslocamento de fuso horário
+// e normaliza a data base (aceita também formato dd/mm/aaaa de registros antigos).
+function calcDataParcela(dataBase, indiceMeses) {
+  const norm = normISO(dataBase);
+  if (!norm) return '';
+  const [y, m, d] = norm.split('-').map(Number);
+  if (!y || !m || !d) return '';
+  const totalMeses = (m - 1) + indiceMeses;
+  const anoFinal = y + Math.floor(totalMeses / 12);
+  const mesFinal = (totalMeses % 12) + 1;
+  const ultimoDia = new Date(anoFinal, mesFinal, 0).getDate();
+  const diaFinal = Math.min(d, ultimoDia);
+  return `${String(anoFinal).padStart(4,'0')}-${String(mesFinal).padStart(2,'0')}-${String(diaFinal).padStart(2,'0')}`;
+}
 function dataPorExtenso(dateStr) {
   if (!dateStr) return '';
   const d = new Date(dateStr + 'T00:00:00');
@@ -138,10 +153,9 @@ function calcPagamento(p) {
 
     let parcelasRecebidas = 0;
     if (nParcelas > 0 && p.DataVencimentoParcelas) {
-      const base = new Date(p.DataVencimentoParcelas.split('T')[0] + 'T00:00:00');
       for (let i = 0; i < nParcelas; i++) {
-        const dp = new Date(base.getFullYear(), base.getMonth() + i, base.getDate());
-        if (dp <= hoje) parcelasRecebidas++;
+        const dpIso = calcDataParcela(p.DataVencimentoParcelas, i);
+        if (dpIso && new Date(dpIso + 'T00:00:00') <= hoje) parcelasRecebidas++;
       }
     }
     const recebido = (entradaPaga ? entrada : 0) + valorParcela * parcelasRecebidas;
@@ -1344,7 +1358,8 @@ function renderPerfilArmas(armas, clienteId, cliente) {
     ? `<div class="card" style="flex:1;min-width:220px">
         <div class="card-header"><h3 style="font-size:13px"><i class="bi bi-bar-chart-fill me-1" style="color:var(--accent)"></i>Acervo Atirador</h3></div>
         <div class="card-body">
-          ${mkBar('Calibre Permitido', permAti.length, 4)}
+          ${mkBar('Total de armas', armAti.length, 6)}
+          ${mkBar('Calibre Restrito', resAti.length, 2)}
           <div style="display:flex;gap:16px;margin-top:8px;font-size:12px;flex-wrap:wrap">
             <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#22c55e;margin-right:4px"></span>Permitido: <strong>${permAti.length}</strong></span>
             <span><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#ef4444;margin-right:4px"></span>Restrito: <strong>${resAti.length}</strong></span>
@@ -1971,6 +1986,7 @@ async function renderProcessosList() {
             <th style="width:36px"><input type="checkbox" id="chk-todos" onchange="toggleSelecionarTodosProcessos(this.checked)" title="Selecionar todos" /></th>
             ${sortTh('ClienteNome','Cliente')}
             ${sortTh('TipoProcesso','Tipo de Processo')}
+            <th>Arma / Local</th>
             ${sortTh('Responsavel','Responsável')}
             <th>Protocolo</th>
             ${sortTh('DataAbertura','Abertura')}
@@ -2002,7 +2018,7 @@ function _getUltimoRegistro(p) {
 }
 
 function renderProcessosRows(lista) {
-  if (!lista.length) return `<tr><td colspan="10"><div class="empty-state"><i class="bi bi-folder-x"></i><p>Nenhum processo encontrado.</p></div></td></tr>`;
+  if (!lista.length) return `<tr><td colspan="11"><div class="empty-state"><i class="bi bi-folder-x"></i><p>Nenhum processo encontrado.</p></div></td></tr>`;
   const selected = window._selectedProcessos || new Set();
   const sf = window._processosSortField || 'DataAbertura';
   const sd = window._processosSortDir   || 'desc';
@@ -2022,6 +2038,7 @@ function renderProcessosRows(lista) {
       <td onclick="event.stopPropagation()"><input type="checkbox" class="chk-processo" data-id="${p.id}" ${isChecked?'checked':''} onchange="toggleSelecaoProcesso('${p.id}',this.checked)" /></td>
       <td><strong>${esc(p.ClienteNome||'—')}</strong></td>
       <td>${esc(p.TipoProcesso||'—')}</td>
+      <td style="font-size:12px;color:var(--text-muted)">${esc(infoArmaLocalProcesso(p)) || '—'}</td>
       <td>${p.Responsavel ? `<span class="badge badge-blue">${esc(p.Responsavel)}</span>` : '<span style="color:var(--text-muted)">—</span>'}</td>
       <td>${esc(p.NumeroProtocolo||'—')}</td>
       <td>${fmtDate(p.DataAbertura?p.DataAbertura.split('T')[0]:'')}</td>
@@ -4952,6 +4969,24 @@ function getArmaModeloProcesso(p) {
   return '';
 }
 
+function infoArmaLocalProcesso(p) {
+  let d = {};
+  try { d = p.DadosEspecificosJSON ? JSON.parse(p.DadosEspecificosJSON) : {}; } catch(e) {}
+  const parseArmaId = v => {
+    if (!v || typeof v !== 'string') return null;
+    const parts = v.split('|');
+    if (parts.length >= 4) return [parts[2], parts[3]].filter(Boolean).join(' ');
+    if (parts.length === 3) return [parts[1], parts[2]].filter(Boolean).join(' ');
+    return null;
+  };
+  const arma = parseArmaId(d.armaId) || parseArmaId(d.armaIdMesmoTitular) || parseArmaId(d.armaIdVendedor) || null;
+  let local = '';
+  if (p.TipoProcesso === 'Guia de Tráfego') {
+    local = d.cidadeGuia ? (d.cidadeGuia + (d.ufGuia ? '/' + d.ufGuia : '')) : (d.nomeClube || '');
+  }
+  return [arma, local].filter(Boolean).join(' · ');
+}
+
 function getItensPendentesProcesso(p) {
   if (!p.ValorProcesso) return [];
   const hoje = new Date(); hoje.setHours(0,0,0,0);
@@ -4965,11 +5000,12 @@ function getItensPendentesProcesso(p) {
     const nParcelas = Number(p.NumeroParcelas) || 0;
     const valorParcela = Number(p.ValorParcelas) || 0;
     if (nParcelas > 0 && p.DataVencimentoParcelas) {
-      const base = new Date(p.DataVencimentoParcelas.split('T')[0]+'T00:00:00');
       for (let i = 0; i < nParcelas; i++) {
         if (!pagamentos[`p${i}`]?.pago) {
-          const dp = new Date(base.getFullYear(), base.getMonth() + i, base.getDate());
-          itens.push({ label: `Parcela ${i+1}/${nParcelas}`, valor: valorParcela, data: dp.toISOString().split('T')[0], vencido: dp <= hoje });
+          const dpIso = calcDataParcela(p.DataVencimentoParcelas, i);
+          if (!dpIso) continue;
+          const dp = new Date(dpIso + 'T00:00:00');
+          itens.push({ label: `Parcela ${i+1}/${nParcelas}`, valor: valorParcela, data: dpIso, vencido: dp <= hoje });
         }
       }
     }
@@ -5754,10 +5790,10 @@ function renderDadosPagamento(p) {
     const nParcelas = Number(p.NumeroParcelas) || 0;
     const valorParcela = Number(p.ValorParcelas) || 0;
     if (nParcelas > 0 && p.DataVencimentoParcelas) {
-      const base = new Date(p.DataVencimentoParcelas.split('T')[0]+'T00:00:00');
       for (let i = 0; i < nParcelas; i++) {
-        const dp = new Date(base.getFullYear(), base.getMonth() + i, base.getDate());
-        linhas.push({ key: `p${i}`, label: `Parcela ${i+1}/${nParcelas}`, valor: valorParcela, dataVenc: dp.toISOString().split('T')[0] });
+        const dpIso = calcDataParcela(p.DataVencimentoParcelas, i);
+        if (!dpIso) continue;
+        linhas.push({ key: `p${i}`, label: `Parcela ${i+1}/${nParcelas}`, valor: valorParcela, dataVenc: dpIso });
       }
     }
   } else {
@@ -6167,7 +6203,7 @@ async function renderRegistroAcessosPortal() {
     if (Array.isArray(raw)) lista = raw;
   } catch(e) {} finally { hideLoading(); }
 
-  const filtrados = lista.slice().reverse();
+  const filtrados = lista.map((a, idx) => ({ ...a, _idx: idx })).reverse();
 
   document.getElementById('page-content').innerHTML = `
     <div class="card" style="margin-bottom:16px">
@@ -6182,19 +6218,33 @@ async function renderRegistroAcessosPortal() {
         ${filtrados.length === 0 ? `<div class="empty-state" style="padding:28px"><i class="bi bi-globe" style="font-size:40px"></i><p>Nenhum acesso registrado ainda.</p></div>` : `
         <div class="table-wrapper">
           <table>
-            <thead><tr><th>Cliente</th><th>CPF</th><th>Data</th><th>Hora</th></tr></thead>
+            <thead><tr><th>Cliente</th><th>CPF</th><th>Data</th><th>Hora</th><th>Ações</th></tr></thead>
             <tbody>
               ${filtrados.map(a => `<tr>
                 <td><strong>${esc(a.nome||'—')}</strong></td>
                 <td style="font-size:12px;color:var(--text-muted)">${esc(a.cpf||'—')}</td>
                 <td style="font-size:12px">${esc(a.data||'—')}</td>
                 <td style="font-size:12px;color:var(--text-muted)">${esc(a.hora||'—')}</td>
+                <td><button class="btn btn-ghost btn-sm" onclick="excluirAcessoPortal(${a._idx})" title="Excluir registro"><i class="bi bi-trash" style="color:var(--danger)"></i></button></td>
               </tr>`).join('')}
             </tbody>
           </table>
         </div>`}
       </div>
     </div>`;
+}
+
+async function excluirAcessoPortal(idx) {
+  if (!confirm('Excluir este registro de acesso?')) return;
+  showLoading();
+  try {
+    const raw = await App.graph._readFile('acessos_portal');
+    const lista = Array.isArray(raw) ? raw : [];
+    lista.splice(idx, 1);
+    await App.graph._writeFile('acessos_portal', lista);
+    toast('Registro excluído.', 'success');
+    await renderRegistroAcessosPortal();
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 // ============================================================
