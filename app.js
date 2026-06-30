@@ -3337,6 +3337,41 @@ async function gerarProcuracao() {
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
+// Quando o vendedor está cadastrado no sistema (proc_vendedorSistema='sim'), os campos manuais
+// (nomeVendedor, cpfVendedor, etc.) ficam vazios — os dados reais ficam em vendedorClienteId/armaIdVendedor.
+// Esta função resolve esses IDs para os dados completos do cliente/arma cadastrados.
+async function resolverVendedorEArmaCadastrados(dados) {
+  let vendedor = null, arma = null;
+  if (dados.vendedorClienteId) {
+    try {
+      const cli = await App.graph.getItem(CONFIG.listas.clientes, dados.vendedorClienteId);
+      vendedor = {
+        nome: cli.Title || '', cpf: cli.CPF || '',
+        rg: `${cli.RG||''}${cli.OrgaoEmissor?' '+cli.OrgaoEmissor:''}${cli.UFDoc?'/'+cli.UFDoc:''}`,
+        cr: cli.NumeroCR || '', telefone: cli.Celular || '', email: cli.Email || '',
+        end: cli.Endereco1 || '', num: cli.Numero1 || '', cep: cli.CEP1 || '',
+        uf: cli.UF1Endereco || '', municipio: cli.Cidade1 || '', bairro: cli.Bairro1 || '',
+        habs: (cli.Categoria||'').split(',').map(s=>s.trim()).filter(Boolean),
+      };
+    } catch(e) {}
+  }
+  const armaVendId = (dados.armaIdVendedor || '').split('|')[0];
+  if (armaVendId) {
+    try {
+      const a = await App.graph.getItem(CONFIG.listas.armas, armaVendId);
+      arma = {
+        acervoOrigem: a.AtividadeCadastrada||'', especie: a.Especie||'', calibre: a.Calibre||'',
+        marca: a.Marca||'', modelo: a.Modelo||'', serie: a.NumeroSerie||'',
+        cadSinarm: a.NumeroSINARM||'', numReg: a.NumeroRegistro||'', paisFab: a.PaisFabricacao||'',
+        capTiros: a.CapacidadeTiro||'', numCanos: a.NumeroCanos||'', numSigma: a.NumeroSIGMA||'',
+        alma: a.AlmaCano||'', numRaias: a.NumeroRaias||'', sentido: a.SentidoRaias||'',
+        comprCano: a.ComprimentoCano||'', acabamento: a.Acabamento||'', funcionamento: a.Funcionamento||'',
+      };
+    } catch(e) {}
+  }
+  return { vendedor, arma };
+}
+
 async function gerarTermoTransferencia() {
   const p = window._processoDetalhe;
   if (!p) return;
@@ -3367,10 +3402,20 @@ async function gerarTermoTransferencia() {
         arm = { especie: a.Especie||'', marca: a.Marca||'', serie: a.NumeroSerie||'', acabamento: a.Acabamento||'', calibre: a.Calibre||'', funcionamento: a.Funcionamento||'', numCanos: a.NumeroCanos||'', capacidade: a.CapacidadeTiro||'', comprCano: a.ComprimentoCano||'', pais: a.PaisFabricacao||'', cadSinarm: a.NumeroSINARM||a.NumeroSIGMA||'' };
       }
     } else {
-      const vendEnd = _ef(dados.endVendedor||'', dados.numVendedor ? `n° ${dados.numVendedor}` : '', dados.bairroVendedor||'', dados.municipioVendedor||'', dados.ufVendedor||'', dados.cepVendedor ? `CEP ${dados.cepVendedor}` : '');
-      vend = { nome: dados.nomeVendedor||'', cpf: dados.cpfVendedor||'', endereco: vendEnd, cidadeUF: [dados.municipioVendedor||'', dados.ufVendedor||''].filter(Boolean).join('/') };
+      const { vendedor: vendCad, arma: armaCad } = await resolverVendedorEArmaCadastrados(dados);
+      if (vendCad) {
+        const vEnd = _ef(vendCad.end||'', vendCad.num ? `n° ${vendCad.num}` : '', vendCad.bairro||'', vendCad.municipio||'', vendCad.uf||'', vendCad.cep ? `CEP ${vendCad.cep}` : '');
+        vend = { nome: vendCad.nome, cpf: vendCad.cpf, endereco: vEnd, cidadeUF: [vendCad.municipio||'', vendCad.uf||''].filter(Boolean).join('/') };
+      } else {
+        const vendEnd = _ef(dados.endVendedor||'', dados.numVendedor ? `n° ${dados.numVendedor}` : '', dados.bairroVendedor||'', dados.municipioVendedor||'', dados.ufVendedor||'', dados.cepVendedor ? `CEP ${dados.cepVendedor}` : '');
+        vend = { nome: dados.nomeVendedor||'', cpf: dados.cpfVendedor||'', endereco: vendEnd, cidadeUF: [dados.municipioVendedor||'', dados.ufVendedor||''].filter(Boolean).join('/') };
+      }
       comp = { nome: c.Title||'', cpf: c.CPF||'', endereco: clienteEnd };
-      arm = { especie: dados.especie||'', marca: dados.marcaArma||'', serie: dados.serieArma||'', acabamento: dados.acabamento||'', calibre: dados.calibre||'', funcionamento: dados.funcionamento||'', numCanos: dados.numeroCanos||'', capacidade: dados.capacidadeTiros||'', comprCano: dados.comprCano||'', pais: dados.paisFabricacao||'', cadSinarm: dados.cadSinarm||'' };
+      if (armaCad) {
+        arm = { especie: armaCad.especie, marca: armaCad.marca, serie: armaCad.serie, acabamento: armaCad.acabamento, calibre: armaCad.calibre, funcionamento: armaCad.funcionamento, numCanos: armaCad.numCanos, capacidade: armaCad.capTiros, comprCano: armaCad.comprCano, pais: armaCad.paisFab, cadSinarm: armaCad.cadSinarm||armaCad.numSigma||'' };
+      } else {
+        arm = { especie: dados.especie||'', marca: dados.marcaArma||'', serie: dados.serieArma||'', acabamento: dados.acabamento||'', calibre: dados.calibre||'', funcionamento: dados.funcionamento||'', numCanos: dados.numeroCanos||'', capacidade: dados.capacidadeTiros||'', comprCano: dados.comprCano||'', pais: dados.paisFabricacao||'', cadSinarm: dados.cadSinarm||'' };
+      }
     }
     const hoje = new Date().toISOString().split('T')[0];
     const html = `
@@ -3402,6 +3447,7 @@ async function gerarRequerimento() {
     if (isMudanca)                                                   t = 5;
 
     const clienteHabs = (c.Categoria||'').split(',').map(s=>s.trim()).filter(Boolean);
+    const { vendedor: vendCadastrado, arma: armaVendCadastrada } = await resolverVendedorEArmaCadastrados(dados);
     let v = {}, cp = {}, vendHabs = [], compHabs = [], vendEmail = '', compEmail = '';
 
     if (isMudanca || (isTransf && dados.clienteVende === 'sim')) {
@@ -3412,6 +3458,13 @@ async function gerarRequerimento() {
         uf:c.UF1Endereco||'', municipio:c.Cidade1||'', bairro:c.Bairro1||'' };
       vendHabs = clienteHabs;
       vendEmail = c.Email||'';
+    } else if (isTransf && vendCadastrado) {
+      v = { nome:vendCadastrado.nome, cpf:vendCadastrado.cpf,
+        rg:vendCadastrado.rg, cr:vendCadastrado.cr, telefone:vendCadastrado.telefone,
+        end:vendCadastrado.end, num:vendCadastrado.num, cep:vendCadastrado.cep,
+        uf:vendCadastrado.uf, municipio:vendCadastrado.municipio, bairro:vendCadastrado.bairro };
+      vendHabs = vendCadastrado.habs;
+      vendEmail = vendCadastrado.email;
     } else if (isTransf) {
       v = { nome:dados.nomeVendedor||'', cpf:dados.cpfVendedor||'',
         rg:dados.rgVendedor||'', cr:dados.crVendedor||'', telefone:dados.telefoneVendedor||'',
@@ -3485,6 +3538,8 @@ async function gerarRequerimento() {
           numSigma:arma.NumeroSIGMA||'', alma:arma.AlmaCano||'',
           numRaias:arma.NumeroRaias||'', sentido:arma.SentidoRaias||'',
           comprCano:arma.ComprimentoCano||'', acabamento:arma.Acabamento||'', funcionamento:arma.Funcionamento||'' };
+      } else if (isTransf && armaVendCadastrada) {
+        arm = armaVendCadastrada;
       } else if (isTransf) {
         arm = { acervoOrigem:'', especie:dados.especie||'', calibre:dados.calibre||'',
           marca:dados.marcaArma||'', modelo:dados.modeloArma||'',
