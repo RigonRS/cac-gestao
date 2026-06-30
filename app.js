@@ -1162,6 +1162,7 @@ function renderPerfilDados(c) {
       <div class="form-body"><div class="info-grid">
         ${row('N° CR', c.NumeroCR)} ${dateRow('Validade CR', 'DataValidadeCR')}
         ${row('Categorias', (c.Categoria||'').replace(/,/g,', '))}
+        ${(c.Categoria||'').includes('Atirador') ? row('Nível Atirador', c.NivelAtirador || 'I') : ''}
       </div></div>
     </div>
     <div class="form-section">
@@ -2455,9 +2456,7 @@ async function renderProcessoForm(clienteId = null) {
 
   const clientesOpts = [...clientes].sort((a,b) => (a.Title||'').localeCompare(b.Title||'','pt-BR')).map(c => `<option value="${c.id}" ${String(c.id)===String(clienteId)?'selected':''} ${isClienteInativo(c)?'disabled':''}>${esc(c.Title)}${isClienteInativo(c)?' (Inativo)':''}</option>`).join('');
 
-  const clubesCadastrados = await App.getClubes();
-  window._clubesCadastrados = clubesCadastrados;
-  const clubesOptsProc = clubesCadastrados.slice().sort((a,b)=>(a.Title||'').localeCompare(b.Title||'','pt-BR')).map(cl => `<option value="${cl.id}">${esc(cl.Title)}</option>`).join('');
+  window._clubesCadastrados = await App.getClubes();
 
   document.getElementById('page-content').innerHTML = `
   <form id="form-processo" onsubmit="salvarProcesso(event)">
@@ -2706,6 +2705,7 @@ function buildCamposAtualizacaoDoc() {
 }
 
 function buildCamposGuia(armasOpts, clienteId) {
+  const clubesOptsProc = (window._clubesCadastrados || []).slice().sort((a,b)=>(a.Title||'').localeCompare(b.Title||'','pt-BR')).map(cl => `<option value="${cl.id}">${esc(cl.Title)}</option>`).join('');
   return `<div class="form-section"><div class="form-section-title">Dados da Guia</div><div class="form-body">
     <div class="form-grid">
       <div><label>Arma</label><select name="proc_armaId"><option value="">Selecione...</option>${armasOpts}</select></div>
