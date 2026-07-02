@@ -2405,7 +2405,10 @@ async function renderMeusProcessos() {
             return `
               <div style="padding:12px 16px;border-bottom:1px solid var(--border)">
                 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-                  <a style="font-weight:600;cursor:pointer;color:var(--accent);font-size:14px" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.TipoProcesso||'—')}</a>
+                  <div>
+                    <a style="font-weight:600;cursor:pointer;color:var(--accent);font-size:14px" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.TipoProcesso||'—')}</a>
+                    ${infoArmaLocalProcesso(p) ? `<div style="font-size:12px;color:var(--text-muted);margin-top:2px">${esc(infoArmaLocalProcesso(p))}</div>` : ''}
+                  </div>
                   <div style="display:flex;align-items:center;gap:8px">
                     ${total > 0 ? `<span style="font-size:12px;color:var(--text-muted)">${total - pendentes.length}/${total} itens</span>` : ''}
                     <span class="badge ${b.cls}">${b.txt}</span>
@@ -2559,6 +2562,7 @@ async function renderProcessoForm(clienteId = null) {
 
 let _processoArmasCache = [];
 let _processoClienteCategoria = [];
+let _processoClienteObj = null;
 
 async function onClienteProcessoChange(clienteId) {
   if (!clienteId) return;
@@ -2566,6 +2570,7 @@ async function onClienteProcessoChange(clienteId) {
   const clientes = await App.getClientes();
   const cliente = clientes.find(c => String(c.id) === String(clienteId));
   _processoClienteCategoria = cliente ? (cliente.Categoria || '').split(',').map(s => s.trim()).filter(Boolean) : [];
+  _processoClienteObj = cliente || null;
   const tipo = document.querySelector('[name="TipoProcesso"]')?.value;
   if (tipo) onTipoProcessoChange(tipo);
   // Atualiza seletor de processo futuro se status já estiver selecionado
@@ -2704,8 +2709,21 @@ function buildCamposAtualizacaoDoc() {
   </div></div>`;
 }
 
+function buildEndOrigemGuiaOpts() {
+  const cli = window._processoClienteObj;
+  if (!cli) return '';
+  const end1 = [cli.Endereco1, cli.Numero1, cli.Bairro1, cli.Cidade1, cli.UF1Endereco].filter(Boolean).join(', ');
+  const end2 = [cli.Endereco2, cli.Numero2, cli.Bairro2, cli.Cidade2, cli.UF2Endereco].filter(Boolean).join(', ');
+  if (!end1 && !end2) return '';
+  let opts = `<option value="">Selecione o endereço de origem...</option>`;
+  if (end1) opts += `<option value="${esc(end1)}">1° Endereço — ${esc(end1)}</option>`;
+  if (end2) opts += `<option value="${esc(end2)}">2° Endereço — ${esc(end2)}</option>`;
+  return opts;
+}
+
 function buildCamposGuia(armasOpts, clienteId) {
   const clubesOptsProc = (window._clubesCadastrados || []).slice().sort((a,b)=>(a.Title||'').localeCompare(b.Title||'','pt-BR')).map(cl => `<option value="${cl.id}">${esc(cl.Title)}</option>`).join('');
+  const endOrigemOpts = buildEndOrigemGuiaOpts();
   return `<div class="form-section"><div class="form-section-title">Dados da Guia</div><div class="form-body">
     <div class="form-grid">
       <div><label>Arma</label><select name="proc_armaId"><option value="">Selecione...</option>${armasOpts}</select></div>
@@ -2731,6 +2749,13 @@ function buildCamposGuia(armasOpts, clienteId) {
       <div><label>CR do Clube</label><input id="proc-crClube" name="proc_crClube" /></div>
       <div style="grid-column:span 2"><label>Endereço do Clube</label><input id="proc-enderecoClube" name="proc_enderecoClube" /></div>
     </div></div>
+    ${endOrigemOpts ? `<div style="margin-top:12px"><div class="form-grid">
+      <div style="grid-column:span 2"><label>Endereço de Origem da Guia</label>
+        <select name="proc_endOrigemGuia">
+          ${endOrigemOpts}
+        </select>
+      </div>
+    </div></div>` : ''}
   </div></div>`;
 }
 
@@ -3553,7 +3578,7 @@ async function gerarRequerimento() {
       }
     } catch(err) {}
 
-    const acervoDestino = dados.acervoDestinoVenda || dados.acervoDestino || '';
+    const acervoDestino = dados.acervoDestinoMesmoTitular || dados.acervoDestinoVenda || dados.acervoDestino || '';
     const hoje = new Date().toISOString().split('T')[0];
     const cidadeReq = v.municipio || c.Cidade1 || '';
     const ufReq = v.uf || c.UF1Endereco || '';
@@ -3767,7 +3792,7 @@ async function renderProcessoDetalhe(id) {
   const fnRegistrar = jaDeferido ? 'alertaJaDeferido' : 'registrarStatusHistorico';
   const fnDeferir   = jaDeferido ? 'alertaJaDeferido' : 'deferirProcesso';
 
-  const gruPagaSalva = JSON.parse(processo.HistoricoStatus || '[]').some(h => (h.status||'').includes('Pagamento GRU'));
+  const gruPagaSalva = JSON.parse(processo.HistoricoStatus || '[]').some(h => (h.status||'').startsWith('Pagamento GRU'));
 
   const celular = (processo.ClienteNome ? '' : '');
 
