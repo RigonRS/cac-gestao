@@ -444,7 +444,16 @@ async function renderDashboard() {
     ${(() => {
       const deferidos = processos
         .filter(p => p.Status === 'Deferido')
-        .map(p => ({ p, dataDef: getDataDeferido(p) }))
+        .map(p => {
+          const dataDef = getDataDeferido(p);
+          let deferidoPor = '';
+          try {
+            const hist = JSON.parse(p.HistoricoStatus || '[]');
+            const entry = [...hist].reverse().find(h => h.status === 'Deferido');
+            deferidoPor = entry?.usuario || '';
+          } catch(e) {}
+          return { p, dataDef, deferidoPor };
+        })
         .filter(x => x.dataDef)
         .sort((a, b) => b.dataDef.localeCompare(a.dataDef))
         .slice(0, 10);
@@ -455,7 +464,7 @@ async function renderDashboard() {
           <span style="font-size:12px;color:var(--text-muted)">últimos 10</span>
         </div>
         <div class="card-body" style="padding:0">
-          ${deferidos.map(({ p, dataDef }) => `
+          ${deferidos.map(({ p, dataDef, deferidoPor }) => `
           <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--border);cursor:pointer" onclick="navigate('processos/detalhe',{id:'${p.id}'})">
             <div>
               <div style="font-size:13px;font-weight:600">${esc(p.TipoProcesso||'—')}</div>
@@ -464,6 +473,7 @@ async function renderDashboard() {
             <div style="text-align:right;flex-shrink:0">
               <span class="badge badge-green">Deferido</span>
               <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${fmtDate(dataDef)}</div>
+              ${deferidoPor ? `<div style="font-size:11px;color:var(--text-muted)"><i class="bi bi-person-fill"></i> ${esc(deferidoPor)}</div>` : ''}
             </div>
           </div>`).join('')}
         </div>
@@ -1587,14 +1597,17 @@ function renderPerfilArmas(armas, clienteId, cliente) {
     <div class="card">
       <div class="table-wrapper">
         <table>
-          <thead><tr><th>N° Série</th><th>N° SIGMA</th><th>Atividade</th><th>Marca/Modelo</th><th>Calibre</th><th>Espécie</th><th>Grupo</th><th style="text-align:center">Dados</th><th>Ações</th></tr></thead>
+          <thead><tr><th>Status</th><th>N° Série</th><th>N° SIGMA</th><th>Atividade</th><th>Marca/Modelo</th><th>Calibre</th><th>Espécie</th><th>Grupo</th><th style="text-align:center">Dados</th><th>Ações</th></tr></thead>
           <tbody>${armas.length === 0
-            ? `<tr><td colspan="9"><div class="empty-state"><i class="bi bi-shield"></i><p>Nenhuma arma cadastrada.</p></div></td></tr>`
+            ? `<tr><td colspan="10"><div class="empty-state"><i class="bi bi-shield"></i><p>Nenhuma arma cadastrada.</p></div></td></tr>`
             : armas.map(a => {
                 const cad = checarCadastroArma(a);
                 const dotColor = cad.completo ? '#22c55e' : '#ef4444';
                 const dotTitle = cad.completo ? 'Dados completos' : `Faltando: ${cad.faltando.join(', ')}`;
+                const _sa = a.StatusArma || 'Ativa';
+                const _saBadge = _sa === 'Furtada' ? '<span class="badge badge-red">Furtada</span>' : _sa === 'Extraviada' ? '<span class="badge badge-orange">Extraviada</span>' : '<span class="badge badge-green">Ativa</span>';
                 return `<tr>
+                  <td>${_saBadge}</td>
                   <td>${esc(a.NumeroSerie||'—')}</td>
                   <td>${esc(a.NumeroSIGMA||'—')}</td>
                   <td><span class="badge badge-blue">${esc(a.AtividadeCadastrada||'—')}</span></td>
@@ -5441,6 +5454,36 @@ function infoArmaLocalProcesso(p) {
   return [arma, local].filter(Boolean).join(' · ');
 }
 
+function infoGRUProcesso(p) {
+  let d = {};
+  try { d = p.DadosEspecificosJSON ? JSON.parse(p.DadosEspecificosJSON) : {}; } catch(e) {}
+  const tipo = p.TipoProcesso || '';
+  const parseArmaId = v => {
+    if (!v || typeof v !== 'string') return null;
+    const parts = v.split('|');
+    if (parts.length >= 4) return [parts[2], parts[3]].filter(Boolean).join(' ');
+    if (parts.length === 3) return [parts[1], parts[2]].filter(Boolean).join(' ');
+    return null;
+  };
+  if (TIPOS_TRANSFERENCIA.includes(tipo)) {
+    const arma = parseArmaId(d.armaId) || parseArmaId(d.armaIdVendedor) || null;
+    const vc = [d.nomeVendedor && `Vend.: ${d.nomeVendedor}`, d.nomeComprador && `Comp.: ${d.nomeComprador}`].filter(Boolean).join(' / ');
+    return [arma, vc].filter(Boolean).join(' · ');
+  }
+  if (tipo === 'Inclusão de Atividade' || tipo === 'Exclusão de Atividade') {
+    return d.atividade || '';
+  }
+  if (tipo === 'Alteração de Endereço') {
+    return d.enderecoAlteracao || '';
+  }
+  if (tipo === 'Aquisição de Arma SIGMA' || tipo === 'Aquisição de Arma PF') {
+    const armaDesc = [d.marca, d.modelo].filter(Boolean).join(' ');
+    const forn = d.nomeFornecedor ? `Forn.: ${d.nomeFornecedor}` : '';
+    return [armaDesc, forn].filter(Boolean).join(' · ');
+  }
+  return infoArmaLocalProcesso(p);
+}
+
 function getItensPendentesProcesso(p) {
   if (!p.ValorProcesso) return [];
   const hoje = new Date(); hoje.setHours(0,0,0,0);
@@ -5610,7 +5653,7 @@ async function renderPagamentosGRU() {
             ${g.processos.map(p => `<div style="padding:5px 0;font-size:13px;display:flex;justify-content:space-between;align-items:center">
               <div>
                 <a style="cursor:pointer;color:var(--accent)" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.TipoProcesso||'—')}</a>
-                ${infoArmaLocalProcesso(p) ? `<div style="font-size:11px;color:var(--text-muted);margin-top:1px">${esc(infoArmaLocalProcesso(p))}</div>` : ''}
+                ${infoGRUProcesso(p) ? `<div style="font-size:11px;color:var(--text-muted);margin-top:1px">${esc(infoGRUProcesso(p))}</div>` : ''}
               </div>
               <span class="badge badge-orange">GRU Pendente</span>
             </div>`).join('')}
@@ -6711,15 +6754,23 @@ async function renderRegistroAcessosPortal() {
         ${filtrados.length === 0 ? `<div class="empty-state" style="padding:28px"><i class="bi bi-globe" style="font-size:40px"></i><p>Nenhum acesso registrado ainda.</p></div>` : `
         <div class="table-wrapper">
           <table>
-            <thead><tr><th>Cliente</th><th>CPF</th><th>Data</th><th>Hora</th><th>Ações</th></tr></thead>
+            <thead><tr><th>Cliente</th><th>Tipo</th><th>Arquivo</th><th>CPF</th><th>Data</th><th>Hora</th><th>Ações</th></tr></thead>
             <tbody>
-              ${filtrados.map(a => `<tr>
+              ${filtrados.map(a => {
+                const isDownload = a.tipo === 'download';
+                const tipoBadge = isDownload
+                  ? '<span class="badge badge-blue"><i class="bi bi-download me-1"></i>Download</span>'
+                  : '<span class="badge badge-green"><i class="bi bi-box-arrow-in-right me-1"></i>Login</span>';
+                return `<tr>
                 <td><strong>${esc(a.nome||'—')}</strong></td>
+                <td>${tipoBadge}</td>
+                <td style="font-size:12px">${isDownload ? esc(a.arquivo||'—') : '<span style="color:var(--text-muted)">—</span>'}</td>
                 <td style="font-size:12px;color:var(--text-muted)">${esc(a.cpf||'—')}</td>
                 <td style="font-size:12px">${esc(a.data||'—')}</td>
                 <td style="font-size:12px;color:var(--text-muted)">${esc(a.hora||'—')}</td>
                 <td><button class="btn btn-ghost btn-sm" onclick="excluirAcessoPortal(${a._idx})" title="Excluir registro"><i class="bi bi-trash" style="color:var(--danger)"></i></button></td>
-              </tr>`).join('')}
+              </tr>`;
+              }).join('')}
             </tbody>
           </table>
         </div>`}
