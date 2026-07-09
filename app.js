@@ -213,9 +213,20 @@ function showLoading() { document.getElementById('loading-overlay').style.displa
 function hideLoading() { document.getElementById('loading-overlay').style.display = 'none'; }
 
 // ---- ROTEADOR ----
+window._navStack = [];
+
 function navigate(page, params = {}) {
+  const current = window.location.hash.replace('#', '') || 'dashboard';
+  window._navStack.push(current);
   const qs = Object.entries(params).map(([k,v]) => `${k}=${encodeURIComponent(v)}`).join('&');
   window.location.hash = qs ? `${page}?${qs}` : page;
+}
+
+function voltarPaginaAnterior() {
+  if (window._navStack && window._navStack.length > 0) {
+    const prev = window._navStack.pop();
+    window.location.hash = prev;
+  }
 }
 function getRoute() {
   const h = window.location.hash.replace('#', '') || 'dashboard';
@@ -236,6 +247,8 @@ async function renderPage() {
   const { page, params } = getRoute();
   setActiveNav(page.split('/')[0]);
   document.getElementById('page-content').innerHTML = '';
+  const btnBack = document.getElementById('btn-back-nav');
+  if (btnBack) btnBack.style.display = (window._navStack && window._navStack.length > 0) ? '' : 'none';
 
   try {
     showLoading();
@@ -428,6 +441,35 @@ async function renderDashboard() {
       </div>
     </div>
 
+    ${(() => {
+      const deferidos = processos
+        .filter(p => p.Status === 'Deferido')
+        .map(p => ({ p, dataDef: getDataDeferido(p) }))
+        .filter(x => x.dataDef)
+        .sort((a, b) => b.dataDef.localeCompare(a.dataDef))
+        .slice(0, 10);
+      if (!deferidos.length) return '';
+      return `<div class="card" style="margin-top:20px">
+        <div class="card-header">
+          <h3><i class="bi bi-check-circle-fill me-2" style="color:#16a34a"></i>Últimos Processos Deferidos</h3>
+          <span style="font-size:12px;color:var(--text-muted)">últimos 10</span>
+        </div>
+        <div class="card-body" style="padding:0">
+          ${deferidos.map(({ p, dataDef }) => `
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--border);cursor:pointer" onclick="navigate('processos/detalhe',{id:'${p.id}'})">
+            <div>
+              <div style="font-size:13px;font-weight:600">${esc(p.TipoProcesso||'—')}</div>
+              <div style="font-size:11px;color:var(--text-muted)">${esc(p.ClienteNome||'—')}</div>
+            </div>
+            <div style="text-align:right;flex-shrink:0">
+              <span class="badge badge-green">Deferido</span>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${fmtDate(dataDef)}</div>
+            </div>
+          </div>`).join('')}
+        </div>
+      </div>`;
+    })()}
+
     ${ctfClientes.length > 0 ? `
     <div class="card" style="margin-top:20px">
       <div class="card-header">
@@ -438,7 +480,7 @@ async function renderDashboard() {
         <table>
           <thead><tr><th>Cliente</th><th>Vencimento CTF</th><th>Situação</th></tr></thead>
           <tbody>
-            ${ctfClientes.map(c => {
+            ${ctfClientes.slice(0,10).map(c => {
               const iso = c.DataValidadeCTF.split('T')[0];
               const dias = daysBetween(iso);
               const s = validadeStatus(iso);
@@ -465,7 +507,7 @@ async function renderDashboard() {
         <table>
           <thead><tr><th>Cliente</th><th>Propriedade</th><th>Vencimento</th><th>Situação</th></tr></thead>
           <tbody>
-            ${simafVencimentos.map(item => {
+            ${simafVencimentos.slice(0,10).map(item => {
               const c = (() => {
                 if (item.dias === null) return { bg:'badge-gray', row:'' };
                 if (item.dias < 0)     return { bg:'badge-red',    row:'background:#fff5f5' };
@@ -846,7 +888,11 @@ async function renderClienteForm(id = null, importParams = {}) {
       <div class="form-body">
         <div class="form-grid">
           <div style="grid-column:1/-1"><label>Nome Completo *</label><input name="NomeCompleto" value="${val('Title')}" required /></div>
-          <div><label>CPF</label><input name="CPF" value="${val('CPF')}" oninput="this.value=fmtCPF(this.value)" maxlength="14" /></div>
+          <div>
+            <label>CPF</label>
+            <input name="CPF" value="${val('CPF')}" oninput="this.value=fmtCPF(this.value);verificarCPFDuplicado(this.value,'${id||''}')" maxlength="14" />
+            <div id="aviso-cpf-duplicado" style="display:none;color:#dc2626;font-size:12px;margin-top:4px;padding:6px 10px;background:#fee2e2;border-radius:6px;border:1px solid #fca5a5"></div>
+          </div>
           <div>
             <label>Senha GOV</label>
             <input name="SenhaGOV" value="${val('SenhaGOV')}" />
@@ -984,8 +1030,33 @@ async function renderClienteForm(id = null, importParams = {}) {
   </form>`;
 }
 
+async function verificarCPFDuplicado(cpf, idAtual) {
+  const aviso = document.getElementById('aviso-cpf-duplicado');
+  if (!aviso) return;
+  const cpfLimpo = cpf.replace(/\D/g, '');
+  if (cpfLimpo.length < 11) { aviso.style.display = 'none'; return; }
+  try {
+    const clientes = await App.getClientes();
+    const dup = clientes.find(c => {
+      if (idAtual && String(c.id) === String(idAtual)) return false;
+      return (c.CPF || '').replace(/\D/g, '') === cpfLimpo;
+    });
+    if (dup) {
+      aviso.style.display = '';
+      aviso.innerHTML = `⚠️ CPF já cadastrado para <strong>${esc(dup.Title)}</strong>. <a style="color:#dc2626;cursor:pointer;text-decoration:underline" onclick="navigate('clientes/perfil',{id:'${dup.id}'})">Ver cadastro</a>`;
+    } else {
+      aviso.style.display = 'none';
+    }
+  } catch(err) {}
+}
+
 async function salvarCliente(e, id) {
   e.preventDefault();
+  const aviso = document.getElementById('aviso-cpf-duplicado');
+  if (aviso && aviso.style.display !== 'none') {
+    toast('Cadastro bloqueado: CPF já está cadastrado em outro cliente.', 'error');
+    return;
+  }
   const fd = new FormData(e.target);
   const cats = [];
   if (fd.get('cat_colecionador')) cats.push('Colecionador');
@@ -1747,7 +1818,18 @@ async function renderArmaForm(clienteId, id = null) {
       <div class="form-section-title">Identificação da Arma</div>
       <div class="form-body">
         <div class="form-grid">
-          <div><label>Número de Série *</label><input name="NumeroSerie" value="${val('NumeroSerie')}" required /></div>
+          <div>
+            <label>Número de Série *</label>
+            <input name="NumeroSerie" value="${val('NumeroSerie')}" required ${!id ? `oninput="verificarSerieDuplicada(this.value,'${id||''}')"` : ''} />
+            <div id="aviso-serie-duplicada" style="display:none;color:#dc2626;font-size:12px;margin-top:4px;padding:6px 10px;background:#fee2e2;border-radius:6px;border:1px solid #fca5a5"></div>
+          </div>
+          <div><label>Status da Arma</label>
+            <select name="StatusArma">
+              <option value="Ativa" ${(a.StatusArma||'Ativa')==='Ativa'?'selected':''}>Ativa</option>
+              <option value="Furtada" ${a.StatusArma==='Furtada'?'selected':''}>Furtada</option>
+              <option value="Extraviada" ${a.StatusArma==='Extraviada'?'selected':''}>Extraviada</option>
+            </select>
+          </div>
           <div><label>Órgão de Cadastro</label>
             <select name="OrgaoCadastro" onchange="toggleCamposOrgaoCadastro()">
               <option value="">Selecione...</option>
@@ -1849,8 +1931,33 @@ async function renderArmaForm(clienteId, id = null) {
   setTimeout(() => { toggleCamposOrgaoCadastro(); toggleAlmaCano(); }, 0);
 }
 
+async function verificarSerieDuplicada(numSerie, idAtual) {
+  const aviso = document.getElementById('aviso-serie-duplicada');
+  if (!aviso) return;
+  const s = (numSerie || '').trim();
+  if (!s) { aviso.style.display = 'none'; return; }
+  try {
+    const armas = await App.getArmas();
+    const dup = armas.find(a => {
+      if (idAtual && String(a.id) === String(idAtual)) return false;
+      return (a.NumeroSerie || '').trim().toLowerCase() === s.toLowerCase();
+    });
+    if (dup) {
+      aviso.style.display = '';
+      aviso.textContent = `⚠️ Número de série já cadastrado: ${dup.Marca || ''} ${dup.Modelo || ''} — ${dup.ClienteNome || ''}`;
+    } else {
+      aviso.style.display = 'none';
+    }
+  } catch(err) {}
+}
+
 async function salvarArma(e, clienteId, id) {
   e.preventDefault();
+  const aviso = document.getElementById('aviso-serie-duplicada');
+  if (aviso && aviso.style.display !== 'none') {
+    toast('Cadastro bloqueado: número de série já cadastrado em outra arma.', 'error');
+    return;
+  }
   const fd = new FormData(e.target);
   const atividade  = fd.get('AtividadeCadastrada');
   const grupoCal   = fd.get('GrupoCalibre');
@@ -1861,6 +1968,7 @@ async function salvarArma(e, clienteId, id) {
     ClienteId:         clienteId,
     ClienteNome:       cliente.Title,
     NumeroSerie:       fd.get('NumeroSerie'),
+    StatusArma:        fd.get('StatusArma') || 'Ativa',
     OrgaoCadastro:     fd.get('OrgaoCadastro') || null,
     NumeroSIGMA:       fd.get('NumeroSIGMA') || null,
     NumeroSINARM:      fd.get('NumeroSINARM') || null,
@@ -2297,7 +2405,9 @@ function _getUltimoRegistroISO(p) {
 
 async function renderConsultaProcessos() {
   document.getElementById('page-title').textContent = 'Consulta de Processos';
-  const processos = await App.getProcessos();
+  const [processos, clientes] = await Promise.all([App.getProcessos(), App.getClientes()]);
+  const clienteMap = {};
+  clientes.forEach(c => { clienteMap[String(c.id)] = c; });
 
   const hoje = new Date(); hoje.setHours(0,0,0,0);
   const hojeISO = hoje.toISOString().split('T')[0];
@@ -2311,17 +2421,43 @@ async function renderConsultaProcessos() {
     return ultISO < hojeISO;
   });
 
-  lista.sort((a, b) => {
-    const ua = _getUltimoRegistroISO(a) || '0000-00-00';
-    const ub = _getUltimoRegistroISO(b) || '0000-00-00';
-    return ua < ub ? -1 : ua > ub ? 1 : 0;
-  });
+  if (!window._consultaSortCol) window._consultaSortCol = 'ultReg';
+  if (!window._consultaSortDir) window._consultaSortDir = 'asc';
+
+  function sortLista(arr, col, dir) {
+    const d = dir === 'asc' ? 1 : -1;
+    return [...arr].sort((a, b) => {
+      let va, vb;
+      if (col === 'cliente')   { va = a.ClienteNome||''; vb = b.ClienteNome||''; }
+      else if (col === 'tipo') { va = a.TipoProcesso||''; vb = b.TipoProcesso||''; }
+      else if (col === 'resp') { va = a.Responsavel||''; vb = b.Responsavel||''; }
+      else if (col === 'abertura') { va = a.DataAbertura||''; vb = b.DataAbertura||''; }
+      else if (col === 'ultReg') { va = _getUltimoRegistroISO(a)||'0000-00-00'; vb = _getUltimoRegistroISO(b)||'0000-00-00'; }
+      else if (col === 'status') { va = a.Status||''; vb = b.Status||''; }
+      else if (col === '2fa') {
+        va = (clienteMap[String(a.ClienteId)]?.VerificacaoEtapas === 'Sim') ? '1' : '0';
+        vb = (clienteMap[String(b.ClienteId)]?.VerificacaoEtapas === 'Sim') ? '1' : '0';
+      }
+      else { va = ''; vb = ''; }
+      if (va < vb) return -d;
+      if (va > vb) return d;
+      return 0;
+    });
+  }
+
+  const listaSorted = sortLista(lista, window._consultaSortCol, window._consultaSortDir);
 
   const el = document.getElementById('page-content');
 
   if (!lista.length) {
     el.innerHTML = `<div class="empty-state"><i class="bi bi-check-circle" style="font-size:48px;color:var(--success)"></i><p style="margin-top:12px">Nenhum processo pendente de registro.</p></div>`;
     return;
+  }
+
+  function thSort(col, label) {
+    const active = window._consultaSortCol === col;
+    const icon = active ? (window._consultaSortDir === 'asc' ? '↑' : '↓') : '↕';
+    return `<th style="cursor:pointer;user-select:none;white-space:nowrap" onclick="consultaSortBy('${col}')">${label} <span style="font-size:11px;color:${active?'var(--accent)':'var(--text-muted)'}">${icon}</span></th>`;
   }
 
   el.innerHTML = `
@@ -2332,18 +2468,21 @@ async function renderConsultaProcessos() {
       <div class="table-wrapper">
         <table>
           <thead><tr>
-            <th>Cliente</th>
-            <th>Tipo de Processo</th>
-            <th>Responsável</th>
-            <th>Abertura</th>
-            <th>Último Registro</th>
-            <th>Status</th>
+            ${thSort('cliente','Cliente')}
+            ${thSort('tipo','Tipo de Processo')}
+            ${thSort('resp','Responsável')}
+            ${thSort('abertura','Abertura')}
+            ${thSort('ultReg','Último Registro')}
+            ${thSort('status','Status')}
+            ${thSort('2fa','2FA')}
             <th>Ações</th>
           </tr></thead>
           <tbody>
-            ${lista.map(p => {
+            ${listaSorted.map(p => {
               const b = statusBadge(p.Status);
               const ultReg = _getUltimoRegistro(p);
+              const cli = clienteMap[String(p.ClienteId)];
+              const tem2fa = cli?.VerificacaoEtapas === 'Sim';
               return `<tr style="cursor:pointer" onclick="navigate('processos/detalhe',{id:'${p.id}'})">
                 <td><strong>${esc(p.ClienteNome||'—')}</strong></td>
                 <td>${esc(p.TipoProcesso||'—')}${p.Restituido ? ' <span class="badge" style="background:#9333ea;color:#fff;font-size:11px"><i class="bi bi-arrow-return-left"></i> Restituído</span>' : ''}</td>
@@ -2351,6 +2490,7 @@ async function renderConsultaProcessos() {
                 <td>${fmtDate(p.DataAbertura?p.DataAbertura.split('T')[0]:'')}</td>
                 <td style="font-size:12px;color:${ultReg ? 'var(--danger)' : 'var(--text-muted)'}"><strong>${ultReg || '—'}</strong></td>
                 <td><span class="badge ${b.cls}">${b.txt}</span></td>
+                <td>${tem2fa ? '<span class="badge badge-blue" title="Verificação em 2 etapas ativa"><i class="bi bi-shield-lock-fill"></i> 2FA</span>' : '<span style="color:var(--text-muted);font-size:12px">—</span>'}</td>
                 <td onclick="event.stopPropagation()">
                   <button class="btn btn-outline btn-sm" onclick="navigate('processos/detalhe',{id:'${p.id}'})"><i class="bi bi-eye"></i></button>
                 </td>
@@ -2360,6 +2500,16 @@ async function renderConsultaProcessos() {
         </table>
       </div>
     </div>`;
+}
+
+function consultaSortBy(col) {
+  if (window._consultaSortCol === col) {
+    window._consultaSortDir = window._consultaSortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    window._consultaSortCol = col;
+    window._consultaSortDir = 'asc';
+  }
+  renderConsultaProcessos();
 }
 
 // ============================================================
@@ -3913,10 +4063,15 @@ async function renderProcessoDetalhe(id) {
           <div class="card-header"><h3><i class="bi bi-arrow-repeat me-2"></i>Status</h3></div>
           <div class="card-body">
             <label>Status Atual</label>
+            ${jaDeferido ? `
+            <div style="padding:8px 0 4px">
+              <span class="badge badge-green" style="font-size:13px;padding:6px 14px">Deferido</span>
+              <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#16a34a;margin-top:6px"><i class="bi bi-lock-fill"></i> Status travado — processo deferido</div>
+            </div>` : `
             <select id="sel-status" onchange="atualizarStatus('${id}',this.value)" style="margin-bottom:8px">
               ${statusOpts}
             </select>
-            <span class="badge ${b.cls}" style="font-size:13px">${b.txt}</span>
+            <span class="badge ${b.cls}" style="font-size:13px">${b.txt}</span>`}
             ${processo.Status === 'Processo Futuro' && processo.ProcessoFuturoId ? `
             <div id="container-processo-futuro" style="margin-top:8px;padding:10px;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:8px">
               <div style="font-size:12px;color:#7c3aed"><i class="bi bi-hourglass me-1"></i>Aguardando: <strong>${esc(processo.ProcessoFuturoNome||'—')}</strong></div>
@@ -4123,16 +4278,38 @@ async function deferirProcesso(id) {
   }
 
   // Popup de confirmação com data
+  const _tipoDefer = p.TipoProcesso || '';
+  const _eGuiaDefer = _tipoDefer === 'Guia de Tráfego';
+  const _eRenovCRAF = _tipoDefer === 'Renovação de CRAF';
+  const _eAquisDefer = _tipoDefer === 'Aquisição de Arma SIGMA' || _tipoDefer === 'Aquisição de Arma PF';
+  const _eTransfDefer = TIPOS_TRANSFERENCIA.includes(_tipoDefer);
+  const _pedirCRAF = _eAquisDefer || _eTransfDefer || _eRenovCRAF;
   const modal = document.createElement('div');
   modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center';
   const hoje = new Date().toISOString().split('T')[0];
   modal.innerHTML = `
-    <div style="background:#fff;border-radius:10px;padding:24px;max-width:380px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.2)">
+    <div style="background:#fff;border-radius:10px;padding:24px;max-width:420px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.2);overflow-y:auto;max-height:90vh">
       <h3 style="margin:0 0 8px;font-size:16px;color:#15803d"><i class="bi bi-check-circle me-2"></i>Deferir Processo</h3>
       <p style="font-size:13px;color:#374151;margin:0 0 16px">Confirma o deferimento de <strong>${esc(p.TipoProcesso)}</strong> para <strong>${esc(p.ClienteNome||'')}</strong>?</p>
       <label style="font-size:12px;font-weight:600">Data de Deferimento</label>
-      <input type="date" id="modal-data-deferimento" value="${hoje}" style="margin-top:4px;margin-bottom:16px;width:100%;box-sizing:border-box" />
-      <div style="display:flex;gap:8px;justify-content:flex-end">
+      <input type="date" id="modal-data-deferimento" value="${hoje}" style="margin-top:4px;margin-bottom:12px;width:100%;box-sizing:border-box" />
+      ${_eGuiaDefer ? `
+      <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;padding:10px;margin-bottom:12px">
+        <div style="font-size:12px;font-weight:700;color:#0369a1;margin-bottom:8px"><i class="bi bi-file-earmark-text me-1"></i>Guia de Tráfego — Datas do Documento</div>
+        <label style="font-size:12px;font-weight:600">Data de Emissão</label>
+        <input type="date" id="modal-data-emissao-guia" value="${hoje}" style="margin-top:4px;margin-bottom:8px;width:100%;box-sizing:border-box" />
+        <label style="font-size:12px;font-weight:600">Data de Validade</label>
+        <input type="date" id="modal-data-validade-guia" style="margin-top:4px;width:100%;box-sizing:border-box" />
+      </div>` : ''}
+      ${_pedirCRAF ? `
+      <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:10px;margin-bottom:12px">
+        <div style="font-size:12px;font-weight:700;color:#15803d;margin-bottom:8px"><i class="bi bi-file-earmark-text me-1"></i>CRAF — Datas do Documento</div>
+        <label style="font-size:12px;font-weight:600">Data de Emissão do CRAF</label>
+        <input type="date" id="modal-data-emissao-craf" value="${hoje}" style="margin-top:4px;margin-bottom:8px;width:100%;box-sizing:border-box" />
+        <label style="font-size:12px;font-weight:600">Data de Validade do CRAF</label>
+        <input type="date" id="modal-data-validade-craf" style="margin-top:4px;width:100%;box-sizing:border-box" />
+      </div>` : ''}
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
         <button id="btn-cancelar-deferimento" class="btn btn-outline">Cancelar</button>
         <button id="btn-confirmar-deferimento" style="background:#16a34a;color:#fff;border:none;border-radius:6px;padding:8px 16px;cursor:pointer;font-size:13px;font-weight:500">Confirmar</button>
       </div>
@@ -4142,6 +4319,10 @@ async function deferirProcesso(id) {
   modal.querySelector('#btn-confirmar-deferimento').onclick = async () => {
     const dataDef = modal.querySelector('#modal-data-deferimento').value;
     if (!dataDef) { toast('Informe a data de deferimento.', 'warning'); return; }
+    const _dataEmissaoGuia = modal.querySelector('#modal-data-emissao-guia')?.value || null;
+    const _dataValidadeGuia = modal.querySelector('#modal-data-validade-guia')?.value || null;
+    const _dataEmissaoCRAF = modal.querySelector('#modal-data-emissao-craf')?.value || null;
+    const _dataValidadeCRAF = modal.querySelector('#modal-data-validade-craf')?.value || null;
     document.body.removeChild(modal);
     showLoading();
     try {
@@ -4189,6 +4370,18 @@ async function deferirProcesso(id) {
           };
           await App.graph.createItem(CONFIG.listas.armas, camposArma);
           App.invalidateCache('armas');
+          if (_dataEmissaoCRAF || _dataValidadeCRAF) {
+            try {
+              await App.graph.createItem(CONFIG.listas.documentos, {
+                ClienteId:    p.ClienteId,
+                ClienteNome:  p.ClienteNome || '',
+                TipoDocumento: 'CRAF',
+                DataEmissao:  _dataEmissaoCRAF || null,
+                DataValidade: _dataValidadeCRAF || null,
+              });
+              App.invalidateCache('documentos');
+            } catch(e3) {}
+          }
           toast('Processo deferido! Arma salva automaticamente no acervo do cliente.', 'success');
         } catch(e2) {
           toast('Deferido, mas não foi possível salvar a arma: ' + e2.message, 'warning');
@@ -4212,6 +4405,8 @@ async function deferirProcesso(id) {
             NomeClubeTiro:     dados.nomeClube || '',
             CRClubeTiro:       dados.crClube || '',
             EnderecoClubeTiro: dados.enderecoClube || '',
+            DataEmissao:  _dataEmissaoGuia || null,
+            DataValidade: _dataValidadeGuia || null,
           });
           App.invalidateCache('documentos');
           toast('Processo deferido! Guia de Tráfego adicionada aos documentos do cliente.', 'success');
@@ -4229,6 +4424,8 @@ async function deferirProcesso(id) {
             TipoDocumento: 'CRAF',
             ArmaVinculadaId:   armaId || null,
             ArmaVinculadaDesc: armaDesc,
+            DataEmissao:  _dataEmissaoCRAF || null,
+            DataValidade: _dataValidadeCRAF || null,
           });
           App.invalidateCache('documentos');
           toast('Processo deferido! CRAF adicionado aos documentos do cliente.', 'success');
@@ -4300,6 +4497,18 @@ async function deferirProcesso(id) {
               toast('Processo deferido! Arma adicionada ao perfil do cliente.', 'success');
             }
           } else { toast('Processo deferido!', 'success'); }
+          if (_dataEmissaoCRAF || _dataValidadeCRAF) {
+            try {
+              await App.graph.createItem(CONFIG.listas.documentos, {
+                ClienteId:    p.ClienteId,
+                ClienteNome:  p.ClienteNome || '',
+                TipoDocumento: 'CRAF',
+                DataEmissao:  _dataEmissaoCRAF || null,
+                DataValidade: _dataValidadeCRAF || null,
+              });
+              App.invalidateCache('documentos');
+            } catch(e3) {}
+          }
         } catch(e2) { toast('Deferido, mas não foi possível atualizar armas: ' + e2.message, 'warning'); }
       } else if (tipo === 'Mudança de Acervo') {
         // Alterar acervo da arma
@@ -5276,7 +5485,7 @@ async function renderPagamentos() {
   const [clientes, processos] = await Promise.all([App.getClientes(), App.getProcessos()]);
 
   const pendentes = processos.filter(p =>
-    p.ValorProcesso && getItensPendentesProcesso(p).length > 0
+    p.ValorProcesso && getItensPendentesProcesso(p).length > 0 && p.Status !== 'Desistência Cliente'
   );
 
   const porCliente = {};
@@ -5399,7 +5608,10 @@ async function renderPagamentosGRU() {
           <a style="font-size:14px;font-weight:700;cursor:pointer;color:var(--accent)" onclick="navigate('clientes/perfil',{id:'${g.clienteId}'})">${esc(g.nome)}</a>
           <div style="padding-left:12px;border-left:3px solid var(--border);margin-top:6px">
             ${g.processos.map(p => `<div style="padding:5px 0;font-size:13px;display:flex;justify-content:space-between;align-items:center">
-              <a style="cursor:pointer;color:var(--accent)" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.TipoProcesso||'—')}</a>
+              <div>
+                <a style="cursor:pointer;color:var(--accent)" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.TipoProcesso||'—')}</a>
+                ${infoArmaLocalProcesso(p) ? `<div style="font-size:11px;color:var(--text-muted);margin-top:1px">${esc(infoArmaLocalProcesso(p))}</div>` : ''}
+              </div>
               <span class="badge badge-orange">GRU Pendente</span>
             </div>`).join('')}
           </div>
@@ -6069,7 +6281,6 @@ function renderDadosPagamento(p) {
           const item = pagamentos[l.key] || {};
           const st = itemStatus(l.key, l.dataVenc);
           const pago = !!item.pago;
-          const dataPag = item.dataPagamento || '';
           return `
           <div style="padding:8px 16px;border-bottom:1px solid var(--border);font-size:13px">
             <div style="display:flex;justify-content:space-between;align-items:center">
@@ -6089,15 +6300,13 @@ function renderDadosPagamento(p) {
             <div id="pag-data-wrap-${l.key}" style="display:${pago ? '' : 'none'};margin-top:6px">
               <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;flex-wrap:wrap">
                 <div>
-                  <label style="font-size:11px;color:var(--text-muted)">Data de Pagamento</label>
+                  <label style="font-size:11px;color:var(--text-muted)">Data de Pagamento *</label>
                   <input type="date" id="input-pag-data-${l.key}" value="${item.dataPagamento||''}"
-                    style="margin-top:2px;font-size:12px;padding:4px 8px"
-                    onchange="onPagItemData('${pid}','${l.key}','${l.dataVenc||''}')" />
+                    style="margin-top:2px;font-size:12px;padding:4px 8px" />
                 </div>
                 <div>
-                  <label style="font-size:11px;color:var(--text-muted)">Forma de Pagamento</label>
-                  <select id="input-pag-forma-${l.key}" style="margin-top:2px;font-size:12px;padding:4px 8px"
-                    onchange="onPagItemData('${pid}','${l.key}','${l.dataVenc||''}')">
+                  <label style="font-size:11px;color:var(--text-muted)">Forma de Pagamento *</label>
+                  <select id="input-pag-forma-${l.key}" style="margin-top:2px;font-size:12px;padding:4px 8px">
                     <option value="">Selecione...</option>
                     <option value="Pix" ${item.formaPagamento==='Pix'?'selected':''}>Pix</option>
                     <option value="Dinheiro" ${item.formaPagamento==='Dinheiro'?'selected':''}>Dinheiro</option>
@@ -6106,8 +6315,7 @@ function renderDadosPagamento(p) {
                 </div>
                 <div>
                   <label style="font-size:11px;color:var(--text-muted)">Banco</label>
-                  <select id="input-pag-banco-${l.key}" style="margin-top:2px;font-size:12px;padding:4px 8px"
-                    onchange="onPagItemData('${pid}','${l.key}','${l.dataVenc||''}')">
+                  <select id="input-pag-banco-${l.key}" style="margin-top:2px;font-size:12px;padding:4px 8px">
                     <option value="">Selecione...</option>
                     <option value="Banco do Brasil" ${item.banco==='Banco do Brasil'?'selected':''}>Banco do Brasil</option>
                     <option value="Sicredi" ${item.banco==='Sicredi'?'selected':''}>Sicredi</option>
@@ -6118,6 +6326,9 @@ function renderDadosPagamento(p) {
             </div>
           </div>`;
         }).join('')}
+        <div style="padding:12px 16px;border-top:1px solid var(--border);text-align:right">
+          <button class="btn btn-primary btn-sm" onclick="salvarTodosPagamentos('${pid}')"><i class="bi bi-floppy me-1"></i>Salvar Pagamento</button>
+        </div>
       </div>
     </div>`;
 }
@@ -6129,11 +6340,43 @@ function onPagItemCheck(processoId, key, dataVenc, checked) {
     const inp = document.getElementById(`input-pag-data-${key}`);
     if (inp && !inp.value) inp.value = new Date().toISOString().split('T')[0];
   }
-  _salvarItemPagamento(processoId, key, dataVenc || null);
 }
 
-function onPagItemData(processoId, key, dataVenc) {
-  _salvarItemPagamento(processoId, key, dataVenc || null);
+function onPagItemData(processoId, key, dataVenc) {}
+
+async function salvarTodosPagamentos(processoId) {
+  const proc = await App.graph.getItem(CONFIG.listas.processos, processoId);
+  const pagamentos = JSON.parse(proc.PagamentosJSON || '{}');
+  const faltando = [];
+  document.querySelectorAll('[id^="chk-pag-"]').forEach(chk => {
+    if (!chk.checked) return;
+    const key = chk.id.replace('chk-pag-', '');
+    const data = document.getElementById(`input-pag-data-${key}`)?.value;
+    const forma = document.getElementById(`input-pag-forma-${key}`)?.value;
+    if (!data || !forma) faltando.push(key);
+  });
+  if (faltando.length) {
+    toast('Preencha a data e a forma de pagamento para todos os itens marcados como pagos.', 'warning');
+    return;
+  }
+  showLoading();
+  try {
+    document.querySelectorAll('[id^="chk-pag-"]').forEach(chk => {
+      const key = chk.id.replace('chk-pag-', '');
+      pagamentos[key] = {
+        pago: chk.checked,
+        dataPagamento:  chk.checked ? (document.getElementById(`input-pag-data-${key}`)?.value || null) : null,
+        formaPagamento: chk.checked ? (document.getElementById(`input-pag-forma-${key}`)?.value || null) : null,
+        banco:          chk.checked ? (document.getElementById(`input-pag-banco-${key}`)?.value || null) : null,
+      };
+    });
+    await App.graph.updateItem(CONFIG.listas.processos, processoId, { PagamentosJSON: JSON.stringify(pagamentos) });
+    App.invalidateCache('processos');
+    const updatedProc = await App.graph.getItem(CONFIG.listas.processos, processoId);
+    const wrapper = document.getElementById('dados-pagamento-wrapper');
+    if (wrapper) wrapper.innerHTML = renderDadosPagamento(updatedProc);
+    toast('Pagamento salvo!', 'success');
+  } catch(err) { toast(err.message, 'error'); } finally { hideLoading(); }
 }
 
 async function _salvarItemPagamento(processoId, key, dataVenc) {
