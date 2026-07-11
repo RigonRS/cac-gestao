@@ -7257,28 +7257,34 @@ async function renderOrcamentoForm(clienteId = null, orcId = null) {
       <div class="card-body">
         <div style="margin-bottom:16px">
           <label>Cliente</label>
-          <select id="orc-cliente-sel" style="margin-top:4px" onchange="atualizarOrcamento()">
+          <select id="orc-cliente-sel" style="margin-top:4px" onchange="atualizarOrcamento();onOrcClienteChange(this.value)">
             <option value="">Selecione o cliente...</option>
             ${sorted.map(c => `<option value="${esc(c.id)}|${esc(c.Title)}|${esc(c.Celular||'')}" ${String(c.id)===String(clienteId)?'selected':''} ${isClienteInativo(c)?'disabled':''}>${esc(c.Title)}${isClienteInativo(c)?' (Inativo)':''}</option>`).join('')}
           </select>
         </div>
+        <div id="orc-armas-panel" style="display:none;margin-bottom:16px"></div>
         <div class="card" style="margin-bottom:16px">
           <div class="card-header"><h3>Serviços</h3></div>
           <div class="card-body" style="padding:0">
             ${TIPOS_PROCESSO.map((tipo, i) => {
               const valor = VALORES_PROCESSO[tipo] || 0;
-              return `<div style="padding:10px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-                <label class="checkbox-item" style="flex:1;min-width:200px;margin:0;cursor:pointer">
-                  <input type="checkbox" id="orc-chk-${i}" onchange="onOrcItemChange(${i})" />
-                  ${esc(tipo)}
-                </label>
-                <div id="orc-qty-wrap-${i}" style="display:none;align-items:center;gap:8px">
-                  <select id="orc-qty-${i}" style="width:65px" onchange="atualizarOrcamento()">
-                    ${[...Array(20)].map((_,n) => `<option value="${n+1}">${n+1}x</option>`).join('')}
-                  </select>
-                  <span style="font-size:12px;color:var(--text-muted)">${fmtMoeda(valor)} / un.</span>
+              return `<div style="padding:10px 16px;border-bottom:1px solid var(--border)">
+                <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+                  <label class="checkbox-item" style="flex:1;min-width:200px;margin:0;cursor:pointer">
+                    <input type="checkbox" id="orc-chk-${i}" onchange="onOrcItemChange(${i})" />
+                    ${esc(tipo)}
+                  </label>
+                  <div id="orc-qty-wrap-${i}" style="display:none;align-items:center;gap:8px">
+                    <select id="orc-qty-${i}" style="width:65px" onchange="atualizarOrcamento()">
+                      ${[...Array(20)].map((_,n) => `<option value="${n+1}">${n+1}x</option>`).join('')}
+                    </select>
+                    <span style="font-size:12px;color:var(--text-muted)">${fmtMoeda(valor)} / un.</span>
+                  </div>
+                  <span id="orc-sub-${i}" style="font-weight:600;font-size:13px;min-width:90px;text-align:right;color:var(--accent)"></span>
                 </div>
-                <span id="orc-sub-${i}" style="font-weight:600;font-size:13px;min-width:90px;text-align:right;color:var(--accent)"></span>
+                <div id="orc-obs-wrap-${i}" style="display:none;margin-top:8px">
+                  <input type="text" id="orc-obs-${i}" placeholder="Observação sobre este serviço (arma, dados específicos...)" style="width:100%;font-size:12px" />
+                </div>
               </div>`;
             }).join('')}
           </div>
@@ -7329,17 +7335,62 @@ async function renderOrcamentoForm(clienteId = null, orcId = null) {
       if (chk) { chk.checked = true; onOrcItemChange(idx); }
       const qty = document.getElementById(`orc-qty-${idx}`);
       if (qty) { qty.value = item.qtd; atualizarOrcamento(); }
+      if (item.obs) {
+        const obs = document.getElementById(`orc-obs-${idx}`);
+        if (obs) obs.value = item.obs;
+      }
     });
     atualizarOrcamento();
+    // Carrega painel de armas do cliente existente
+    const sel = document.getElementById('orc-cliente-sel');
+    if (sel?.value) onOrcClienteChange(sel.value);
+  } else if (clienteId) {
+    // Novo orçamento com cliente pré-selecionado
+    const sel = document.getElementById('orc-cliente-sel');
+    if (sel?.value) onOrcClienteChange(sel.value);
   }
 }
 
 function onOrcItemChange(i) {
-  const wrap = document.getElementById(`orc-qty-wrap-${i}`);
   const checked = document.getElementById(`orc-chk-${i}`)?.checked;
+  const wrap = document.getElementById(`orc-qty-wrap-${i}`);
+  const obsWrap = document.getElementById(`orc-obs-wrap-${i}`);
   if (wrap) wrap.style.display = checked ? 'flex' : 'none';
-  if (!checked) { const sub = document.getElementById(`orc-sub-${i}`); if (sub) sub.textContent = ''; }
+  if (obsWrap) obsWrap.style.display = checked ? '' : 'none';
+  if (!checked) {
+    const sub = document.getElementById(`orc-sub-${i}`); if (sub) sub.textContent = '';
+    const obs = document.getElementById(`orc-obs-${i}`); if (obs) obs.value = '';
+  }
   atualizarOrcamento();
+}
+
+async function onOrcClienteChange(value) {
+  const clienteId = (value || '').split('|')[0];
+  const panel = document.getElementById('orc-armas-panel');
+  if (!panel) return;
+  if (!clienteId) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
+  try {
+    const armas = (await App.getArmas()).filter(a => String(a.ClienteId) === String(clienteId));
+    if (!armas.length) { panel.style.display = 'none'; return; }
+    panel.style.display = '';
+    panel.innerHTML = `<div class="card">
+      <div class="card-header"><h3><i class="bi bi-shield-fill me-2"></i>Armas do Cliente</h3></div>
+      <div class="card-body" style="padding:0">
+        <table style="width:100%;font-size:12px">
+          <thead><tr><th style="padding:8px 12px">Marca / Modelo</th><th>Calibre</th><th>Espécie</th><th>Atividade</th><th>Nº Série</th></tr></thead>
+          <tbody>
+            ${armas.map(a => `<tr>
+              <td style="padding:8px 12px;font-weight:600">${esc(a.Marca||'')} ${esc(a.Modelo||'')}</td>
+              <td>${esc(a.Calibre||'—')}</td>
+              <td>${esc(a.Especie||'—')}</td>
+              <td>${esc(a.AtividadeCadastrada||'—')}</td>
+              <td style="color:var(--text-muted)">${esc(a.NumeroSerie||'—')}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+  } catch(e) { panel.style.display = 'none'; }
 }
 
 function atualizarOrcamento() {
@@ -7424,7 +7475,8 @@ async function salvarOrcamento() {
     const valor = VALORES_PROCESSO[tipo] || 0;
     const subtotal = qtd * valor;
     total += subtotal;
-    linhas.push({ tipo, qtd, valor, subtotal });
+    const obs = (document.getElementById(`orc-obs-${i}`)?.value || '').trim();
+    linhas.push({ tipo, qtd, valor, subtotal, ...(obs ? { obs } : {}) });
   });
   if (!linhas.length) { toast('Selecione ao menos um serviço.', 'warning'); return; }
   const desconto = Math.max(0, parseFloat(document.getElementById('orc-desconto')?.value) || 0);
@@ -7473,6 +7525,7 @@ async function salvarOrcamento() {
       lista.push(novo);
       await App.graph._writeFile('orcamentos', lista);
       toast('Orçamento salvo com sucesso!', 'success');
+      if (clienteId) navigate('clientes/perfil', { id: clienteId, tab: 'orcamentos' });
     }
   } catch(e) { toast('Erro ao salvar: ' + e.message, 'error'); } finally { hideLoading(); }
 }
@@ -7530,7 +7583,7 @@ async function excluirOrcamento(orcId, clienteId) {
     const lista = (Array.isArray(todos) ? todos : []).filter(o => o.id !== orcId);
     await App.graph._writeFile('orcamentos', lista);
     toast('Orçamento excluído.', 'success');
-    navigate('clientes/perfil', { id: clienteId, tab: 'orcamentos' });
+    await renderClientePerfil(clienteId, 'orcamentos');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
@@ -7704,19 +7757,14 @@ async function renderMinhasDemandas() {
       App.graph._readFile('demandas').catch(() => []),
       App.getProcessos(),
     ]);
-    const demandas = (Array.isArray(demandasRaw) ? demandasRaw : [])
-      .filter(d => d.operador === currentUser && d.status === 'Aberta');
+    const todas = (Array.isArray(demandasRaw) ? demandasRaw : []).filter(d => d.operador === currentUser);
+    const abertas    = todas.filter(d => d.status === 'Aberta');
+    const concluidas = todas.filter(d => d.status === 'Concluída');
 
-    if (!demandas.length) {
-      document.getElementById('page-content').innerHTML = `<div class="empty-state"><i class="bi bi-inbox" style="font-size:48px"></i><p>Nenhuma demanda delegada para você no momento.</p></div>`;
-      return;
-    }
-
-    const cardsHtml = demandas.map(d => {
+    function buildCard(d) {
       const itensHtml = (d.itens||[]).map(item => {
         const criados = processos.filter(p => p.demandaId && String(p.demandaId) === String(d.id) && p.TipoProcesso === item.tipo).length;
-        const restante = item.qtd - criados;
-        const concluido = restante <= 0;
+        const concluido = criados >= item.qtd;
         return `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);gap:12px;flex-wrap:wrap">
           <div>
             <div style="font-weight:600;font-size:13px">${esc(item.tipo)}</div>
@@ -7725,14 +7773,13 @@ async function renderMinhasDemandas() {
               ${concluido ? '<span class="badge badge-green" style="margin-left:6px">Concluído</span>' : ''}
             </div>
           </div>
-          ${!concluido
+          ${!concluido && d.status === 'Aberta'
             ? `<button class="btn btn-primary btn-sm" onclick="navigate('processos/novo',{clienteId:'${d.clienteId}',demandaId:'${d.id}',demandaNumero:'${esc(d.numero||'')}',tipoProcesso:encodeURIComponent('${esc(item.tipo)}')})">
                 <i class="bi bi-plus-lg me-1"></i>Abrir Processo
               </button>`
-            : `<button class="btn btn-outline btn-sm" disabled>Concluído</button>`}
+            : `<button class="btn btn-outline btn-sm" disabled>${concluido ? 'Concluído' : 'Encerrada'}</button>`}
         </div>`;
       }).join('');
-
       return `<div class="card" style="margin-bottom:16px">
         <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
           <h3 style="margin:0"><i class="bi bi-clipboard-check me-2"></i>Demanda ${esc(d.numero||'—')}</h3>
@@ -7740,9 +7787,25 @@ async function renderMinhasDemandas() {
         </div>
         <div class="card-body">${itensHtml}</div>
       </div>`;
-    }).join('');
+    }
 
-    document.getElementById('page-content').innerHTML = cardsHtml;
+    const secaoAberta = `
+      <h3 style="margin:0 0 12px;font-size:15px;display:flex;align-items:center;gap:8px">
+        <i class="bi bi-inbox-fill" style="color:var(--accent)"></i> Demandas em Aberto
+        <span class="badge badge-blue" style="margin-left:4px">${abertas.length}</span>
+      </h3>
+      ${abertas.length
+        ? abertas.map(buildCard).join('')
+        : `<div class="empty-state" style="padding:24px"><i class="bi bi-inbox"></i><p>Nenhuma demanda em aberto no momento.</p></div>`}`;
+
+    const secaoConcluida = concluidas.length ? `
+      <h3 style="margin:24px 0 12px;font-size:15px;display:flex;align-items:center;gap:8px">
+        <i class="bi bi-check2-all" style="color:var(--success)"></i> Demandas Concluídas
+        <span class="badge badge-green" style="margin-left:4px">${concluidas.length}</span>
+      </h3>
+      ${concluidas.map(buildCard).join('')}` : '';
+
+    document.getElementById('page-content').innerHTML = secaoAberta + secaoConcluida;
   } catch(e) { document.getElementById('page-content').innerHTML = `<div class="empty-state"><i class="bi bi-exclamation-triangle"></i><p>${esc(e.message)}</p></div>`; } finally { hideLoading(); }
 }
 
