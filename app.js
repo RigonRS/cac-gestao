@@ -2665,13 +2665,44 @@ async function renderMeusProcessos(tab = 'aprotocolar') {
     todos:        doUsuario.length,
   };
 
-  const porCliente = {};
-  meus.forEach(p => {
-    const cid = String(p.ClienteId);
-    if (!porCliente[cid]) porCliente[cid] = { nome: p.ClienteNome, clienteId: cid, processos: [] };
-    porCliente[cid].processos.push(p);
-  });
-  const grupos = Object.values(porCliente).sort((a, b) => (a.nome||'').localeCompare(b.nome||'', 'pt-BR'));
+  function buildProcessoItemHtml(p) {
+    const checklist = JSON.parse(p.ChecklistJSON || '[]');
+    const pendentes = checklist.filter(i => !i.concluido);
+    const total = checklist.length;
+    const b = statusBadge(p.Status);
+    return `
+      <div style="padding:12px 16px;border-bottom:1px solid var(--border)">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <div>
+            <a style="font-weight:600;cursor:pointer;color:var(--accent);font-size:14px" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.TipoProcesso||'—')}</a>
+            ${infoArmaLocalProcesso(p) ? `<div style="font-size:12px;color:var(--text-muted);margin-top:2px">${esc(infoArmaLocalProcesso(p))}</div>` : ''}
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            ${total > 0 ? `<span style="font-size:12px;color:var(--text-muted)">${total - pendentes.length}/${total} itens</span>` : ''}
+            <span class="badge ${b.cls}">${b.txt}</span>
+          </div>
+        </div>
+        ${pendentes.length > 0 ? `
+          <div style="padding-left:12px;border-left:3px solid #e5e7eb">
+            <div style="font-size:11px;color:var(--text-muted);margin-bottom:3px">Itens pendentes no checklist:</div>
+            ${pendentes.map(i => `<div style="font-size:12px;padding:2px 0;color:#374151"><i class="bi bi-square me-1" style="color:#d1d5db"></i>${esc(i.nome)}</div>`).join('')}
+          </div>
+        ` : `<div style="font-size:12px;color:var(--success)"><i class="bi bi-check-circle-fill me-1"></i>Checklist completo</div>`}
+      </div>`;
+  }
+
+  function buildClienteCardHtml(nome, clienteId, listaProcessos) {
+    return `
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-header" style="cursor:pointer" onclick="navigate('clientes/perfil',{id:'${clienteId}'})">
+          <h3><i class="bi bi-person-fill me-2"></i>${esc(nome)}</h3>
+          <span style="font-size:12px;color:var(--text-muted)">${listaProcessos.length} processo(s)</span>
+        </div>
+        <div class="card-body" style="padding:0">
+          ${listaProcessos.map(buildProcessoItemHtml).join('')}
+        </div>
+      </div>`;
+  }
 
   const el = document.getElementById('page-content');
 
@@ -2679,9 +2710,33 @@ async function renderMeusProcessos(tab = 'aprotocolar') {
     ${MEUS_PROCESSOS_TABS.map(t => `<button class="tab-btn ${tab===t.key?'active':''}" onclick="navigate('meus-processos',{tab:'${t.key}'})">${esc(t.label)} (${contagens[t.key]})</button>`).join('')}
   </div>`;
 
-  if (grupos.length === 0) {
+  if (meus.length === 0) {
     el.innerHTML = `${tabsHtml}<div class="empty-state"><i class="bi bi-inbox" style="font-size:48px"></i><p>Nenhum processo nesta aba para <strong>${esc(currentUser)}</strong>.</p></div>`;
     return;
+  }
+
+  let corpoHtml;
+  if (tab === 'aprotocolar') {
+    // Mantém a ordem de prioridade/data; agrupa apenas quando 2+ processos consecutivos são do mesmo cliente
+    const clusters = [];
+    meus.forEach(p => {
+      const ultimo = clusters[clusters.length - 1];
+      if (ultimo && String(ultimo.clienteId) === String(p.ClienteId)) {
+        ultimo.processos.push(p);
+      } else {
+        clusters.push({ clienteId: String(p.ClienteId), nome: p.ClienteNome, processos: [p] });
+      }
+    });
+    corpoHtml = clusters.map(c => buildClienteCardHtml(c.nome, c.clienteId, c.processos)).join('');
+  } else {
+    const porCliente = {};
+    meus.forEach(p => {
+      const cid = String(p.ClienteId);
+      if (!porCliente[cid]) porCliente[cid] = { nome: p.ClienteNome, clienteId: cid, processos: [] };
+      porCliente[cid].processos.push(p);
+    });
+    const grupos = Object.values(porCliente).sort((a, b) => (a.nome||'').localeCompare(b.nome||'', 'pt-BR'));
+    corpoHtml = grupos.map(g => buildClienteCardHtml(g.nome, g.clienteId, g.processos)).join('');
   }
 
   el.innerHTML = `
@@ -2689,41 +2744,7 @@ async function renderMeusProcessos(tab = 'aprotocolar') {
     <div style="margin:12px 0">
       <span style="font-size:13px;color:var(--text-muted)">${meus.length} processo(s) para <strong>${esc(currentUser)}</strong></span>
     </div>
-    ${grupos.map(g => `
-      <div class="card" style="margin-bottom:16px">
-        <div class="card-header" style="cursor:pointer" onclick="navigate('clientes/perfil',{id:'${g.clienteId}'})">
-          <h3><i class="bi bi-person-fill me-2"></i>${esc(g.nome)}</h3>
-          <span style="font-size:12px;color:var(--text-muted)">${g.processos.length} processo(s)</span>
-        </div>
-        <div class="card-body" style="padding:0">
-          ${g.processos.map(p => {
-            const checklist = JSON.parse(p.ChecklistJSON || '[]');
-            const pendentes = checklist.filter(i => !i.concluido);
-            const total = checklist.length;
-            const b = statusBadge(p.Status);
-            return `
-              <div style="padding:12px 16px;border-bottom:1px solid var(--border)">
-                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-                  <div>
-                    <a style="font-weight:600;cursor:pointer;color:var(--accent);font-size:14px" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.TipoProcesso||'—')}</a>
-                    ${infoArmaLocalProcesso(p) ? `<div style="font-size:12px;color:var(--text-muted);margin-top:2px">${esc(infoArmaLocalProcesso(p))}</div>` : ''}
-                  </div>
-                  <div style="display:flex;align-items:center;gap:8px">
-                    ${total > 0 ? `<span style="font-size:12px;color:var(--text-muted)">${total - pendentes.length}/${total} itens</span>` : ''}
-                    <span class="badge ${b.cls}">${b.txt}</span>
-                  </div>
-                </div>
-                ${pendentes.length > 0 ? `
-                  <div style="padding-left:12px;border-left:3px solid #e5e7eb">
-                    <div style="font-size:11px;color:var(--text-muted);margin-bottom:3px">Itens pendentes no checklist:</div>
-                    ${pendentes.map(i => `<div style="font-size:12px;padding:2px 0;color:#374151"><i class="bi bi-square me-1" style="color:#d1d5db"></i>${esc(i.nome)}</div>`).join('')}
-                  </div>
-                ` : `<div style="font-size:12px;color:var(--success)"><i class="bi bi-check-circle-fill me-1"></i>Checklist completo</div>`}
-              </div>`;
-          }).join('')}
-        </div>
-      </div>
-    `).join('')}`;
+    ${corpoHtml}`;
 }
 
 async function deletarProcesso(id, clienteNome) {
@@ -8105,7 +8126,7 @@ async function renderMinhasDemandas() {
       }).join('');
       return `<div class="card" style="margin-bottom:16px">
         <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
-          <h3 style="margin:0"><i class="bi bi-clipboard-check me-2"></i>Demanda ${esc(d.numero||'—')}</h3>
+          <h3 style="margin:0"><i class="bi bi-clipboard-check me-2"></i>Demanda ${esc(d.numero||'—')} <span style="font-size:12px;font-weight:400;color:var(--text-muted)">— criada em ${fmtDate(d.dataCriacao)}</span></h3>
           <span style="font-size:12px;color:var(--text-muted)">Orçamento ${esc(d.orcamentoNumero||'—')} · ${esc(d.clienteNome||'—')}</span>
         </div>
         <div class="card-body">${itensHtml}</div>
