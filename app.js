@@ -274,7 +274,7 @@ async function renderPage() {
       case 'documentos/editar':    await renderDocumentoForm(params.clienteId, params.id); break;
       case 'processos':            await renderProcessosList(); break;
       case 'consulta-processos':   await renderConsultaProcessos(); break;
-      case 'meus-processos':       await renderMeusProcessos(); break;
+      case 'meus-processos':       await renderMeusProcessos(params.tab || 'aprotocolar'); break;
       case 'minhas-demandas':      await renderMinhasDemandas(); break;
       case 'controle-demandas':    await renderControleDemandas(); break;
       case 'anotacoes':            await renderAnotacoes(); break;
@@ -584,6 +584,33 @@ const STATUS_PROCESSO = [
 ];
 const STATUS_FECHADOS = ['Deferido', 'Indeferido', 'Desistência Cliente'];
 const RESPONSAVEIS = ['Andrieli', 'Matheus', 'Priscila', 'Simone'];
+
+// Nível de prioridade dos processos — 1 é a maior prioridade (Restituído é tratado à parte)
+const PRIORIDADE_PROCESSO = {
+  'Defesa de Notificação':                     2,
+  'Comunicado de Furto/Extravio':              3,
+  'Alteração de Endereço':                     4,
+  'Guia de Tráfego':                            5,
+  'Segunda via de CRAF':                        6,
+  'Renovação de CRAF':                          7,
+  'Atualização de Documento de Identificação':  8,
+  'Exclusão de Atividade':                      9,
+  'Mudança de Acervo':                         10,
+  'Correção de dados de arma':                 11,
+  'Concessão/Renovação de CR':                 12,
+  'Inclusão de Atividade':                     13,
+  'Transferência de Arma SIGMA x SINARM':      14,
+  'Transferência de Arma SINARM x SINARM':     14,
+  'Transferência de Arma SIGMA x SIGMA':       14,
+  'Transferência de Arma SINARM x SIGMA':      14,
+  'Aquisição de Arma SIGMA':                   15,
+  'Aquisição de Arma PF':                      16,
+  'Porte de Arma PF':                          17,
+};
+function prioridadeProcesso(p) {
+  if (p.Restituido) return 1;
+  return PRIORIDADE_PROCESSO[p.TipoProcesso] ?? 99;
+}
 const VALORES_PROCESSO = {
   'Aquisição de Arma SIGMA':                   940.00,
   'Aquisição de Arma PF':                      1117.00,
@@ -2603,12 +2630,40 @@ function consultaSortBy(col) {
 // ============================================================
 // MEUS PROCESSOS
 // ============================================================
-async function renderMeusProcessos() {
+const STATUS_A_PROTOCOLAR = ['Parado', 'Aguardando Documentos', 'Aguardando Pagamento GRU', 'Aguardando Assinatura', 'Aguardando Protocolo (email)'];
+const STATUS_PROTOCOLADOS = ['Pronto para Análise', 'Em análise'];
+const MEUS_PROCESSOS_TABS = [
+  { key: 'aprotocolar',  label: 'A Protocolar' },
+  { key: 'protocolados', label: 'Protocolados' },
+  { key: 'futuro',       label: 'Futuro' },
+  { key: 'todos',        label: 'Todos' },
+];
+
+async function renderMeusProcessos(tab = 'aprotocolar') {
   document.getElementById('page-title').textContent = 'Meus Processos';
   const currentUser = getCurrentUserName();
   const processos = await App.getProcessos();
+  const doUsuario = processos.filter(p => p.Responsavel === currentUser);
 
-  const meus = processos.filter(p => p.Responsavel === currentUser && !STATUS_FECHADOS.includes(p.Status));
+  let meus;
+  if (tab === 'protocolados') {
+    meus = doUsuario.filter(p => STATUS_PROTOCOLADOS.includes(p.Status));
+  } else if (tab === 'futuro') {
+    meus = doUsuario.filter(p => p.Status === 'Processo Futuro');
+  } else if (tab === 'todos') {
+    meus = doUsuario.slice();
+  } else {
+    tab = 'aprotocolar';
+    meus = doUsuario.filter(p => STATUS_A_PROTOCOLAR.includes(p.Status));
+    meus.sort((a, b) => prioridadeProcesso(a) - prioridadeProcesso(b) || (a.DataAbertura||'').localeCompare(b.DataAbertura||''));
+  }
+
+  const contagens = {
+    aprotocolar:  doUsuario.filter(p => STATUS_A_PROTOCOLAR.includes(p.Status)).length,
+    protocolados: doUsuario.filter(p => STATUS_PROTOCOLADOS.includes(p.Status)).length,
+    futuro:       doUsuario.filter(p => p.Status === 'Processo Futuro').length,
+    todos:        doUsuario.length,
+  };
 
   const porCliente = {};
   meus.forEach(p => {
@@ -2619,14 +2674,20 @@ async function renderMeusProcessos() {
   const grupos = Object.values(porCliente).sort((a, b) => (a.nome||'').localeCompare(b.nome||'', 'pt-BR'));
 
   const el = document.getElementById('page-content');
+
+  const tabsHtml = `<div class="tabs">
+    ${MEUS_PROCESSOS_TABS.map(t => `<button class="tab-btn ${tab===t.key?'active':''}" onclick="navigate('meus-processos',{tab:'${t.key}'})">${esc(t.label)} (${contagens[t.key]})</button>`).join('')}
+  </div>`;
+
   if (grupos.length === 0) {
-    el.innerHTML = `<div class="empty-state"><i class="bi bi-inbox" style="font-size:48px"></i><p>Nenhum processo em aberto para <strong>${esc(currentUser)}</strong>.</p></div>`;
+    el.innerHTML = `${tabsHtml}<div class="empty-state"><i class="bi bi-inbox" style="font-size:48px"></i><p>Nenhum processo nesta aba para <strong>${esc(currentUser)}</strong>.</p></div>`;
     return;
   }
 
   el.innerHTML = `
-    <div style="margin-bottom:12px">
-      <span style="font-size:13px;color:var(--text-muted)">${meus.length} processo(s) em aberto para <strong>${esc(currentUser)}</strong></span>
+    ${tabsHtml}
+    <div style="margin:12px 0">
+      <span style="font-size:13px;color:var(--text-muted)">${meus.length} processo(s) para <strong>${esc(currentUser)}</strong></span>
     </div>
     ${grupos.map(g => `
       <div class="card" style="margin-bottom:16px">
@@ -2961,6 +3022,14 @@ function onTipoProcessoChange(tipo, skipValor = false) {
     if (tipo === 'Mudança de Acervo') camposEl.innerHTML += buildCamposMudancaAcervo(_processoClienteCategoria);
   } else if (TIPOS_TRANSFERENCIA.includes(tipo)) {
     camposEl.innerHTML = buildCamposTransferencia(armasOpts, tipo);
+  } else if (tipo === 'Comunicado de Furto/Extravio') {
+    camposEl.innerHTML = buildCamposFurtoExtravio(armasOpts);
+  } else if (tipo === 'Correção de dados de arma') {
+    camposEl.innerHTML = buildCamposCorrecaoArma(armasOpts);
+  } else if (tipo === 'Porte de Arma PF') {
+    const armasPFOpts = _processoArmasCache.filter(a => a.OrgaoCadastro === 'PF - Defesa Pessoal')
+      .map(a => `<option value="${a.id}|${esc(a.AtividadeCadastrada||'')}|${esc(a.Marca||'')}|${esc(a.Modelo||'')}">${esc(a.Marca||'')} ${esc(a.Modelo||'')}${a.NumeroSerie ? ' ('+esc(a.NumeroSerie)+')' : ''}</option>`).join('');
+    camposEl.innerHTML = buildCamposPortePF(armasPFOpts);
   }
 
   // Checklist
@@ -2988,6 +3057,11 @@ function popularCamposEspecificos(dados) {
       allEls[0].checked = val === 'sim' || val === true || val === 'true';
     } else {
       allEls[0].value = val != null ? String(val) : '';
+      if (allEls[0].id && allEls[0].id.startsWith('corr-input-') && allEls[0].disabled) {
+        allEls[0].disabled = false;
+        const check = document.getElementById(allEls[0].id.replace('corr-input-', 'corr-check-'));
+        if (check) check.checked = true;
+      }
       if (allEls[0].tagName === 'SELECT' && allEls[0].hasAttribute('onchange')) {
         allEls[0].dispatchEvent(new Event('change'));
       }
@@ -3369,6 +3443,82 @@ function buildCamposTransferencia(armasOpts, tipo) {
       </div><!-- /proc-vendedor-manual -->
     </div>
   ${isMesmoTitular ? '</div>' : ''}</div></div>`;
+}
+
+function buildCamposFurtoExtravio(armasOpts) {
+  return `<div class="form-section"><div class="form-section-title">Comunicado de Furto/Extravio</div><div class="form-body">
+    <div class="form-grid">
+      <div><label>Arma *</label><select name="proc_armaId" required><option value="">Selecione...</option>${armasOpts}</select></div>
+      <div><label>Ocorrência *</label>
+        <div class="checkbox-group" style="margin-top:8px">
+          <label class="checkbox-item"><input type="radio" name="proc_furtoExtravio" value="furto" required /> Furto</label>
+          <label class="checkbox-item"><input type="radio" name="proc_furtoExtravio" value="extravio" /> Extravio</label>
+        </div>
+      </div>
+    </div>
+  </div></div>`;
+}
+
+const CAMPOS_CORRECAO_ARMA = [
+  { campo:'NumeroSerie',         label:'N° Série' },
+  { campo:'NumeroSIGMA',         label:'N° SIGMA' },
+  { campo:'NumeroSINARM',        label:'N° SINARM' },
+  { campo:'NumeroRegistro',      label:'N° Registro' },
+  { campo:'AtividadeCadastrada', label:'Atividade Cadastrada' },
+  { campo:'Marca',               label:'Marca' },
+  { campo:'Modelo',              label:'Modelo' },
+  { campo:'Especie',             label:'Espécie' },
+  { campo:'Calibre',             label:'Calibre' },
+  { campo:'GrupoCalibre',        label:'Grupo Calibre' },
+  { campo:'PaisFabricacao',      label:'País de Fabricação' },
+  { campo:'CapacidadeTiro',      label:'Capacidade de Tiro' },
+  { campo:'NumeroCanos',         label:'N° de Canos' },
+  { campo:'ComprimentoCano',     label:'Comprimento do Cano (mm)' },
+  { campo:'AlmaCano',            label:'Alma do Cano' },
+  { campo:'NumeroRaias',         label:'N° de Raias' },
+  { campo:'SentidoRaias',        label:'Sentido das Raias' },
+  { campo:'Acabamento',          label:'Acabamento' },
+  { campo:'Funcionamento',       label:'Funcionamento' },
+  { campo:'Observacoes',         label:'Observações' },
+];
+
+function buildCamposCorrecaoArma(armasOpts) {
+  return `<div class="form-section"><div class="form-section-title">Correção de Dados de Arma</div><div class="form-body">
+    <div class="form-grid">
+      <div><label>Arma *</label><select name="proc_armaId" required onchange="onArmaCorrecaoChange(this.value)"><option value="">Selecione...</option>${armasOpts}</select></div>
+    </div>
+    <div id="proc-correcao-campos" style="margin-top:12px"></div>
+  </div></div>`;
+}
+
+function onArmaCorrecaoChange(val) {
+  const container = document.getElementById('proc-correcao-campos');
+  if (!container) return;
+  const armaId = (val || '').split('|')[0];
+  const arma = _processoArmasCache.find(a => String(a.id) === String(armaId));
+  if (!arma) { container.innerHTML = ''; return; }
+  container.innerHTML = `
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Marque o(s) campo(s) que deseja corrigir e digite o novo valor:</div>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      ${CAMPOS_CORRECAO_ARMA.map(f => `
+        <div style="display:flex;align-items:center;gap:10px;padding:8px;border:1px solid var(--border);border-radius:6px;flex-wrap:wrap">
+          <input type="checkbox" id="corr-check-${f.campo}" onchange="document.getElementById('corr-input-${f.campo}').disabled=!this.checked; if(this.checked) document.getElementById('corr-input-${f.campo}').focus();" />
+          <label for="corr-check-${f.campo}" style="min-width:200px;font-size:13px;margin:0;font-weight:400">${f.label} <span style="color:var(--text-muted);font-size:11px">(atual: ${esc(arma[f.campo]||'—')})</span></label>
+          <input type="text" name="proc_corr_${f.campo}" id="corr-input-${f.campo}" placeholder="Novo valor" disabled style="flex:1;min-width:160px" />
+        </div>
+      `).join('')}
+    </div>`;
+}
+
+function buildCamposPortePF(armasOptsPF) {
+  return `<div class="form-section"><div class="form-section-title">Porte de Arma PF</div><div class="form-body">
+    <div class="form-grid">
+      <div><label>Arma (Acervo PF Defesa Pessoal) *</label>
+        <select name="proc_armaId" required><option value="">Selecione...</option>${armasOptsPF||''}</select>
+        ${!armasOptsPF ? `<div style="font-size:12px;color:var(--text-muted);margin-top:4px">O cliente não possui armas no Acervo PF Defesa Pessoal.</div>` : ''}
+      </div>
+    </div>
+  </div></div>`;
 }
 
 function onMesmoTitularRadio(value) {
@@ -4786,6 +4936,31 @@ async function deferirProcesso(id) {
             toast('Processo deferido! Documento do cliente atualizado.', 'success');
           } else { toast('Processo deferido!', 'success'); }
         } catch(e2) { toast('Deferido, mas não foi possível atualizar o documento: ' + e2.message, 'warning'); }
+      } else if (tipo === 'Comunicado de Furto/Extravio') {
+        try {
+          const armaId = (dados.armaId || '').split('|')[0];
+          const ocorrencia = dados.furtoExtravio;
+          if (armaId && ocorrencia) {
+            const novoStatus = ocorrencia === 'furto' ? 'Furtada' : 'Extraviada';
+            await App.graph.updateItem(CONFIG.listas.armas, armaId, { StatusArma: novoStatus });
+            App.invalidateCache('armas');
+            toast(`Processo deferido! Arma marcada como "${novoStatus}".`, 'success');
+          } else { toast('Processo deferido!', 'success'); }
+        } catch(e2) { toast('Deferido, mas não foi possível atualizar o status da arma: ' + e2.message, 'warning'); }
+      } else if (tipo === 'Correção de dados de arma') {
+        try {
+          const armaId = (dados.armaId || '').split('|')[0];
+          const updates = {};
+          CAMPOS_CORRECAO_ARMA.forEach(f => {
+            const v = dados['corr_' + f.campo];
+            if (v !== undefined && v !== '') updates[f.campo] = v;
+          });
+          if (armaId && Object.keys(updates).length) {
+            await App.graph.updateItem(CONFIG.listas.armas, armaId, updates);
+            App.invalidateCache('armas');
+            toast('Processo deferido! Dados da arma corrigidos.', 'success');
+          } else { toast('Processo deferido!', 'success'); }
+        } catch(e2) { toast('Deferido, mas não foi possível corrigir os dados da arma: ' + e2.message, 'warning'); }
       } else {
         toast('Processo deferido!', 'success');
       }
@@ -7533,9 +7708,14 @@ async function salvarOrcamento() {
 
 async function renderPerfilOrcamentos(clienteId) {
   let orcamentos = [];
+  let demandas = [];
   try {
-    const todos = await App.graph._readFile('orcamentos').catch(() => []);
+    const [todos, todasDemandas] = await Promise.all([
+      App.graph._readFile('orcamentos').catch(() => []),
+      App.graph._readFile('demandas').catch(() => []),
+    ]);
     orcamentos = (Array.isArray(todos) ? todos : []).filter(o => String(o.clienteId) === String(clienteId));
+    demandas = Array.isArray(todasDemandas) ? todasDemandas : [];
   } catch(e) {}
   orcamentos.sort((a,b) => (b.data||'').localeCompare(a.data||''));
 
@@ -7550,17 +7730,29 @@ async function renderPerfilOrcamentos(clienteId) {
           <thead><tr><th>Nº</th><th>Data</th><th>Status</th><th>Serviços</th><th>Total</th><th>Por</th><th>Ações</th></tr></thead>
           <tbody>
             ${orcamentos.map(o => {
-              const isPendente = !o.status || o.status === 'Pendente';
+              const isPendente  = !o.status || o.status === 'Pendente';
+              const isRejeitado = o.status === 'Rejeitado';
+              const isAprovado  = o.status === 'Aprovado';
+              const temDemanda  = isAprovado && demandas.some(d => String(d.orcamentoId) === String(o.id));
               const statusBadge = isPendente
                 ? `<span class="badge" style="background:#e2e8f0;color:#64748b">Pendente</span>`
-                : o.status === 'Rejeitado'
+                : isRejeitado
                   ? `<span class="badge badge-red">Rejeitado</span>`
                   : `<span class="badge badge-green">Aprovado</span>`;
-              const acoes = admin && isPendente ? `
+              let acoes = '';
+              if (admin && isPendente) {
+                acoes = `
                 <button class="btn btn-ghost btn-sm" onclick="editarOrcamento('${o.id}','${clienteId}')" title="Editar"><i class="bi bi-pencil" style="color:var(--accent)"></i></button>
                 <button class="btn btn-ghost btn-sm" onclick="aprovarOrcamento('${o.id}','${clienteId}')" title="Aprovar"><i class="bi bi-check-circle" style="color:var(--success)"></i></button>
                 <button class="btn btn-ghost btn-sm" onclick="rejeitarOrcamento('${o.id}','${clienteId}')" title="Rejeitar"><i class="bi bi-x-circle" style="color:var(--danger)"></i></button>
-                <button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${clienteId}')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>` : '';
+                <button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${clienteId}')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>`;
+              } else if (admin && isRejeitado) {
+                acoes = `<button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${clienteId}')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>`;
+              } else if (admin && isAprovado && !temDemanda) {
+                acoes = `<button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${clienteId}')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>`;
+              } else if (admin && isAprovado && temDemanda) {
+                acoes = `<span style="font-size:11px;color:var(--text-muted)" title="Exclua a demanda vinculada em Controle de Demandas para poder excluir este orçamento">Demanda ativa</span>`;
+              }
               return `<tr>
                 <td style="white-space:nowrap;font-weight:600">${esc(o.numero||'—')}</td>
                 <td style="white-space:nowrap">${fmtDate(o.data)}</td>
@@ -7583,8 +7775,17 @@ async function excluirOrcamento(orcId, clienteId, source) {
   if (!confirm('Excluir este orçamento?')) return;
   showLoading();
   try {
-    const todos = await App.graph._readFile('orcamentos').catch(() => []);
-    const lista = (Array.isArray(todos) ? todos : []).filter(o => o.id !== orcId);
+    const [todos, todasDemandas] = await Promise.all([
+      App.graph._readFile('orcamentos').catch(() => []),
+      App.graph._readFile('demandas').catch(() => []),
+    ]);
+    const arr = Array.isArray(todos) ? todos : [];
+    const orc = arr.find(o => o.id === orcId);
+    if (orc && orc.status === 'Aprovado') {
+      const temDemanda = (Array.isArray(todasDemandas) ? todasDemandas : []).some(d => String(d.orcamentoId) === String(orcId));
+      if (temDemanda) throw new Error('Exclua primeiro a demanda vinculada em Controle de Demandas para poder excluir este orçamento.');
+    }
+    const lista = arr.filter(o => o.id !== orcId);
     await App.graph._writeFile('orcamentos', lista);
     toast('Orçamento excluído.', 'success');
     if (source === 'global') await renderOrcamentos();
@@ -7666,8 +7867,12 @@ async function renderOrcamentos() {
   document.getElementById('page-title').textContent = 'Orçamentos';
   showLoading();
   try {
-    const todosRaw = await App.graph._readFile('orcamentos').catch(() => []);
+    const [todosRaw, demandasRaw] = await Promise.all([
+      App.graph._readFile('orcamentos').catch(() => []),
+      App.graph._readFile('demandas').catch(() => []),
+    ]);
     const todos = Array.isArray(todosRaw) ? todosRaw : [];
+    const orcamentosComDemanda = new Set((Array.isArray(demandasRaw) ? demandasRaw : []).map(d => String(d.orcamentoId)));
 
     const pendentes     = todos.filter(o => !o.status || o.status === 'Pendente')
                               .sort((a,b) => (b.data||'').localeCompare(a.data||''));
@@ -7678,12 +7883,21 @@ async function renderOrcamentos() {
     const aprovados     = aprovadosTot.slice(0, 10);
     const rejeitados    = rejeitadosTot.slice(0, 10);
 
-    function linhaOrc(o, mostraAcoes) {
-      const acoesBtns = mostraAcoes ? `
-        <button class="btn btn-ghost btn-sm" onclick="editarOrcamento('${o.id}','${esc(String(o.clienteId))}')" title="Editar"><i class="bi bi-pencil" style="color:var(--accent)"></i></button>
-        <button class="btn btn-ghost btn-sm" onclick="aprovarOrcamento('${o.id}','${esc(String(o.clienteId))}','global')" title="Aprovar"><i class="bi bi-check-circle" style="color:var(--success)"></i></button>
-        <button class="btn btn-ghost btn-sm" onclick="rejeitarOrcamento('${o.id}','${esc(String(o.clienteId))}','global')" title="Rejeitar"><i class="bi bi-x-circle" style="color:var(--danger)"></i></button>
-        <button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${esc(String(o.clienteId))}','global')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>` : '';
+    function linhaOrc(o, modo) {
+      let acoesBtns = '';
+      if (modo === 'pendente') {
+        acoesBtns = `
+          <button class="btn btn-ghost btn-sm" onclick="editarOrcamento('${o.id}','${esc(String(o.clienteId))}')" title="Editar"><i class="bi bi-pencil" style="color:var(--accent)"></i></button>
+          <button class="btn btn-ghost btn-sm" onclick="aprovarOrcamento('${o.id}','${esc(String(o.clienteId))}','global')" title="Aprovar"><i class="bi bi-check-circle" style="color:var(--success)"></i></button>
+          <button class="btn btn-ghost btn-sm" onclick="rejeitarOrcamento('${o.id}','${esc(String(o.clienteId))}','global')" title="Rejeitar"><i class="bi bi-x-circle" style="color:var(--danger)"></i></button>
+          <button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${esc(String(o.clienteId))}','global')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>`;
+      } else if (modo === 'rejeitado') {
+        acoesBtns = `<button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${esc(String(o.clienteId))}','global')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>`;
+      } else if (modo === 'aprovado') {
+        acoesBtns = orcamentosComDemanda.has(String(o.id))
+          ? `<span style="font-size:11px;color:var(--text-muted)" title="Exclua a demanda vinculada em Controle de Demandas para poder excluir este orçamento">Demanda ativa</span>`
+          : `<button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${esc(String(o.clienteId))}','global')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>`;
+      }
       return `<tr>
         <td style="white-space:nowrap;font-weight:600">${esc(o.numero||'—')}</td>
         <td style="white-space:nowrap">${fmtDate(o.data)}</td>
@@ -7691,15 +7905,15 @@ async function renderOrcamentos() {
         <td style="font-size:12px">${(o.itens||[]).map(i => `${i.qtd>1?i.qtd+'× ':''}${esc(i.tipo)}`).join('<br>')}</td>
         <td style="white-space:nowrap;font-weight:600">${fmtMoeda(o.total)}</td>
         <td><span class="badge badge-blue">${esc(o.criadoPor||'—')}</span></td>
-        ${mostraAcoes ? `<td style="white-space:nowrap">${acoesBtns}</td>` : ''}
+        <td style="white-space:nowrap">${acoesBtns}</td>
       </tr>`;
     }
 
-    function cardSecao(titulo, lista, total, badgeStyle, emptyMsg, mostraAcoes) {
+    function cardSecao(titulo, lista, total, badgeStyle, emptyMsg, modo) {
       const labelContagem = total > lista.length ? `últimos ${lista.length} de ${total}` : `${lista.length}`;
-      const headerCols = `<th>Nº</th><th>Data</th><th>Cliente</th><th>Serviços</th><th>Total</th><th>Por</th>${mostraAcoes ? '<th>Ações</th>' : ''}`;
+      const headerCols = `<th>Nº</th><th>Data</th><th>Cliente</th><th>Serviços</th><th>Total</th><th>Por</th><th>Ações</th>`;
       const body = lista.length
-        ? `<div class="table-wrapper"><table><thead><tr>${headerCols}</tr></thead><tbody>${lista.map(o => linhaOrc(o, mostraAcoes)).join('')}</tbody></table></div>`
+        ? `<div class="table-wrapper"><table><thead><tr>${headerCols}</tr></thead><tbody>${lista.map(o => linhaOrc(o, modo)).join('')}</tbody></table></div>`
         : `<div class="empty-state" style="padding:30px"><i class="bi bi-inbox"></i><p>${emptyMsg}</p></div>`;
       return `<div class="card" style="margin-bottom:20px">
         <div class="card-header" style="display:flex;align-items:center;gap:10px">
@@ -7712,11 +7926,11 @@ async function renderOrcamentos() {
 
     document.getElementById('page-content').innerHTML =
       cardSecao('Orçamentos em Aberto', pendentes, pendentes.length,
-        'background:#fef3c7;color:#92400e', 'Nenhum orçamento pendente.', true) +
+        'background:#fef3c7;color:#92400e', 'Nenhum orçamento pendente.', 'pendente') +
       cardSecao('Últimos Aprovados', aprovados, aprovadosTot.length,
-        'background:#dcfce7;color:#166534', 'Nenhum orçamento aprovado ainda.', false) +
+        'background:#dcfce7;color:#166534', 'Nenhum orçamento aprovado ainda.', 'aprovado') +
       cardSecao('Últimos Rejeitados', rejeitados, rejeitadosTot.length,
-        'background:#fee2e2;color:#991b1b', 'Nenhum orçamento rejeitado.', false);
+        'background:#fee2e2;color:#991b1b', 'Nenhum orçamento rejeitado.', 'rejeitado');
 
   } catch(e) {
     document.getElementById('page-content').innerHTML = `<div class="empty-state"><i class="bi bi-exclamation-triangle"></i><p>${esc(e.message)}</p></div>`;
@@ -7794,11 +8008,13 @@ async function renderControleDemandas() {
         <td style="font-weight:700;white-space:nowrap">${esc(d.numero||'—')}</td>
         <td style="white-space:nowrap;font-size:12px">${esc(d.orcamentoNumero||'—')}</td>
         <td>${esc(d.clienteNome||'—')}</td>
+        <td style="white-space:nowrap;font-size:12px">${fmtDate(d.dataCriacao)}</td>
         <td style="font-size:12px">${progItems}</td>
         <td style="white-space:nowrap;font-weight:600">${fmtMoeda(d.total)}</td>
         <td>${statusBadge}</td>
         <td>${d.operador ? `<span class="badge badge-blue">${esc(d.operador)}</span>` : '<span style="color:var(--text-muted)">—</span>'}</td>
         <td>${delegarOpts}</td>
+        <td><button class="btn btn-ghost btn-sm" onclick="excluirDemanda('${d.id}')" title="Excluir Demanda"><i class="bi bi-trash" style="color:var(--danger)"></i></button></td>
       </tr>`;
     }).join('');
 
@@ -7810,12 +8026,25 @@ async function renderControleDemandas() {
         <div class="card-header"><h3><i class="bi bi-list-task me-2"></i>Demandas</h3></div>
         <div class="card-body" style="padding:0">
           ${demandas.length ? `<div class="table-wrapper"><table>
-            <thead><tr><th>Nº</th><th>Orçamento</th><th>Cliente</th><th>Serviços / Progresso</th><th>Total</th><th>Status</th><th>Operador</th><th>Delegar</th></tr></thead>
+            <thead><tr><th>Nº</th><th>Orçamento</th><th>Cliente</th><th>Criado em</th><th>Serviços / Progresso</th><th>Total</th><th>Status</th><th>Operador</th><th>Delegar</th><th>Ações</th></tr></thead>
             <tbody>${linhasTabela}</tbody>
           </table></div>` : `<div class="empty-state" style="padding:40px"><i class="bi bi-inbox"></i><p>Nenhuma demanda criada ainda. Aprove um orçamento para gerar a primeira demanda.</p></div>`}
         </div>
       </div>`;
   } catch(e) { document.getElementById('page-content').innerHTML = `<div class="empty-state"><i class="bi bi-exclamation-triangle"></i><p>${esc(e.message)}</p></div>`; } finally { hideLoading(); }
+}
+
+async function excluirDemanda(demandaId) {
+  if (!isAdminUser()) { toast('Apenas administradores podem excluir demandas.', 'error'); return; }
+  if (!confirm('Excluir esta demanda?\n\nProcessos já criados a partir dela não serão excluídos, mas o vínculo com a demanda será perdido. Após excluir, o orçamento de origem poderá ser excluído (se necessário).')) return;
+  showLoading();
+  try {
+    const lista = await App.graph._readFile('demandas').catch(() => []);
+    const arr = (Array.isArray(lista) ? lista : []).filter(d => String(d.id) !== String(demandaId));
+    await App.graph._writeFile('demandas', arr);
+    toast('Demanda excluída.', 'success');
+    await renderControleDemandas();
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 async function delegarDemanda(demandaId, operador) {
