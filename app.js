@@ -289,6 +289,7 @@ async function renderPage() {
       case 'prazos-processos':         await renderPrazosProcessos(); break;
       case 'registro-movimentacoes':   await renderRegistroMovimentacoes(); break;
       case 'acessos-portal':           await renderRegistroAcessosPortal(); break;
+      case 'orcamentos':           await renderOrcamentos(); break;
       case 'orcamento/novo':       await renderOrcamentoForm(params.clienteId); break;
       case 'orcamento/editar':     await renderOrcamentoForm(params.clienteId, params.orcId); break;
       default:                     await renderDashboard();
@@ -7552,10 +7553,13 @@ async function renderPerfilOrcamentos(clienteId) {
               const isPendente = !o.status || o.status === 'Pendente';
               const statusBadge = isPendente
                 ? `<span class="badge" style="background:#e2e8f0;color:#64748b">Pendente</span>`
-                : `<span class="badge badge-green">Aprovado</span>`;
+                : o.status === 'Rejeitado'
+                  ? `<span class="badge badge-red">Rejeitado</span>`
+                  : `<span class="badge badge-green">Aprovado</span>`;
               const acoes = admin && isPendente ? `
                 <button class="btn btn-ghost btn-sm" onclick="editarOrcamento('${o.id}','${clienteId}')" title="Editar"><i class="bi bi-pencil" style="color:var(--accent)"></i></button>
                 <button class="btn btn-ghost btn-sm" onclick="aprovarOrcamento('${o.id}','${clienteId}')" title="Aprovar"><i class="bi bi-check-circle" style="color:var(--success)"></i></button>
+                <button class="btn btn-ghost btn-sm" onclick="rejeitarOrcamento('${o.id}','${clienteId}')" title="Rejeitar"><i class="bi bi-x-circle" style="color:var(--danger)"></i></button>
                 <button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${clienteId}')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>` : '';
               return `<tr>
                 <td style="white-space:nowrap;font-weight:600">${esc(o.numero||'—')}</td>
@@ -7574,7 +7578,7 @@ async function renderPerfilOrcamentos(clienteId) {
   </div>`;
 }
 
-async function excluirOrcamento(orcId, clienteId) {
+async function excluirOrcamento(orcId, clienteId, source) {
   if (!isAdminUser()) { toast('Apenas administradores podem excluir orçamentos.', 'error'); return; }
   if (!confirm('Excluir este orçamento?')) return;
   showLoading();
@@ -7583,7 +7587,8 @@ async function excluirOrcamento(orcId, clienteId) {
     const lista = (Array.isArray(todos) ? todos : []).filter(o => o.id !== orcId);
     await App.graph._writeFile('orcamentos', lista);
     toast('Orçamento excluído.', 'success');
-    await renderClientePerfil(clienteId, 'orcamentos');
+    if (source === 'global') await renderOrcamentos();
+    else await renderClientePerfil(clienteId, 'orcamentos');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
@@ -7592,7 +7597,7 @@ function editarOrcamento(orcId, clienteId) {
   navigate('orcamento/editar', { orcId, clienteId });
 }
 
-async function aprovarOrcamento(orcId, clienteId) {
+async function aprovarOrcamento(orcId, clienteId, source) {
   if (!isAdminUser()) { toast('Apenas administradores podem aprovar orçamentos.', 'error'); return; }
   if (!confirm('Aprovar este orçamento e gerar demanda?')) return;
   showLoading();
@@ -7625,8 +7630,97 @@ async function aprovarOrcamento(orcId, clienteId) {
       delegadoPor:     null,
     });
     toast(`Orçamento aprovado! Demanda ${numDemanda} criada.`, 'success');
-    await renderClientePerfil(clienteId, 'orcamentos');
+    if (source === 'global') await renderOrcamentos();
+    else await renderClientePerfil(clienteId, 'orcamentos');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function rejeitarOrcamento(orcId, clienteId, source) {
+  if (!isAdminUser()) { toast('Apenas administradores podem rejeitar orçamentos.', 'error'); return; }
+  if (!confirm('Rejeitar este orçamento?')) return;
+  showLoading();
+  try {
+    const todos = await App.graph._readFile('orcamentos').catch(() => []);
+    const lista = Array.isArray(todos) ? todos : [];
+    const orc = lista.find(o => String(o.id) === String(orcId));
+    if (!orc) throw new Error('Orçamento não encontrado.');
+    if (orc.status && orc.status !== 'Pendente') throw new Error('Apenas orçamentos pendentes podem ser rejeitados.');
+    orc.status       = 'Rejeitado';
+    orc.dataRejeicao = new Date().toISOString().split('T')[0];
+    orc.rejeitadoPor = getCurrentUserName();
+    await App.graph._writeFile('orcamentos', lista);
+    toast('Orçamento rejeitado.', 'success');
+    if (source === 'global') await renderOrcamentos();
+    else await renderClientePerfil(clienteId, 'orcamentos');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+// ============================================================
+// PÁGINA GLOBAL DE ORÇAMENTOS (admin)
+// ============================================================
+async function renderOrcamentos() {
+  if (!isAdminUser()) {
+    document.getElementById('page-content').innerHTML = `<div class="empty-state"><i class="bi bi-lock"></i><p>Acesso restrito a administradores.</p></div>`;
+    return;
+  }
+  document.getElementById('page-title').textContent = 'Orçamentos';
+  showLoading();
+  try {
+    const todosRaw = await App.graph._readFile('orcamentos').catch(() => []);
+    const todos = Array.isArray(todosRaw) ? todosRaw : [];
+
+    const pendentes     = todos.filter(o => !o.status || o.status === 'Pendente')
+                              .sort((a,b) => (b.data||'').localeCompare(a.data||''));
+    const aprovadosTot  = todos.filter(o => o.status === 'Aprovado')
+                              .sort((a,b) => (b.dataAprovacao||b.data||'').localeCompare(a.dataAprovacao||a.data||''));
+    const rejeitadosTot = todos.filter(o => o.status === 'Rejeitado')
+                              .sort((a,b) => (b.dataRejeicao||b.data||'').localeCompare(a.dataRejeicao||a.data||''));
+    const aprovados     = aprovadosTot.slice(0, 10);
+    const rejeitados    = rejeitadosTot.slice(0, 10);
+
+    function linhaOrc(o, mostraAcoes) {
+      const acoesBtns = mostraAcoes ? `
+        <button class="btn btn-ghost btn-sm" onclick="editarOrcamento('${o.id}','${esc(String(o.clienteId))}')" title="Editar"><i class="bi bi-pencil" style="color:var(--accent)"></i></button>
+        <button class="btn btn-ghost btn-sm" onclick="aprovarOrcamento('${o.id}','${esc(String(o.clienteId))}','global')" title="Aprovar"><i class="bi bi-check-circle" style="color:var(--success)"></i></button>
+        <button class="btn btn-ghost btn-sm" onclick="rejeitarOrcamento('${o.id}','${esc(String(o.clienteId))}','global')" title="Rejeitar"><i class="bi bi-x-circle" style="color:var(--danger)"></i></button>
+        <button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${esc(String(o.clienteId))}','global')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>` : '';
+      return `<tr>
+        <td style="white-space:nowrap;font-weight:600">${esc(o.numero||'—')}</td>
+        <td style="white-space:nowrap">${fmtDate(o.data)}</td>
+        <td>${esc(o.clienteNome||'—')}</td>
+        <td style="font-size:12px">${(o.itens||[]).map(i => `${i.qtd>1?i.qtd+'× ':''}${esc(i.tipo)}`).join('<br>')}</td>
+        <td style="white-space:nowrap;font-weight:600">${fmtMoeda(o.total)}</td>
+        <td><span class="badge badge-blue">${esc(o.criadoPor||'—')}</span></td>
+        ${mostraAcoes ? `<td style="white-space:nowrap">${acoesBtns}</td>` : ''}
+      </tr>`;
+    }
+
+    function cardSecao(titulo, lista, total, badgeStyle, emptyMsg, mostraAcoes) {
+      const labelContagem = total > lista.length ? `últimos ${lista.length} de ${total}` : `${lista.length}`;
+      const headerCols = `<th>Nº</th><th>Data</th><th>Cliente</th><th>Serviços</th><th>Total</th><th>Por</th>${mostraAcoes ? '<th>Ações</th>' : ''}`;
+      const body = lista.length
+        ? `<div class="table-wrapper"><table><thead><tr>${headerCols}</tr></thead><tbody>${lista.map(o => linhaOrc(o, mostraAcoes)).join('')}</tbody></table></div>`
+        : `<div class="empty-state" style="padding:30px"><i class="bi bi-inbox"></i><p>${emptyMsg}</p></div>`;
+      return `<div class="card" style="margin-bottom:20px">
+        <div class="card-header" style="display:flex;align-items:center;gap:10px">
+          <h3 style="margin:0">${titulo}</h3>
+          <span class="badge" style="${badgeStyle};font-size:12px">${labelContagem}</span>
+        </div>
+        <div class="card-body" style="padding:0">${body}</div>
+      </div>`;
+    }
+
+    document.getElementById('page-content').innerHTML =
+      cardSecao('Orçamentos em Aberto', pendentes, pendentes.length,
+        'background:#fef3c7;color:#92400e', 'Nenhum orçamento pendente.', true) +
+      cardSecao('Últimos Aprovados', aprovados, aprovadosTot.length,
+        'background:#dcfce7;color:#166534', 'Nenhum orçamento aprovado ainda.', false) +
+      cardSecao('Últimos Rejeitados', rejeitados, rejeitadosTot.length,
+        'background:#fee2e2;color:#991b1b', 'Nenhum orçamento rejeitado.', false);
+
+  } catch(e) {
+    document.getElementById('page-content').innerHTML = `<div class="empty-state"><i class="bi bi-exclamation-triangle"></i><p>${esc(e.message)}</p></div>`;
+  } finally { hideLoading(); }
 }
 
 // ============================================================
@@ -7993,6 +8087,8 @@ async function iniciarApp() {
     if (navAcessos) navAcessos.style.display = '';
     const navDemandas = document.getElementById('nav-controle-demandas');
     if (navDemandas) navDemandas.style.display = '';
+    const navOrcamentos = document.getElementById('nav-orcamentos');
+    if (navOrcamentos) navOrcamentos.style.display = '';
   }
   if (isExtrasUser()) {
     const navExt = document.getElementById('nav-pagamentos-extras');
