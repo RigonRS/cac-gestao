@@ -25,7 +25,11 @@ const TIPOS_PROCESSO = [
   'Transferência de Arma SINARM x SINARM',
   'Transferência de Arma SIGMA x SIGMA',
   'Transferência de Arma SINARM x SIGMA',
-  'Cancelamento de CR'
+  'Cancelamento de CR',
+  'Comunicado de Furto/Extravio',
+  'Defesa de Notificação',
+  'Correção de dados de arma',
+  'Porte de Arma PF',
 ];
 
 const TIPOS_TRANSFERENCIA = [
@@ -163,6 +167,7 @@ const COLUMNS_CLIENTES = [
   _text('NomeMae'), _text('NomePai'), _text('Categoria'),
   _date('ValidadeAvaliPsi'), _date('ValidadeTesteTiro'),
   _text('NaoRenovarCTF'),
+  _textM('HistoricoRenovacoesCTF'),
   _text('CEP1'), _text('Endereco1'), _text('Numero1'),
   _text('Complemento1'), _text('Bairro1'), _text('Cidade1'), _text('UF1Endereco'),
   _text('CEP2'), _text('Endereco2'), _text('Numero2'),

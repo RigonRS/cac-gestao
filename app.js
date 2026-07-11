@@ -590,6 +590,10 @@ const VALORES_PROCESSO = {
   'Transferência de Arma SIGMA x SIGMA':       1117.00,
   'Transferência de Arma SINARM x SIGMA':      1117.00,
   'Cancelamento de CR':                         150.00,
+  'Comunicado de Furto/Extravio':             1621.00,
+  'Defesa de Notificação':                    1621.00,
+  'Correção de dados de arma':                 250.00,
+  'Porte de Arma PF':                         2500.00,
 };
 
 const TAXAS_PROCESSO = {
@@ -609,6 +613,10 @@ const TAXAS_PROCESSO = {
   'Transferência de Arma SIGMA x SIGMA':         88,
   'Transferência de Arma SINARM x SIGMA':        88,
   'Cancelamento de CR':                          50,
+  'Comunicado de Furto/Extravio':               0,
+  'Defesa de Notificação':                       0,
+  'Correção de dados de arma':                   0,
+  'Porte de Arma PF':                            0,
 };
 
 const CERTIDOES_CONFIG = [
@@ -914,8 +922,8 @@ async function renderClienteForm(id = null, importParams = {}) {
           <div><label>RG</label><input name="RG" value="${val('RG')}" /></div>
           <div><label>Órgão Emissor</label><input name="OrgaoEmissor" value="${val('OrgaoEmissor')}" oninput="this.value=this.value.toUpperCase()" style="text-transform:uppercase" /></div>
           <div><label>UF (RG)</label><input name="UFDoc" value="${val('UFDoc')}" maxlength="2" style="text-transform:uppercase" /></div>
-          <div><label>Data de Expedição (RG)</label><input type="date" name="DataExpedicaoRG" value="${dateVal('DataExpedicaoRG')}" /></div>
-          <div><label>Data de Validade RG ou CNH</label><input type="date" name="DataValidadeRGouCNH" value="${dateVal('DataValidadeRGouCNH')}" /></div>
+          <div><label>Data de Expedição (RG)</label><input type="date" name="DataExpedicaoRG" value="${dateVal('DataExpedicaoRG')}" ${!id ? 'onchange="autoPreencherValidadeRG(this.value)"' : ''} /></div>
+          <div><label>Data de Validade RG ou CNH</label><input type="date" name="DataValidadeRGouCNH" id="campo-validade-rg" value="${dateVal('DataValidadeRGouCNH')}" /></div>
           <div><label>Data de Nascimento</label><input type="date" name="DataNascimento" value="${dateVal('DataNascimento')}" /></div>
           <div><label>Nacionalidade</label><input name="Nacionalidade" value="${val('Nacionalidade')}" /></div>
           <div><label>Naturalidade</label><input name="Naturalidade" value="${val('Naturalidade')}" /></div>
@@ -1019,7 +1027,10 @@ async function renderClienteForm(id = null, importParams = {}) {
     </div>
 
     <div class="form-section">
-      <div class="form-section-title">2° Endereço (opcional)</div>
+      <div class="form-section-title" style="display:flex;align-items:center;justify-content:space-between">
+        <span>2° Endereço (opcional)</span>
+        <button type="button" class="btn btn-outline btn-sm" onclick="limparSegundoEndereco()"><i class="bi bi-eraser me-1"></i>Limpar Dados</button>
+      </div>
       <div class="form-body">
         <div class="form-grid">
           <div><label>CEP</label><input name="CEP2" value="${val('CEP2')}" oninput="this.value=fmtCEP(this.value)" maxlength="9" /></div>
@@ -1038,6 +1049,22 @@ async function renderClienteForm(id = null, importParams = {}) {
       <button type="button" class="btn btn-outline" onclick="history.back()">Cancelar</button>
     </div>
   </form>`;
+}
+
+function autoPreencherValidadeRG(dataExpedicao) {
+  if (!dataExpedicao) return;
+  const el = document.getElementById('campo-validade-rg');
+  if (el && !el.value) {
+    const [y, m, d] = dataExpedicao.split('-').map(Number);
+    el.value = `${y + 10}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+  }
+}
+
+function limparSegundoEndereco() {
+  ['CEP2','Endereco2','Numero2','Complemento2','Bairro2','Cidade2','UF2Endereco'].forEach(name => {
+    const el = document.querySelector(`[name="${name}"]`);
+    if (el) el.value = '';
+  });
 }
 
 async function verificarCPFDuplicado(cpf, idAtual) {
@@ -1303,6 +1330,29 @@ function renderPerfilIBAMA(c) {
         </div>
       </div></div>
     </div>
+    ${(() => {
+      let hist = [];
+      try { hist = JSON.parse(c.HistoricoRenovacoesCTF || '[]'); } catch(e) {}
+      if (!Array.isArray(hist) || hist.length === 0) return '';
+      const admin = isAdminUser();
+      return `<div class="form-section">
+        <div class="form-section-title">Histórico de Renovações CTF</div>
+        <div class="form-body" style="padding:0">
+          <div class="table-wrapper">
+            <table>
+              <thead><tr><th>Data</th><th>Renovado por</th>${admin ? '<th></th>' : ''}</tr></thead>
+              <tbody>
+                ${hist.map((h, i) => `<tr>
+                  <td>${fmtDate(h.data)}</td>
+                  <td><span class="badge badge-blue">${esc(h.usuario||'—')}</span></td>
+                  ${admin ? `<td><button class="btn btn-ghost btn-sm" onclick="excluirRenovacaoCTF('${c.id}',${i})" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button></td>` : ''}
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>`;
+    })()}
     <div class="form-section" id="secao-simaf">
       <div class="form-section-title" style="display:flex;align-items:center;justify-content:space-between">
         <span>SIMAF</span>
@@ -2040,7 +2090,17 @@ async function renderDocumentoForm(clienteId, id = null) {
   window._clubesCadastrados = clubesCadastrados;
   const clubesOptsDoc = clubesCadastrados.slice().sort((a,b)=>(a.Title||'').localeCompare(b.Title||'','pt-BR')).map(cl => `<option value="${cl.id}">${esc(cl.Title)}</option>`).join('');
 
+  const todosDocumentos = await App.getDocumentos();
+  const armasComCRAF = new Set(
+    todosDocumentos
+      .filter(doc => doc.TipoDocumento === 'CRAF' && String(doc.ClienteId) === String(clienteId) && (!id || String(doc.id) !== String(id)))
+      .map(doc => String(doc.ArmaVinculadaId))
+      .filter(Boolean)
+  );
   const armasOpts = todasArmas.map(a => `<option value="${a.id}|${esc(a.NumeroSerie||'')} ${esc(a.Marca||'')} ${esc(a.Modelo||'')}" ${String(d.ArmaVinculadaId)===String(a.id)?'selected':''}>${esc(a.NumeroSerie||'')} — ${esc(a.Marca||'')} ${esc(a.Modelo||'')}</option>`).join('');
+  const armasOptsCRAF = todasArmas
+    .filter(a => !armasComCRAF.has(String(a.id)) || String(d.ArmaVinculadaId) === String(a.id))
+    .map(a => `<option value="${a.id}|${esc(a.NumeroSerie||'')} ${esc(a.Marca||'')} ${esc(a.Modelo||'')}" ${String(d.ArmaVinculadaId)===String(a.id)?'selected':''}>${esc(a.NumeroSerie||'')} — ${esc(a.Marca||'')} ${esc(a.Modelo||'')}</option>`).join('');
   const clientesOpts = todosClientes.map(c => `<option value="${c.id}|${esc(c.Title)}" ${String(d.ClienteDonoCRAFId)===String(c.id)?'selected':''}>${esc(c.Title)}</option>`).join('');
   const tipoAtual = d.TipoDocumento || '';
 
@@ -2066,8 +2126,9 @@ async function renderDocumentoForm(clienteId, id = null) {
           <div class="form-grid" style="margin-top:16px">
             <div><label>Arma</label>
               <select name="ArmaVinculadaCRAF" id="arma-craf-sel">
-                <option value="">Selecione...</option>${armasOpts}
+                <option value="">Selecione...</option>${armasOptsCRAF}
               </select>
+              ${armasOptsCRAF === '' ? '<div style="font-size:12px;color:#dc2626;margin-top:4px"><i class="bi bi-exclamation-triangle me-1"></i>Todas as armas já possuem CRAF cadastrado.</div>' : ''}
             </div>
           </div>
         </div>
@@ -2444,7 +2505,7 @@ async function renderConsultaProcessos() {
       if (col === 'cliente')   { va = a.ClienteNome||''; vb = b.ClienteNome||''; }
       else if (col === 'tipo') { va = a.TipoProcesso||''; vb = b.TipoProcesso||''; }
       else if (col === 'resp') { va = a.Responsavel||''; vb = b.Responsavel||''; }
-      else if (col === 'abertura') { va = a.DataAbertura||''; vb = b.DataAbertura||''; }
+      else if (col === 'protocolo') { va = a.NumeroProtocolo||''; vb = b.NumeroProtocolo||''; }
       else if (col === 'ultReg') { va = _getUltimoRegistroISO(a)||'0000-00-00'; vb = _getUltimoRegistroISO(b)||'0000-00-00'; }
       else if (col === 'status') { va = a.Status||''; vb = b.Status||''; }
       else if (col === '2fa') {
@@ -2483,8 +2544,9 @@ async function renderConsultaProcessos() {
           <thead><tr>
             ${thSort('cliente','Cliente')}
             ${thSort('tipo','Tipo de Processo')}
+            <th>Identificação</th>
+            ${thSort('protocolo','Protocolo')}
             ${thSort('resp','Responsável')}
-            ${thSort('abertura','Abertura')}
             ${thSort('ultReg','Último Registro')}
             ${thSort('status','Status')}
             ${thSort('2fa','2FA')}
@@ -2496,11 +2558,13 @@ async function renderConsultaProcessos() {
               const ultReg = _getUltimoRegistro(p);
               const cli = clienteMap[String(p.ClienteId)];
               const tem2fa = cli?.VerificacaoEtapas === 'Sim';
+              const _info = infoArmaLocalProcesso(p);
               return `<tr style="cursor:pointer" onclick="navigate('processos/detalhe',{id:'${p.id}'})">
                 <td><strong>${esc(p.ClienteNome||'—')}</strong></td>
                 <td>${esc(p.TipoProcesso||'—')}${p.Restituido ? ' <span class="badge" style="background:#9333ea;color:#fff;font-size:11px"><i class="bi bi-arrow-return-left"></i> Restituído</span>' : ''}</td>
+                <td style="font-size:12px;color:var(--text-muted)">${_info ? esc(_info) : '<span style="color:var(--text-muted)">—</span>'}</td>
+                <td style="font-size:12px">${p.NumeroProtocolo ? esc(p.NumeroProtocolo) : '<span style="color:var(--text-muted)">—</span>'}</td>
                 <td>${p.Responsavel ? `<span class="badge badge-blue">${esc(p.Responsavel)}</span>` : '<span style="color:var(--text-muted)">—</span>'}</td>
-                <td>${fmtDate(p.DataAbertura?p.DataAbertura.split('T')[0]:'')}</td>
                 <td style="font-size:12px;color:${ultReg ? 'var(--danger)' : 'var(--text-muted)'}"><strong>${ultReg || '—'}</strong></td>
                 <td><span class="badge ${b.cls}">${b.txt}</span></td>
                 <td>${tem2fa ? '<span class="badge badge-blue" title="Verificação em 2 etapas ativa"><i class="bi bi-shield-lock-fill"></i> 2FA</span>' : '<span style="color:var(--text-muted);font-size:12px">—</span>'}</td>
@@ -6483,11 +6547,38 @@ async function renovarCTF(clienteId) {
   if (!confirm('Confirmar renovação do CTF por +3 meses a partir de hoje?')) return;
   showLoading();
   try {
+    const c = await App.graph.getItem(CONFIG.listas.clientes, clienteId);
     const hoje = new Date().toISOString().split('T')[0];
     const novaValidade = addMonths(hoje, 3);
-    await App.graph.updateItem(CONFIG.listas.clientes, clienteId, { DataValidadeCTF: novaValidade });
+    let hist = [];
+    try { hist = JSON.parse(c.HistoricoRenovacoesCTF || '[]'); } catch(e) {}
+    if (!Array.isArray(hist)) hist = [];
+    hist.push({ data: hoje, usuario: getCurrentUserName() });
+    await App.graph.updateItem(CONFIG.listas.clientes, clienteId, {
+      DataValidadeCTF: novaValidade,
+      HistoricoRenovacoesCTF: JSON.stringify(hist),
+    });
     App.invalidateCache('clientes');
     toast('CTF renovado! Nova validade: ' + fmtDate(novaValidade), 'success');
+    await renderClientePerfil(clienteId, 'ibama');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function excluirRenovacaoCTF(clienteId, idx) {
+  if (!isAdminUser()) { toast('Apenas administradores podem excluir registros.', 'error'); return; }
+  if (!confirm('Excluir este registro de renovação do CTF?')) return;
+  showLoading();
+  try {
+    const c = await App.graph.getItem(CONFIG.listas.clientes, clienteId);
+    let hist = [];
+    try { hist = JSON.parse(c.HistoricoRenovacoesCTF || '[]'); } catch(e) {}
+    if (!Array.isArray(hist)) hist = [];
+    hist.splice(idx, 1);
+    await App.graph.updateItem(CONFIG.listas.clientes, clienteId, {
+      HistoricoRenovacoesCTF: JSON.stringify(hist),
+    });
+    App.invalidateCache('clientes');
+    toast('Registro excluído.', 'success');
     await renderClientePerfil(clienteId, 'ibama');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
@@ -7052,8 +7143,20 @@ async function renderOrcamentoForm(clienteId = null) {
             }).join('')}
           </div>
         </div>
+        <div style="margin-bottom:12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <label style="font-size:13px;font-weight:600;white-space:nowrap">Desconto (R$)</label>
+          <input id="orc-desconto" type="number" step="0.01" min="0" placeholder="0,00" style="width:130px" oninput="atualizarOrcamento()" />
+        </div>
         <div id="orc-total-div" style="display:none;background:#f9fafb;border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:16px">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <span style="font-size:13px;color:var(--text-muted)">Subtotal</span>
+            <span id="orc-subtotal-val" style="font-size:14px;color:var(--text-muted)"></span>
+          </div>
+          <div id="orc-desconto-row" style="display:none;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <span style="font-size:13px;color:#dc2626">Desconto</span>
+            <span id="orc-desconto-val" style="font-size:14px;color:#dc2626"></span>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;padding-top:6px;border-top:1px solid var(--border)">
             <span style="font-weight:700;font-size:15px">Total</span>
             <strong id="orc-total-val" style="font-size:20px;color:var(--accent)"></strong>
           </div>
@@ -7104,15 +7207,24 @@ function atualizarOrcamento() {
     linhas.push({ tipo, qtd, valor, subtotal });
   });
 
-  const totalDiv  = document.getElementById('orc-total-div');
-  const totalVal  = document.getElementById('orc-total-val');
-  const avistaVal = document.getElementById('orc-avista-val');
-  const waBtn     = document.getElementById('orc-wa-btn');
+  const desconto     = Math.max(0, parseFloat(document.getElementById('orc-desconto')?.value) || 0);
+  const totalComDesc = Math.max(0, total - desconto);
+
+  const totalDiv       = document.getElementById('orc-total-div');
+  const subtotalVal    = document.getElementById('orc-subtotal-val');
+  const descontoRow    = document.getElementById('orc-desconto-row');
+  const descontoVal    = document.getElementById('orc-desconto-val');
+  const totalVal       = document.getElementById('orc-total-val');
+  const avistaVal      = document.getElementById('orc-avista-val');
+  const waBtn          = document.getElementById('orc-wa-btn');
 
   if (linhas.length > 0) {
-    if (totalDiv)  totalDiv.style.display = '';
-    if (totalVal)  totalVal.textContent   = fmtMoeda(total);
-    if (avistaVal) avistaVal.textContent  = fmtMoeda(total * 0.95);
+    if (totalDiv)    totalDiv.style.display = '';
+    if (subtotalVal) subtotalVal.textContent = fmtMoeda(total);
+    if (descontoRow) descontoRow.style.display = desconto > 0 ? 'flex' : 'none';
+    if (descontoVal) descontoVal.textContent = '− ' + fmtMoeda(desconto);
+    if (totalVal)    totalVal.textContent   = fmtMoeda(totalComDesc);
+    if (avistaVal)   avistaVal.textContent  = fmtMoeda(totalComDesc * 0.95);
   } else {
     if (totalDiv) totalDiv.style.display = 'none';
   }
@@ -7133,8 +7245,9 @@ function atualizarOrcamento() {
         const subStr = l.subtotal.toLocaleString('pt-BR', { style:'currency', currency:'BRL' });
         return l.qtd > 1 ? `• ${l.tipo} (${l.qtd}x ${unStr}): ${subStr}` : `• ${l.tipo}: ${subStr}`;
       }).join('\n') +
-      `\n\nTotal: ${total.toLocaleString('pt-BR', { style:'currency', currency:'BRL' })}` +
-      `\nFormas de pagamento: à vista com 5% de desconto (${(total*0.95).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}) ou cartão de crédito em até 10x com acréscimo dos juros da máquina.`;
+      (desconto > 0 ? `\nDesconto: − ${desconto.toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}` : '') +
+      `\n\nTotal: ${totalComDesc.toLocaleString('pt-BR', { style:'currency', currency:'BRL' })}` +
+      `\nFormas de pagamento: à vista com 5% de desconto (${(totalComDesc*0.95).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}) ou cartão de crédito em até 10x com acréscimo dos juros da máquina.`;
     if (waBtn) { waBtn.href = `https://wa.me/55${celularLimpo}?text=${encodeURIComponent(msg)}`; waBtn.style.pointerEvents = ''; waBtn.style.opacity = '1'; }
   } else {
     if (waBtn) { waBtn.href = '#'; waBtn.style.pointerEvents = 'none'; waBtn.style.opacity = '0.45'; }
@@ -7159,6 +7272,8 @@ async function salvarOrcamento() {
     linhas.push({ tipo, qtd, valor, subtotal });
   });
   if (!linhas.length) { toast('Selecione ao menos um serviço.', 'warning'); return; }
+  const desconto = Math.max(0, parseFloat(document.getElementById('orc-desconto')?.value) || 0);
+  const totalFinal = Math.max(0, total - desconto);
 
   showLoading();
   try {
@@ -7170,7 +7285,8 @@ async function salvarOrcamento() {
       clienteNome,
       data:        new Date().toISOString().split('T')[0],
       itens:       linhas,
-      total,
+      desconto:    desconto || undefined,
+      total:       totalFinal,
       criadoPor:   getCurrentUserName(),
     };
     lista.push(novo);
