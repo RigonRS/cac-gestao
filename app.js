@@ -140,6 +140,13 @@ function isAdminUser() {
   const nome = getCurrentUserName();
   return ['Matheus', 'Simone'].includes(nome);
 }
+async function proximoNumero(colecao, prefixo) {
+  const lista = await App.graph._readFile(colecao).catch(() => []);
+  const arr = Array.isArray(lista) ? lista : [];
+  const nums = arr.map(item => parseInt((item.numero || '').replace(prefixo, ''), 10)).filter(n => !isNaN(n));
+  const max = nums.length ? Math.max(...nums) : 0;
+  return `${prefixo}${String(max + 1).padStart(3, '0')}`;
+}
 function isExtrasUser() {
   const nome = getCurrentUserName();
   return ['Matheus', 'Simone', 'Andrieli', 'Priscila'].includes(nome);
@@ -268,8 +275,10 @@ async function renderPage() {
       case 'processos':            await renderProcessosList(); break;
       case 'consulta-processos':   await renderConsultaProcessos(); break;
       case 'meus-processos':       await renderMeusProcessos(); break;
+      case 'minhas-demandas':      await renderMinhasDemandas(); break;
+      case 'controle-demandas':    await renderControleDemandas(); break;
       case 'anotacoes':            await renderAnotacoes(); break;
-      case 'processos/novo':       await renderProcessoForm(params.clienteId); break;
+      case 'processos/novo':       await renderProcessoForm(params.clienteId, params); break;
       case 'processos/editar':     await renderProcessoEditar(params.id); break;
       case 'processos/detalhe':    await renderProcessoDetalhe(params.id); break;
       case 'validades':            await renderValidades(); break;
@@ -281,6 +290,7 @@ async function renderPage() {
       case 'registro-movimentacoes':   await renderRegistroMovimentacoes(); break;
       case 'acessos-portal':           await renderRegistroAcessosPortal(); break;
       case 'orcamento/novo':       await renderOrcamentoForm(params.clienteId); break;
+      case 'orcamento/editar':     await renderOrcamentoForm(params.clienteId, params.orcId); break;
       default:                     await renderDashboard();
     }
   } catch (e) {
@@ -2672,8 +2682,44 @@ async function deletarProcesso(id, clienteNome) {
 // ============================================================
 // PROCESSOS — FORMULÁRIO (NOVO)
 // ============================================================
-async function renderProcessoForm(clienteId = null) {
+async function renderProcessoForm(clienteId = null, routeParams = {}) {
   document.getElementById('page-title').textContent = 'Novo Processo';
+  const demandaId     = routeParams.demandaId     || null;
+  const demandaNumero = routeParams.demandaNumero  || null;
+  const tipoProcesso  = routeParams.tipoProcesso   ? decodeURIComponent(routeParams.tipoProcesso) : null;
+
+  // Restrição: não-admins só podem abrir processo via demanda delegada
+  if (!isAdminUser()) {
+    const demandasRaw = await App.graph._readFile('demandas').catch(() => []);
+    const temDemanda = (Array.isArray(demandasRaw) ? demandasRaw : []).some(d =>
+      d.operador === getCurrentUserName() && d.status === 'Aberta'
+    );
+    if (!temDemanda) {
+      document.getElementById('page-content').innerHTML = `
+        <div class="empty-state">
+          <i class="bi bi-lock" style="font-size:48px"></i>
+          <p style="margin-top:12px;max-width:360px;text-align:center">Não há demandas delegadas para você.<br>
+          Acesse <strong>Minhas Demandas</strong> quando uma demanda for atribuída.</p>
+          <button class="btn btn-outline" style="margin-top:16px" onclick="navigate('minhas-demandas')">
+            <i class="bi bi-inbox-fill me-1"></i> Ver Minhas Demandas
+          </button>
+        </div>`;
+      return;
+    }
+    if (!demandaId) {
+      document.getElementById('page-content').innerHTML = `
+        <div class="empty-state">
+          <i class="bi bi-lock" style="font-size:48px"></i>
+          <p style="margin-top:12px;max-width:360px;text-align:center">Novos processos devem ser abertos a partir de uma demanda.<br>
+          Acesse <strong>Minhas Demandas</strong> para criar processos.</p>
+          <button class="btn btn-outline" style="margin-top:16px" onclick="navigate('minhas-demandas')">
+            <i class="bi bi-inbox-fill me-1"></i> Ver Minhas Demandas
+          </button>
+        </div>`;
+      return;
+    }
+  }
+
   const clientes = await App.getClientes();
 
   if (clienteId) {
@@ -2684,33 +2730,81 @@ async function renderProcessoForm(clienteId = null) {
     }
   }
 
-  const clientesOpts = [...clientes].sort((a,b) => (a.Title||'').localeCompare(b.Title||'','pt-BR')).map(c => `<option value="${c.id}" ${String(c.id)===String(clienteId)?'selected':''} ${isClienteInativo(c)?'disabled':''}>${esc(c.Title)}${isClienteInativo(c)?' (Inativo)':''}</option>`).join('');
+  const fromDemanda = !!demandaId;
+  const lockFields  = fromDemanda && !isAdminUser();
+  const hoje        = new Date().toISOString().split('T')[0];
+
+  // Se vem de demanda, cliente é fixo; só mostra o nome, sem select
+  let clienteHtml;
+  if (fromDemanda && clienteId) {
+    const clienteSel = clientes.find(c => String(c.id) === String(clienteId));
+    const nome = clienteSel ? clienteSel.Title : clienteId;
+    clienteHtml = `<div>
+      <label>Cliente *</label>
+      <input type="text" value="${esc(nome)}" readonly style="background:var(--bg-secondary)" />
+      <input type="hidden" name="ClienteId" value="${esc(clienteId)}" />
+    </div>`;
+  } else {
+    const clientesOpts = [...clientes].sort((a,b) => (a.Title||'').localeCompare(b.Title||'','pt-BR')).map(c => `<option value="${c.id}" ${String(c.id)===String(clienteId)?'selected':''} ${isClienteInativo(c)?'disabled':''}>${esc(c.Title)}${isClienteInativo(c)?' (Inativo)':''}</option>`).join('');
+    clienteHtml = `<div><label>Cliente *</label>
+      <select name="ClienteId" required onchange="onClienteProcessoChange(this.value)">
+        <option value="">Selecione...</option>${clientesOpts}
+      </select>
+    </div>`;
+  }
+
+  // Tipo de processo: pré-selecionado e travado se vem de demanda
+  const tipoHtml = fromDemanda && tipoProcesso
+    ? `<div><label>Tipo de Processo *</label>
+        <input type="text" value="${esc(tipoProcesso)}" readonly style="background:var(--bg-secondary)" />
+        <input type="hidden" name="TipoProcesso" value="${esc(tipoProcesso)}" />
+      </div>`
+    : `<div><label>Tipo de Processo *</label>
+        <select name="TipoProcesso" required onchange="onTipoProcessoChange(this.value)">
+          <option value="">Selecione...</option>
+          ${TIPOS_PROCESSO.map(t => `<option value="${t}">${t}</option>`).join('')}
+        </select>
+      </div>`;
+
+  // Responsável: pré-preenchido com usuário atual se vem de demanda
+  const currentUser = getCurrentUserName();
+  const responsavelHtml = `<div><label>Responsável</label>
+    <select name="Responsavel">
+      <option value="">Selecione...</option>
+      ${RESPONSAVEIS.map(r => `<option value="${r}" ${fromDemanda && r===currentUser?'selected':''}>${r}</option>`).join('')}
+    </select>
+  </div>`;
+
+  // Data de abertura: travada para não-admins vindos de demanda
+  const dataAberturaHtml = lockFields
+    ? `<div><label>Data de Abertura</label><input type="date" name="DataAbertura" value="${hoje}" readonly style="background:var(--bg-secondary)" /></div>`
+    : `<div><label>Data de Abertura</label><input type="date" name="DataAbertura" value="${hoje}" /></div>`;
+
+  // Campos ocultos de demanda
+  const hiddenDemanda = fromDemanda
+    ? `<input type="hidden" name="demandaId" value="${esc(demandaId)}" />
+       <input type="hidden" name="demandaNumero" value="${esc(demandaNumero||'')}" />`
+    : '';
+
+  // Badge informando a demanda de origem
+  const demandaBadge = fromDemanda
+    ? `<div style="margin-bottom:12px;padding:8px 12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;font-size:13px;color:#1d4ed8">
+        <i class="bi bi-clipboard-check me-1"></i>Processo vinculado à demanda <strong>${esc(demandaNumero||demandaId)}</strong>
+      </div>` : '';
 
   window._clubesCadastrados = await App.getClubes();
 
   document.getElementById('page-content').innerHTML = `
   <form id="form-processo" onsubmit="salvarProcesso(event)">
+    ${hiddenDemanda}
+    ${demandaBadge}
     <div class="form-section">
       <div class="form-section-title">Informações Gerais</div>
       <div class="form-body">
         <div class="form-grid">
-          <div><label>Cliente *</label>
-            <select name="ClienteId" required onchange="onClienteProcessoChange(this.value)">
-              <option value="">Selecione...</option>${clientesOpts}
-            </select>
-          </div>
-          <div><label>Tipo de Processo *</label>
-            <select name="TipoProcesso" required onchange="onTipoProcessoChange(this.value)">
-              <option value="">Selecione...</option>
-              ${TIPOS_PROCESSO.map(t => `<option value="${t}">${t}</option>`).join('')}
-            </select>
-          </div>
-          <div><label>Responsável</label>
-            <select name="Responsavel">
-              <option value="">Selecione...</option>
-              ${RESPONSAVEIS.map(r => `<option value="${r}">${r}</option>`).join('')}
-            </select>
-          </div>
+          ${clienteHtml}
+          ${tipoHtml}
+          ${responsavelHtml}
           <div>
             <label>Status</label>
             <select name="Status" id="status-novo-processo" onchange="onStatusNovoProcessoChange(this.value)">
@@ -2723,7 +2817,7 @@ async function renderProcessoForm(clienteId = null) {
               </select>
             </div>
           </div>
-          <div><label>Data de Abertura</label><input type="date" name="DataAbertura" value="${new Date().toISOString().split('T')[0]}" /></div>
+          ${dataAberturaHtml}
         </div>
       </div>
     </div>
@@ -2732,7 +2826,7 @@ async function renderProcessoForm(clienteId = null) {
       <div class="form-section-title">Pagamento</div>
       <div class="form-body">
         <div class="form-grid">
-          <div><label>Valor do Processo (R$)</label><input type="number" name="ValorProcesso" step="0.01" min="0" placeholder="0,00" oninput="calcularParcelas()" /></div>
+          <div><label>Valor do Processo (R$)</label><input type="number" name="ValorProcesso" step="0.01" min="0" placeholder="0,00" oninput="calcularParcelas()" ${lockFields?'readonly style="background:var(--bg-secondary)"':''} /></div>
           <div>
             <label>Tipo de Pagamento</label>
             <div class="checkbox-group">
@@ -3404,14 +3498,46 @@ async function salvarProcesso(e) {
     }
   }
 
+  const demandaId     = fd.get('demandaId')     || null;
+  const demandaNumero = fd.get('demandaNumero') || null;
+  if (demandaId) {
+    fields.demandaId     = demandaId;
+    fields.demandaNumero = demandaNumero;
+  }
+
   showLoading();
   try {
     const created = await App.graph.createItem(CONFIG.listas.processos, fields);
     App.invalidateCache('processos');
     toast('Processo criado!', 'success');
     registrarMovimentacao('Novo Processo', `${tipoProc} — ${fields.ClienteNome||''}`);
+    if (demandaId) await verificarConclusaoDemanda(demandaId);
     navigate('processos/detalhe', { id: created.id });
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function verificarConclusaoDemanda(demandaId) {
+  try {
+    const [demandasRaw, todosProcessos] = await Promise.all([
+      App.graph._readFile('demandas').catch(() => []),
+      App.getProcessos(),
+    ]);
+    const arr = Array.isArray(demandasRaw) ? demandasRaw : [];
+    const idx = arr.findIndex(d => String(d.id) === String(demandaId));
+    if (idx < 0) return;
+    const demanda = arr[idx];
+    if (demanda.status === 'Concluída') return;
+    const vinculados = todosProcessos.filter(p => p.demandaId && String(p.demandaId) === String(demandaId));
+    const concluida = (demanda.itens || []).every(item => {
+      const criados = vinculados.filter(p => p.TipoProcesso === item.tipo).length;
+      return criados >= item.qtd;
+    });
+    if (concluida) {
+      arr[idx] = { ...demanda, status: 'Concluída' };
+      await App.graph._writeFile('demandas', arr);
+      toast('Demanda ' + (demanda.numero || '') + ' concluída automaticamente!', 'success');
+    }
+  } catch(e) { console.error('verificarConclusaoDemanda:', e); }
 }
 
 async function abrirCertidao(keyword) {
@@ -7098,10 +7224,24 @@ async function novoOrcamentoComVerificacao(clienteId) {
   navigate('orcamento/novo', { clienteId });
 }
 
-async function renderOrcamentoForm(clienteId = null) {
-  document.getElementById('page-title').textContent = 'Novo Orçamento';
+async function renderOrcamentoForm(clienteId = null, orcId = null) {
+  const modoEdicao = !!orcId;
+  document.getElementById('page-title').textContent = modoEdicao ? 'Editar Orçamento' : 'Novo Orçamento';
   const clientes = await App.getClientes();
   const sorted = [...clientes].sort((a,b) => (a.Title||'').localeCompare(b.Title||''));
+
+  // Carrega orçamento existente para edição
+  let orcExistente = null;
+  if (modoEdicao) {
+    const todos = await App.graph._readFile('orcamentos').catch(() => []);
+    orcExistente = (Array.isArray(todos) ? todos : []).find(o => String(o.id) === String(orcId)) || null;
+    if (orcExistente) {
+      clienteId = orcExistente.clienteId;
+      window._orcamentoEditando = { id: orcId, clienteId };
+    }
+  } else {
+    window._orcamentoEditando = null;
+  }
 
   if (clienteId) {
     const clienteSel = clientes.find(c => String(c.id) === String(clienteId));
@@ -7113,7 +7253,7 @@ async function renderOrcamentoForm(clienteId = null) {
 
   document.getElementById('page-content').innerHTML = `
     <div class="card">
-      <div class="card-header"><h3><i class="bi bi-calculator me-2"></i>Novo Orçamento</h3></div>
+      <div class="card-header"><h3><i class="bi bi-calculator me-2"></i>${modoEdicao ? 'Editar Orçamento' : 'Novo Orçamento'}</h3></div>
       <div class="card-body">
         <div style="margin-bottom:16px">
           <label>Cliente</label>
@@ -7177,6 +7317,21 @@ async function renderOrcamentoForm(clienteId = null) {
     </div>`;
 
   atualizarOrcamento();
+
+  // Pré-preenche itens e desconto no modo edição
+  if (orcExistente) {
+    const descontoEl = document.getElementById('orc-desconto');
+    if (descontoEl && orcExistente.desconto) descontoEl.value = orcExistente.desconto;
+    (orcExistente.itens || []).forEach(item => {
+      const idx = TIPOS_PROCESSO.indexOf(item.tipo);
+      if (idx < 0) return;
+      const chk = document.getElementById(`orc-chk-${idx}`);
+      if (chk) { chk.checked = true; onOrcItemChange(idx); }
+      const qty = document.getElementById(`orc-qty-${idx}`);
+      if (qty) { qty.value = item.qtd; atualizarOrcamento(); }
+    });
+    atualizarOrcamento();
+  }
 }
 
 function onOrcItemChange(i) {
@@ -7279,19 +7434,46 @@ async function salvarOrcamento() {
   try {
     const todos = await App.graph._readFile('orcamentos').catch(() => []);
     const lista = Array.isArray(todos) ? todos : [];
-    const novo = {
-      id:          `${Date.now()}${Math.random().toString(36).substr(2,5)}`,
-      clienteId,
-      clienteNome,
-      data:        new Date().toISOString().split('T')[0],
-      itens:       linhas,
-      desconto:    desconto || undefined,
-      total:       totalFinal,
-      criadoPor:   getCurrentUserName(),
-    };
-    lista.push(novo);
-    await App.graph._writeFile('orcamentos', lista);
-    toast('Orçamento salvo com sucesso!', 'success');
+    const orcId = window._orcamentoEditando?.id;
+    if (orcId) {
+      // Modo edição
+      const idx = lista.findIndex(o => String(o.id) === String(orcId));
+      if (idx >= 0) {
+        lista[idx] = {
+          ...lista[idx],
+          clienteId,
+          clienteNome,
+          itens:   linhas,
+          desconto: desconto || undefined,
+          total:   totalFinal,
+        };
+        await App.graph._writeFile('orcamentos', lista);
+        toast('Orçamento atualizado!', 'success');
+        window._orcamentoEditando = null;
+        navigate('clientes/perfil', { id: clienteId, tab: 'orcamentos' });
+      } else {
+        throw new Error('Orçamento não encontrado para edição.');
+      }
+    } else {
+      const numero = await proximoNumero('orcamentos', 'O');
+      const novo = {
+        id:           `${Date.now()}${Math.random().toString(36).substr(2,5)}`,
+        numero,
+        clienteId,
+        clienteNome,
+        data:         new Date().toISOString().split('T')[0],
+        itens:        linhas,
+        desconto:     desconto || undefined,
+        total:        totalFinal,
+        criadoPor:    getCurrentUserName(),
+        status:       'Pendente',
+        dataAprovacao: null,
+        aprovadoPor:  null,
+      };
+      lista.push(novo);
+      await App.graph._writeFile('orcamentos', lista);
+      toast('Orçamento salvo com sucesso!', 'success');
+    }
   } catch(e) { toast('Erro ao salvar: ' + e.message, 'error'); } finally { hideLoading(); }
 }
 
@@ -7306,22 +7488,32 @@ async function renderPerfilOrcamentos(clienteId) {
   if (!orcamentos.length) {
     return `<div class="form-section"><div class="form-body"><p style="color:var(--text-muted);font-style:italic">Nenhum orçamento salvo para este cliente.</p></div></div>`;
   }
+  const admin = isAdminUser();
   return `<div class="form-section">
     <div class="form-body" style="padding:0">
       <div class="table-wrapper">
         <table>
-          <thead><tr><th>Data</th><th>Serviços</th><th>Total</th><th>Por</th><th>Ações</th></tr></thead>
+          <thead><tr><th>Nº</th><th>Data</th><th>Status</th><th>Serviços</th><th>Total</th><th>Por</th><th>Ações</th></tr></thead>
           <tbody>
-            ${orcamentos.map(o => `
-              <tr>
+            ${orcamentos.map(o => {
+              const isPendente = !o.status || o.status === 'Pendente';
+              const statusBadge = isPendente
+                ? `<span class="badge" style="background:#e2e8f0;color:#64748b">Pendente</span>`
+                : `<span class="badge badge-green">Aprovado</span>`;
+              const acoes = admin && isPendente ? `
+                <button class="btn btn-ghost btn-sm" onclick="editarOrcamento('${o.id}','${clienteId}')" title="Editar"><i class="bi bi-pencil" style="color:var(--accent)"></i></button>
+                <button class="btn btn-ghost btn-sm" onclick="aprovarOrcamento('${o.id}','${clienteId}')" title="Aprovar"><i class="bi bi-check-circle" style="color:var(--success)"></i></button>
+                <button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${clienteId}')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>` : '';
+              return `<tr>
+                <td style="white-space:nowrap;font-weight:600">${esc(o.numero||'—')}</td>
                 <td style="white-space:nowrap">${fmtDate(o.data)}</td>
+                <td>${statusBadge}</td>
                 <td style="font-size:12px">${(o.itens||[]).map(i => `${i.qtd>1?i.qtd+'× ':''}${esc(i.tipo)}`).join('<br>')}</td>
                 <td style="white-space:nowrap;font-weight:600">${fmtMoeda(o.total)}</td>
                 <td><span class="badge badge-blue">${esc(o.criadoPor||'—')}</span></td>
-                <td>
-                  <button class="btn btn-danger btn-sm" onclick="excluirOrcamento('${o.id}','${clienteId}')" title="Excluir"><i class="bi bi-trash"></i></button>
-                </td>
-              </tr>`).join('')}
+                <td style="white-space:nowrap">${acoes}</td>
+              </tr>`;
+            }).join('')}
           </tbody>
         </table>
       </div>
@@ -7330,6 +7522,7 @@ async function renderPerfilOrcamentos(clienteId) {
 }
 
 async function excluirOrcamento(orcId, clienteId) {
+  if (!isAdminUser()) { toast('Apenas administradores podem excluir orçamentos.', 'error'); return; }
   if (!confirm('Excluir este orçamento?')) return;
   showLoading();
   try {
@@ -7339,6 +7532,218 @@ async function excluirOrcamento(orcId, clienteId) {
     toast('Orçamento excluído.', 'success');
     navigate('clientes/perfil', { id: clienteId, tab: 'orcamentos' });
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+function editarOrcamento(orcId, clienteId) {
+  if (!isAdminUser()) { toast('Apenas administradores podem editar orçamentos.', 'error'); return; }
+  navigate('orcamento/editar', { orcId, clienteId });
+}
+
+async function aprovarOrcamento(orcId, clienteId) {
+  if (!isAdminUser()) { toast('Apenas administradores podem aprovar orçamentos.', 'error'); return; }
+  if (!confirm('Aprovar este orçamento e gerar demanda?')) return;
+  showLoading();
+  try {
+    const todos = await App.graph._readFile('orcamentos').catch(() => []);
+    const lista = Array.isArray(todos) ? todos : [];
+    const orc = lista.find(o => String(o.id) === String(orcId));
+    if (!orc) throw new Error('Orçamento não encontrado.');
+    if (orc.status === 'Aprovado') throw new Error('Orçamento já foi aprovado.');
+    const hoje = new Date().toISOString().split('T')[0];
+    orc.status = 'Aprovado';
+    orc.dataAprovacao = hoje;
+    orc.aprovadoPor = getCurrentUserName();
+    await App.graph._writeFile('orcamentos', lista);
+    const numDemanda = await proximoNumero('demandas', 'D');
+    await App.graph.createItem('demandas', {
+      numero:          numDemanda,
+      orcamentoId:     orc.id,
+      orcamentoNumero: orc.numero || '—',
+      clienteId:       orc.clienteId,
+      clienteNome:     orc.clienteNome,
+      itens:           orc.itens,
+      desconto:        orc.desconto || 0,
+      total:           orc.total,
+      status:          'Aguardando Delegação',
+      operador:        null,
+      dataCriacao:     hoje,
+      criadoPor:       getCurrentUserName(),
+      dataDelegacao:   null,
+      delegadoPor:     null,
+    });
+    toast(`Orçamento aprovado! Demanda ${numDemanda} criada.`, 'success');
+    await renderClientePerfil(clienteId, 'orcamentos');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+// ============================================================
+// CONTROLE DE DEMANDAS
+// ============================================================
+const STATUS_DEMANDA_EXCLUIR_OPERADOR = [
+  'Deferido','Em análise','Pronto para Análise',
+  'Aguardando Pagamento GRU','Aguardando Protocolo (email)',
+  'Indeferido','Desistência Cliente'
+];
+
+async function renderControleDemandas() {
+  if (!isAdminUser()) { document.getElementById('page-content').innerHTML = `<div class="empty-state"><i class="bi bi-lock"></i><p>Acesso restrito a administradores.</p></div>`; return; }
+  document.getElementById('page-title').textContent = 'Controle de Demandas';
+  showLoading();
+  try {
+    const [demandasRaw, processos] = await Promise.all([
+      App.graph._readFile('demandas').catch(() => []),
+      App.getProcessos(),
+    ]);
+    const demandas = Array.isArray(demandasRaw) ? demandasRaw : [];
+
+    // Painel por operador
+    const painelHtml = RESPONSAVEIS.map(op => {
+      const demandasOp = demandas.filter(d => d.operador === op && d.status === 'Aberta').length;
+      const processosOp = processos.filter(p =>
+        p.Responsavel === op && !STATUS_DEMANDA_EXCLUIR_OPERADOR.includes(p.Status) && !STATUS_FECHADOS.includes(p.Status)
+      ).length;
+      return `<div class="card" style="flex:1;min-width:160px;text-align:center;padding:16px">
+        <div style="font-size:14px;font-weight:700;margin-bottom:10px">${esc(op)}</div>
+        <div style="display:flex;gap:12px;justify-content:center">
+          <div title="Demandas em aberto">
+            <div style="font-size:26px;font-weight:800;color:var(--accent)">${demandasOp}</div>
+            <div style="font-size:11px;color:var(--text-muted)">demandas</div>
+          </div>
+          <div title="Processos pendentes de ação">
+            <div style="font-size:26px;font-weight:800;color:var(--warning,#f59e0b)">${processosOp}</div>
+            <div style="font-size:11px;color:var(--text-muted)">processos</div>
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+
+    // Tabela de demandas (apenas não-concluídas primeiro, depois concluídas)
+    const demandasOrdenadas = [...demandas].sort((a,b) => {
+      const ord = { 'Aguardando Delegação': 0, 'Aberta': 1, 'Concluída': 2 };
+      return (ord[a.status]??1) - (ord[b.status]??1) || (b.dataCriacao||'').localeCompare(a.dataCriacao||'');
+    });
+
+    const linhasTabela = demandasOrdenadas.map(d => {
+      const statusBadge = d.status === 'Aguardando Delegação'
+        ? `<span class="badge" style="background:#fef9c3;color:#92400e">Ag. Delegação</span>`
+        : d.status === 'Aberta'
+          ? `<span class="badge badge-blue">Aberta</span>`
+          : `<span class="badge badge-green">Concluída</span>`;
+
+      // Progresso: conta processos vinculados
+      const progItems = (d.itens||[]).map(item => {
+        const criados = processos.filter(p => p.demandaId && String(p.demandaId) === String(d.id) && p.TipoProcesso === item.tipo).length;
+        const pct = item.qtd > 0 ? Math.min(100, Math.round(criados/item.qtd*100)) : 100;
+        return `<div style="font-size:12px;margin-bottom:2px">${item.qtd>1?item.qtd+'× ':''}${esc(item.tipo)} <span style="color:${criados>=item.qtd?'var(--success)':'var(--text-muted)'}">(${criados}/${item.qtd})</span></div>`;
+      }).join('');
+
+      const delegarOpts = d.status !== 'Concluída'
+        ? `<select onchange="delegarDemanda('${d.id}', this.value)" style="width:110px;font-size:12px">
+            <option value="">Delegar a...</option>
+            ${RESPONSAVEIS.map(r => `<option value="${r}" ${d.operador===r?'selected':''}>${r}</option>`).join('')}
+          </select>` : '';
+
+      return `<tr>
+        <td style="font-weight:700;white-space:nowrap">${esc(d.numero||'—')}</td>
+        <td style="white-space:nowrap;font-size:12px">${esc(d.orcamentoNumero||'—')}</td>
+        <td>${esc(d.clienteNome||'—')}</td>
+        <td style="font-size:12px">${progItems}</td>
+        <td style="white-space:nowrap;font-weight:600">${fmtMoeda(d.total)}</td>
+        <td>${statusBadge}</td>
+        <td>${d.operador ? `<span class="badge badge-blue">${esc(d.operador)}</span>` : '<span style="color:var(--text-muted)">—</span>'}</td>
+        <td>${delegarOpts}</td>
+      </tr>`;
+    }).join('');
+
+    document.getElementById('page-content').innerHTML = `
+      <div style="margin-bottom:20px">
+        <div style="display:flex;gap:12px;flex-wrap:wrap">${painelHtml}</div>
+      </div>
+      <div class="card">
+        <div class="card-header"><h3><i class="bi bi-list-task me-2"></i>Demandas</h3></div>
+        <div class="card-body" style="padding:0">
+          ${demandas.length ? `<div class="table-wrapper"><table>
+            <thead><tr><th>Nº</th><th>Orçamento</th><th>Cliente</th><th>Serviços / Progresso</th><th>Total</th><th>Status</th><th>Operador</th><th>Delegar</th></tr></thead>
+            <tbody>${linhasTabela}</tbody>
+          </table></div>` : `<div class="empty-state" style="padding:40px"><i class="bi bi-inbox"></i><p>Nenhuma demanda criada ainda. Aprove um orçamento para gerar a primeira demanda.</p></div>`}
+        </div>
+      </div>`;
+  } catch(e) { document.getElementById('page-content').innerHTML = `<div class="empty-state"><i class="bi bi-exclamation-triangle"></i><p>${esc(e.message)}</p></div>`; } finally { hideLoading(); }
+}
+
+async function delegarDemanda(demandaId, operador) {
+  if (!operador) return;
+  showLoading();
+  try {
+    const lista = await App.graph._readFile('demandas').catch(() => []);
+    const arr = Array.isArray(lista) ? lista : [];
+    const idx = arr.findIndex(d => String(d.id) === String(demandaId));
+    if (idx < 0) throw new Error('Demanda não encontrada.');
+    arr[idx] = {
+      ...arr[idx],
+      operador,
+      status: 'Aberta',
+      dataDelegacao: new Date().toISOString().split('T')[0],
+      delegadoPor: getCurrentUserName(),
+    };
+    await App.graph._writeFile('demandas', arr);
+    toast(`Demanda delegada para ${operador}.`, 'success');
+    await renderControleDemandas();
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+// ============================================================
+// MINHAS DEMANDAS
+// ============================================================
+async function renderMinhasDemandas() {
+  document.getElementById('page-title').textContent = 'Minhas Demandas';
+  showLoading();
+  try {
+    const currentUser = getCurrentUserName();
+    const [demandasRaw, processos] = await Promise.all([
+      App.graph._readFile('demandas').catch(() => []),
+      App.getProcessos(),
+    ]);
+    const demandas = (Array.isArray(demandasRaw) ? demandasRaw : [])
+      .filter(d => d.operador === currentUser && d.status === 'Aberta');
+
+    if (!demandas.length) {
+      document.getElementById('page-content').innerHTML = `<div class="empty-state"><i class="bi bi-inbox" style="font-size:48px"></i><p>Nenhuma demanda delegada para você no momento.</p></div>`;
+      return;
+    }
+
+    const cardsHtml = demandas.map(d => {
+      const itensHtml = (d.itens||[]).map(item => {
+        const criados = processos.filter(p => p.demandaId && String(p.demandaId) === String(d.id) && p.TipoProcesso === item.tipo).length;
+        const restante = item.qtd - criados;
+        const concluido = restante <= 0;
+        return `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);gap:12px;flex-wrap:wrap">
+          <div>
+            <div style="font-weight:600;font-size:13px">${esc(item.tipo)}</div>
+            <div style="font-size:12px;color:var(--text-muted);margin-top:2px">
+              ${criados} de ${item.qtd} processo(s) criado(s)
+              ${concluido ? '<span class="badge badge-green" style="margin-left:6px">Concluído</span>' : ''}
+            </div>
+          </div>
+          ${!concluido
+            ? `<button class="btn btn-primary btn-sm" onclick="navigate('processos/novo',{clienteId:'${d.clienteId}',demandaId:'${d.id}',demandaNumero:'${esc(d.numero||'')}',tipoProcesso:encodeURIComponent('${esc(item.tipo)}')})">
+                <i class="bi bi-plus-lg me-1"></i>Abrir Processo
+              </button>`
+            : `<button class="btn btn-outline btn-sm" disabled>Concluído</button>`}
+        </div>`;
+      }).join('');
+
+      return `<div class="card" style="margin-bottom:16px">
+        <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+          <h3 style="margin:0"><i class="bi bi-clipboard-check me-2"></i>Demanda ${esc(d.numero||'—')}</h3>
+          <span style="font-size:12px;color:var(--text-muted)">Orçamento ${esc(d.orcamentoNumero||'—')} · ${esc(d.clienteNome||'—')}</span>
+        </div>
+        <div class="card-body">${itensHtml}</div>
+      </div>`;
+    }).join('');
+
+    document.getElementById('page-content').innerHTML = cardsHtml;
+  } catch(e) { document.getElementById('page-content').innerHTML = `<div class="empty-state"><i class="bi bi-exclamation-triangle"></i><p>${esc(e.message)}</p></div>`; } finally { hideLoading(); }
 }
 
 // ============================================================
@@ -7523,6 +7928,8 @@ async function iniciarApp() {
     if (navMov) navMov.style.display = '';
     const navAcessos = document.getElementById('nav-acessos-portal');
     if (navAcessos) navAcessos.style.display = '';
+    const navDemandas = document.getElementById('nav-controle-demandas');
+    if (navDemandas) navDemandas.style.display = '';
   }
   if (isExtrasUser()) {
     const navExt = document.getElementById('nav-pagamentos-extras');
