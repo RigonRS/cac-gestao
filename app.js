@@ -565,6 +565,7 @@ function statusBadge(s) {
     'Indeferido':                   { cls:'badge-red',    txt:'Indeferido' },
     'Desistência Cliente':          { cls:'badge-red',    txt:'Desistência' },
     'Aguardando Docs':              { cls:'badge-yellow', txt:'Ag. Docs' },
+    'Restituído':                   { cls:'badge-purple', txt:'Restituído' },
   };
   return m[s] || { cls:'badge-gray', txt: s || '—' };
 }
@@ -579,6 +580,7 @@ const STATUS_PROCESSO = [
   'Em análise',
   'Aguardando Assinatura',
   'Aguardando Protocolo (email)',
+  'Restituído',
   'Indeferido',
   'Desistência Cliente',
 ];
@@ -2630,7 +2632,7 @@ function consultaSortBy(col) {
 // ============================================================
 // MEUS PROCESSOS
 // ============================================================
-const STATUS_A_PROTOCOLAR = ['Parado', 'Aguardando Documentos', 'Aguardando Pagamento GRU', 'Aguardando Assinatura', 'Aguardando Protocolo (email)'];
+const STATUS_A_PROTOCOLAR = ['Parado', 'Aguardando Documentos', 'Aguardando Pagamento GRU', 'Aguardando Assinatura', 'Aguardando Protocolo (email)', 'Restituído'];
 const STATUS_PROTOCOLADOS = ['Pronto para Análise', 'Em análise'];
 const MEUS_PROCESSOS_TABS = [
   { key: 'aprotocolar',  label: 'A Protocolar' },
@@ -4591,6 +4593,7 @@ async function atualizarStatus(id, novoStatus) {
       usuario: App.account?.name || App.account?.username || 'Desconhecido'
     });
     const updates = { Status: novoStatus, HistoricoStatus: JSON.stringify(historico) };
+    if (novoStatus === 'Restituído') updates.Restituido = true;
     if (window._processoDetalhe?.ProcessoFuturoId) {
       updates.ProcessoFuturoId   = null;
       updates.ProcessoFuturoNome = null;
@@ -4603,7 +4606,10 @@ async function atualizarStatus(id, novoStatus) {
     const histBody = document.getElementById('historico-status-body');
     if (histBody) histBody.innerHTML = renderHistoricoStatus(historico, id);
     toast('Status atualizado!', 'success');
-    if (window._processoDetalhe) window._processoDetalhe.Status = novoStatus;
+    if (window._processoDetalhe) {
+      window._processoDetalhe.Status = novoStatus;
+      if (novoStatus === 'Restituído') window._processoDetalhe.Restituido = true;
+    }
     const container = document.getElementById('container-processo-futuro');
     if (container) container.remove();
     if (novoStatus === 'Deferido') liberarProcessosFuturos(id);
@@ -5424,8 +5430,26 @@ async function restituirProcesso(id) {
   if (!confirm('Confirmar que este processo foi restituído?')) return;
   showLoading();
   try {
-    await App.graph.updateItem(CONFIG.listas.processos, id, { Restituido: true });
+    const proc = await App.graph.getItem(CONFIG.listas.processos, id);
+    const historico = JSON.parse(proc.HistoricoStatus || '[]');
+    const agora = new Date();
+    historico.push({
+      data:    agora.toLocaleDateString('pt-BR'),
+      hora:    agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+      status:  'Restituído',
+      usuario: App.account?.name || App.account?.username || 'Desconhecido'
+    });
+    await App.graph.updateItem(CONFIG.listas.processos, id, {
+      Restituido:      true,
+      Status:          'Restituído',
+      HistoricoStatus: JSON.stringify(historico),
+    });
     App.invalidateCache('processos');
+    if (window._processoDetalhe) {
+      window._processoDetalhe.Restituido      = true;
+      window._processoDetalhe.Status          = 'Restituído';
+      window._processoDetalhe.HistoricoStatus = JSON.stringify(historico);
+    }
     toast('Processo marcado como restituído.', 'success');
     await renderProcessoDetalhe(id);
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
