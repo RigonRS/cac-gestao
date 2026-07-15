@@ -639,7 +639,10 @@ async function registrarExtraRenovacao(tipo, clienteId, clienteNome, detalhe) {
   } catch(e) { console.error('registrarExtraRenovacao:', e); }
 }
 
-function abrirModalPagarExtra(tipo, id, descricao) {
+function abrirModalPagarExtrasMes(responsavel, mes) {
+  if (!isAdminUser()) { toast('Apenas administradores podem marcar como pago.', 'error'); return; }
+  const [y, m] = mes.split('-');
+  const mesLbl = `${NOMES_MESES_EXTENSO[parseInt(m,10)-1]} ${y}`;
   document.getElementById('modal-pagar-extra')?.remove();
   const hoje = new Date().toISOString().split('T')[0];
   const modal = document.createElement('div');
@@ -647,8 +650,8 @@ function abrirModalPagarExtra(tipo, id, descricao) {
   modal.innerHTML = `
     <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px">
       <div style="background:#fff;border-radius:14px;padding:28px;max-width:380px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.25)">
-        <h3 style="margin:0 0 12px;font-size:16px">Confirmar Pagamento do Extra</h3>
-        ${descricao ? `<p style="margin:0 0 16px;font-size:13px;color:var(--text-muted)">${esc(descricao)}</p>` : ''}
+        <h3 style="margin:0 0 12px;font-size:16px">Confirmar Pagamento dos Extras</h3>
+        <p style="margin:0 0 16px;font-size:13px;color:var(--text-muted)">${esc(responsavel)} — ${esc(mesLbl)}</p>
         <label style="font-size:12px;font-weight:600">Data de Pagamento *</label>
         <input type="date" id="pagar-extra-data" value="${hoje}" style="width:100%;margin-top:4px;margin-bottom:12px;box-sizing:border-box" />
         <label style="font-size:12px;font-weight:600">Forma de Pagamento *</label>
@@ -663,14 +666,15 @@ function abrirModalPagarExtra(tipo, id, descricao) {
         </select>
         <div style="display:flex;gap:10px;justify-content:flex-end">
           <button onclick="document.getElementById('modal-pagar-extra').remove()" class="btn btn-outline btn-sm">Cancelar</button>
-          <button onclick="confirmarPagarExtra('${tipo}','${id}')" class="btn btn-primary btn-sm">Confirmar</button>
+          <button onclick="confirmarPagarExtrasMes('${esc(responsavel)}','${mes}')" class="btn btn-primary btn-sm">Confirmar</button>
         </div>
       </div>
     </div>`;
   document.body.appendChild(modal);
 }
 
-async function confirmarPagarExtra(tipo, id) {
+async function confirmarPagarExtrasMes(responsavel, mes) {
+  if (!isAdminUser()) { toast('Apenas administradores podem marcar como pago.', 'error'); return; }
   const data  = document.getElementById('pagar-extra-data')?.value;
   const forma = document.getElementById('pagar-extra-forma')?.value;
   const banco = document.getElementById('pagar-extra-banco')?.value || '';
@@ -678,44 +682,25 @@ async function confirmarPagarExtra(tipo, id) {
   document.getElementById('modal-pagar-extra')?.remove();
   showLoading();
   try {
-    if (tipo === 'processo') {
-      await App.graph.updateItem(CONFIG.listas.processos, id, {
-        ExtraPago: true, ExtraDataPagamento: data, ExtraFormaPagamento: forma, ExtraBanco: banco,
-      });
-      App.invalidateCache('processos');
-    } else {
-      const lista = await App.graph._readFile('extras_avulsos').catch(() => []);
-      const arr = Array.isArray(lista) ? lista : [];
-      const idx = arr.findIndex(a => String(a.id) === String(id));
-      if (idx >= 0) {
-        arr[idx] = { ...arr[idx], pago: true, dataPagamento: data, formaPagamento: forma, banco };
-        await App.graph._writeFile('extras_avulsos', arr);
-      }
-    }
-    toast('Pagamento do extra registrado!', 'success');
+    const lista = await App.graph._readFile('extras_pagos_mes').catch(() => []);
+    const arr = Array.isArray(lista) ? lista : [];
+    const idx = arr.findIndex(x => x.responsavel === responsavel && x.mes === mes);
+    const entry = { responsavel, mes, pago: true, dataPagamento: data, formaPagamento: forma, banco, marcadoPor: getCurrentUserName() };
+    if (idx >= 0) arr[idx] = entry; else arr.push(entry);
+    await App.graph._writeFile('extras_pagos_mes', arr);
+    toast('Pagamento dos extras do mês registrado!', 'success');
     await renderPagamentosExtras();
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
-async function desfazerPagamentoExtra(tipo, id) {
+async function desfazerPagamentoExtrasMes(responsavel, mes) {
   if (!isAdminUser()) { toast('Apenas administradores podem desfazer.', 'error'); return; }
-  if (!confirm('Desfazer o registro de pagamento deste extra?')) return;
+  if (!confirm('Desfazer a marcação de pagamento dos extras deste mês?')) return;
   showLoading();
   try {
-    if (tipo === 'processo') {
-      await App.graph.updateItem(CONFIG.listas.processos, id, {
-        ExtraPago: false, ExtraDataPagamento: null, ExtraFormaPagamento: null, ExtraBanco: null,
-      });
-      App.invalidateCache('processos');
-    } else {
-      const lista = await App.graph._readFile('extras_avulsos').catch(() => []);
-      const arr = Array.isArray(lista) ? lista : [];
-      const idx = arr.findIndex(a => String(a.id) === String(id));
-      if (idx >= 0) {
-        arr[idx] = { ...arr[idx], pago: false, dataPagamento: null, formaPagamento: null, banco: null };
-        await App.graph._writeFile('extras_avulsos', arr);
-      }
-    }
+    const lista = await App.graph._readFile('extras_pagos_mes').catch(() => []);
+    const arr = (Array.isArray(lista) ? lista : []).filter(x => !(x.responsavel === responsavel && x.mes === mes));
+    await App.graph._writeFile('extras_pagos_mes', arr);
     toast('Pagamento desfeito.', 'success');
     await renderPagamentosExtras();
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
@@ -6395,20 +6380,42 @@ function getProcessoDescExtra(p) {
   } catch(e) { return ''; }
 }
 
-function statusPagoExtraHtml(tipo, id, item, descricao) {
-  if (item.pago) {
-    return `<div style="text-align:right">
-      <span class="badge badge-green" style="font-size:11px"><i class="bi bi-check-circle-fill me-1"></i>Pago${item.dataPagamento ? ' ' + fmtDate(item.dataPagamento) : ''}</span>
-      <div style="font-size:10px;color:var(--text-muted);margin-top:2px">${esc(item.formaPagamento||'')}${item.banco ? ' · ' + esc(item.banco) : ''}</div>
-      ${isAdminUser() ? `<button class="btn btn-ghost btn-sm" style="padding:0 4px;font-size:10px" onclick="desfazerPagamentoExtra('${tipo}','${id}')" title="Desfazer"><i class="bi bi-arrow-counterclockwise"></i></button>` : ''}
+function getUltimoPagamentoProcesso(p) {
+  try {
+    const pagamentos = JSON.parse(p.PagamentosJSON || '{}');
+    let melhor = null;
+    Object.values(pagamentos).forEach(item => {
+      if (!item || !item.pago) return;
+      if (!melhor || (item.dataPagamento||'') > (melhor.dataPagamento||'')) melhor = item;
+    });
+    return melhor;
+  } catch(e) { return null; }
+}
+
+function infoPagamentoProcessoTxt(p) {
+  const info = getUltimoPagamentoProcesso(p);
+  if (!info) return '';
+  const partes = [info.dataPagamento ? `Pago em ${fmtDate(info.dataPagamento)}` : null, info.formaPagamento || null, info.banco || null].filter(Boolean);
+  return partes.join(' · ');
+}
+
+function rodapePagoMesHtml(responsavel, mes, pagoMes) {
+  if (pagoMes) {
+    return `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span class="badge badge-green" style="font-size:12px"><i class="bi bi-check-circle-fill me-1"></i>Pago em ${fmtDate(pagoMes.dataPagamento)}</span>
+      <span style="font-size:12px;color:var(--text-muted)">${esc(pagoMes.formaPagamento||'')}${pagoMes.banco ? ' · ' + esc(pagoMes.banco) : ''}</span>
+      ${isAdminUser() ? `<button class="btn btn-ghost btn-sm" onclick="desfazerPagamentoExtrasMes('${esc(responsavel)}','${mes}')" title="Desfazer"><i class="bi bi-arrow-counterclockwise"></i> Desfazer</button>` : ''}
     </div>`;
   }
-  return `<button class="btn btn-outline btn-sm" style="font-size:11px" data-tipo="${tipo}" data-id="${id}" data-desc="${esc(descricao||'')}" onclick="abrirModalPagarExtra(this.dataset.tipo,this.dataset.id,this.dataset.desc)">Marcar como Pago</button>`;
+  return isAdminUser()
+    ? `<button class="btn btn-primary btn-sm" onclick="abrirModalPagarExtrasMes('${esc(responsavel)}','${mes}')"><i class="bi bi-check-lg me-1"></i>Marcar Mês como Pago</button>`
+    : `<span class="badge badge-gray" style="font-size:12px">Pagamento pendente</span>`;
 }
 
 function imprimirExtras(responsavel) {
   const processos = window._extrasProcessos || [];
   const avulsos = window._extrasAvulsos || [];
+  const extrasPagosMes = window._extrasPagosMes || [];
   const filtroMes = window._extrasFilterMes || '';
   function mesLbl(ym) {
     if (!ym) return '—';
@@ -6438,38 +6445,44 @@ function imprimirExtras(responsavel) {
       <td>${esc(p.TipoProcesso||'—')}${desc ? ` · ${esc(desc)}` : ''}</td>
       <td style="text-align:right">${fmtMoeda(valor)}</td>
       <td style="text-align:right;font-weight:700;color:#166534">${fmtMoeda(extra)}</td>
-      <td style="text-align:center">${p.ExtraPago ? 'Pago' : 'Pendente'}${p.Restituido ? ' · Restituído' : ''}</td>
+      <td style="text-align:center">${esc(infoPagamentoProcessoTxt(p) || 'Pagamento pendente')}${p.Restituido ? ' · Restituído' : ''}</td>
     </tr>`;
   }).join('') + meusAvulsos.map(a => `<tr>
       <td>${esc(a.clienteNome||'—')}</td>
       <td>Renovação ${esc(a.tipo)} (Periódica)${a.detalhe ? ` · ${esc(a.detalhe)}` : ''}</td>
       <td style="text-align:right">—</td>
       <td style="text-align:right;font-weight:700;color:#166534">${fmtMoeda(a.valor)}</td>
-      <td style="text-align:center">${a.pago ? 'Pago' : 'Pendente'}</td>
+      <td style="text-align:center">—</td>
     </tr>`).join('');
+
+  const pagoMes = extrasPagosMes.find(x => x.responsavel === responsavel && x.mes === filtroMes);
 
   const html = `
     <h2>Pagamentos de Extras — ${esc(responsavel)}</h2>
     <p style="text-align:center;color:#555;margin-top:-10px;font-size:11pt">${esc(mesLbl(filtroMes))}</p>
     <table>
-      <thead><tr><th>Cliente</th><th>Tipo</th><th style="text-align:right">Valor Total</th><th style="text-align:right">Extra</th><th style="text-align:center">Status</th></tr></thead>
+      <thead><tr><th>Cliente</th><th>Tipo</th><th style="text-align:right">Valor Total</th><th style="text-align:right">Extra</th><th style="text-align:center">Pagamento do Cliente</th></tr></thead>
       <tbody>${itensHtml}</tbody>
     </table>
     <div style="margin-top:20px;text-align:right;font-size:13pt;border-top:2px solid #000;padding-top:10px">
       <strong>Total de Extras: ${fmtMoeda(totalExtra)}</strong>
+      <div style="font-size:11pt;margin-top:6px">${pagoMes ? `Extras pagos em ${fmtDate(pagoMes.dataPagamento)} (${esc(pagoMes.formaPagamento||'')}${pagoMes.banco?' · '+esc(pagoMes.banco):''})` : 'Extras do mês ainda não pagos'}</div>
     </div>`;
   imprimirDocumento(html, `Extras ${responsavel} — ${mesLbl(filtroMes)}`);
 }
 
 async function renderPagamentosExtras() {
   document.getElementById('page-title').textContent = 'Pagamentos de Extras';
-  const [processos, avulsosRaw] = await Promise.all([
+  const [processos, avulsosRaw, extrasPagosMesRaw] = await Promise.all([
     App.getProcessos(),
     App.graph._readFile('extras_avulsos').catch(() => []),
+    App.graph._readFile('extras_pagos_mes').catch(() => []),
   ]);
   const avulsos = Array.isArray(avulsosRaw) ? avulsosRaw : [];
+  const extrasPagosMes = Array.isArray(extrasPagosMesRaw) ? extrasPagosMesRaw : [];
   window._extrasProcessos = processos;
   window._extrasAvulsos = avulsos;
+  window._extrasPagosMes = extrasPagosMes;
 
   // Monta lista de meses disponíveis (de processos com data de Deferido + extras avulsos)
   const mesesSet = new Set();
@@ -6498,6 +6511,7 @@ async function renderPagamentosExtras() {
       return iso && iso.startsWith(filtroMes);
     });
     const meusAvulsos = avulsos.filter(a => a.responsavel === responsavel && (a.data||'').startsWith(filtroMes));
+    const pagoMes = extrasPagosMes.find(x => x.responsavel === responsavel && x.mes === filtroMes);
 
     if (!meusDeferidos.length && !meusAvulsos.length) {
       return `<div class="card-body"><div class="empty-state" style="padding:24px"><i class="bi bi-inbox"></i><p>Nenhum extra neste mês.</p></div></div>`;
@@ -6517,12 +6531,12 @@ async function renderPagamentosExtras() {
         const extra = Math.max(0, valor - taxa) * 0.1;
         const desc = getProcessoDescExtra(p);
         const pendente = getItensPendentesProcesso(p).length > 0;
-        const item = { pago: !!p.ExtraPago, dataPagamento: p.ExtraDataPagamento, formaPagamento: p.ExtraFormaPagamento, banco: p.ExtraBanco };
+        const infoPag = infoPagamentoProcessoTxt(p);
         return `<div style="padding:10px 16px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
           <div style="flex:1;min-width:0">
             <a style="font-size:13px;font-weight:600;cursor:pointer;color:var(--accent)" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.ClienteNome||'—')}</a>
             <div style="font-size:12px;color:#374151;margin-top:2px">${esc(p.TipoProcesso||'—')}${desc ? ` <span style="color:var(--text-muted)">· ${esc(desc)}</span>` : ''}</div>
-            <div style="font-size:11px;color:var(--text-muted)">Valor total: ${fmtMoeda(valor)}</div>
+            <div style="font-size:11px;color:var(--text-muted)">Valor total: ${fmtMoeda(valor)}${infoPag ? ` · ${esc(infoPag)}` : ''}</div>
             ${pendente ? `<div style="margin-top:4px"><span class="badge badge-red" style="font-size:10px"><i class="bi bi-exclamation-triangle-fill me-1"></i>Pagamento do cliente pendente</span></div>` : ''}
             ${p.Restituido ? `<div style="margin-top:4px"><span class="badge" style="background:#9333ea;color:#fff;font-size:11px"><i class="bi bi-arrow-return-left me-1"></i>Restituído</span></div>` : ''}
           </div>
@@ -6531,12 +6545,10 @@ async function renderPagamentosExtras() {
               <div style="font-size:14px;font-weight:700;color:var(--success)">${fmtMoeda(extra)}</div>
               <div style="font-size:10px;color:var(--text-muted)">10% extra</div>
             </div>
-            ${statusPagoExtraHtml('processo', p.id, item, `${p.ClienteNome||''} — ${p.TipoProcesso||''} (${fmtMoeda(extra)})`)}
           </div>
         </div>`;
       }).join('')}
       ${meusAvulsos.map(a => {
-        const item = { pago: !!a.pago, dataPagamento: a.dataPagamento, formaPagamento: a.formaPagamento, banco: a.banco };
         return `<div style="padding:10px 16px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between;gap:12px;background:var(--bg-secondary)">
           <div style="flex:1;min-width:0">
             <a style="font-size:13px;font-weight:600;cursor:pointer;color:var(--accent)" onclick="navigate('clientes/perfil',{id:'${a.clienteId}',tab:'ibama'})">${esc(a.clienteNome||'—')}</a>
@@ -6548,15 +6560,15 @@ async function renderPagamentosExtras() {
               <div style="font-size:14px;font-weight:700;color:var(--success)">${fmtMoeda(a.valor)}</div>
               <div style="font-size:10px;color:var(--text-muted)">renovação ${esc(a.tipo)}</div>
             </div>
-            ${statusPagoExtraHtml('avulso', a.id, item, `${a.clienteNome||''} — Renovação ${a.tipo} (${fmtMoeda(a.valor)})`)}
           </div>
         </div>`;
       }).join('')}
       <div style="padding:12px 16px;background:#f0fdf4;border-top:2px solid var(--success)">
-        <div style="display:flex;justify-content:space-between;align-items:center">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">
           <span style="font-size:13px;font-weight:600;color:#166534">Total de Extras — ${esc(mesLabel(filtroMes))}</span>
           <span style="font-size:16px;font-weight:700;color:var(--success)">${fmtMoeda(totalExtra)}</span>
         </div>
+        ${rodapePagoMesHtml(responsavel, filtroMes, pagoMes)}
       </div>
     </div>`;
   }
