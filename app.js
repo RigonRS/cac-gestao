@@ -283,6 +283,7 @@ async function renderPage() {
       case 'processos/detalhe':    await renderProcessoDetalhe(params.id); break;
       case 'validades':            await renderValidades(); break;
       case 'pagamentos':           await renderPagamentos(); break;
+      case 'recebidos':            await renderRecebidos(); break;
       case 'pagamentos-gru':       await renderPagamentosGRU(); break;
       case 'valores-processos':    await renderValoresProcessos(); break;
       case 'pagamentos-extras':        await renderPagamentosExtras(); break;
@@ -586,6 +587,139 @@ const STATUS_PROCESSO = [
 ];
 const STATUS_FECHADOS = ['Deferido', 'Indeferido', 'Desistência Cliente'];
 const RESPONSAVEIS = ['Andrieli', 'Matheus', 'Priscila', 'Simone'];
+const FORMAS_PAGAMENTO_OPTS = ['Pix', 'Dinheiro', 'Cartão'];
+const BANCOS_PAGAMENTO_OPTS = ['Banco do Brasil', 'Sicredi', 'Cresol'];
+const VALORES_EXTRA_RENOVACAO = { CTF: 15, SIMAF: 75 };
+
+function perguntarTipoRenovacao(titulo, onEscolha) {
+  document.getElementById('modal-tipo-renovacao')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modal-tipo-renovacao';
+  modal.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px">
+      <div style="background:#fff;border-radius:14px;padding:28px;max-width:380px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+        <h3 style="margin:0 0 16px;font-size:16px">${esc(titulo)}</h3>
+        <p style="margin:0 0 16px;font-size:13px;color:var(--text-muted)">Qual o tipo desta renovação?</p>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <button id="btn-tipo-periodica" style="padding:12px;border:1px solid var(--accent);background:#fff;color:var(--accent);border-radius:8px;font-size:14px;font-weight:600;cursor:pointer">Renovação Periódica</button>
+          <button id="btn-tipo-processo" style="padding:12px;border:1px solid var(--accent);background:#fff;color:var(--accent);border-radius:8px;font-size:14px;font-weight:600;cursor:pointer">Renovação Via Processo</button>
+        </div>
+        <div style="text-align:right;margin-top:16px">
+          <button id="btn-tipo-cancelar" class="btn btn-outline btn-sm">Cancelar</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  document.getElementById('btn-tipo-periodica').onclick = () => { modal.remove(); onEscolha('periodica'); };
+  document.getElementById('btn-tipo-processo').onclick  = () => { modal.remove(); onEscolha('processo'); };
+  document.getElementById('btn-tipo-cancelar').onclick  = () => modal.remove();
+}
+
+async function registrarExtraRenovacao(tipo, clienteId, clienteNome, detalhe) {
+  const responsavel = getCurrentUserName();
+  if (!['Andrieli', 'Priscila'].includes(responsavel)) return;
+  try {
+    const lista = await App.graph._readFile('extras_avulsos').catch(() => []);
+    const arr = Array.isArray(lista) ? lista : [];
+    arr.push({
+      id:             Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+      tipo,
+      clienteId,
+      clienteNome:    clienteNome || '',
+      responsavel,
+      valor:          VALORES_EXTRA_RENOVACAO[tipo] || 0,
+      data:           new Date().toISOString().split('T')[0],
+      detalhe:        detalhe || '',
+      pago:           false,
+      dataPagamento:  null,
+      formaPagamento: null,
+      banco:          null,
+    });
+    await App.graph._writeFile('extras_avulsos', arr);
+  } catch(e) { console.error('registrarExtraRenovacao:', e); }
+}
+
+function abrirModalPagarExtra(tipo, id, descricao) {
+  document.getElementById('modal-pagar-extra')?.remove();
+  const hoje = new Date().toISOString().split('T')[0];
+  const modal = document.createElement('div');
+  modal.id = 'modal-pagar-extra';
+  modal.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px">
+      <div style="background:#fff;border-radius:14px;padding:28px;max-width:380px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+        <h3 style="margin:0 0 12px;font-size:16px">Confirmar Pagamento do Extra</h3>
+        ${descricao ? `<p style="margin:0 0 16px;font-size:13px;color:var(--text-muted)">${esc(descricao)}</p>` : ''}
+        <label style="font-size:12px;font-weight:600">Data de Pagamento *</label>
+        <input type="date" id="pagar-extra-data" value="${hoje}" style="width:100%;margin-top:4px;margin-bottom:12px;box-sizing:border-box" />
+        <label style="font-size:12px;font-weight:600">Forma de Pagamento *</label>
+        <select id="pagar-extra-forma" style="width:100%;margin-top:4px;margin-bottom:12px;box-sizing:border-box">
+          <option value="">Selecione...</option>
+          ${FORMAS_PAGAMENTO_OPTS.map(f => `<option value="${f}">${f}</option>`).join('')}
+        </select>
+        <label style="font-size:12px;font-weight:600">Banco</label>
+        <select id="pagar-extra-banco" style="width:100%;margin-top:4px;margin-bottom:20px;box-sizing:border-box">
+          <option value="">Selecione...</option>
+          ${BANCOS_PAGAMENTO_OPTS.map(b => `<option value="${b}">${b}</option>`).join('')}
+        </select>
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+          <button onclick="document.getElementById('modal-pagar-extra').remove()" class="btn btn-outline btn-sm">Cancelar</button>
+          <button onclick="confirmarPagarExtra('${tipo}','${id}')" class="btn btn-primary btn-sm">Confirmar</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
+async function confirmarPagarExtra(tipo, id) {
+  const data  = document.getElementById('pagar-extra-data')?.value;
+  const forma = document.getElementById('pagar-extra-forma')?.value;
+  const banco = document.getElementById('pagar-extra-banco')?.value || '';
+  if (!data || !forma) { toast('Informe a data e a forma de pagamento.', 'warning'); return; }
+  document.getElementById('modal-pagar-extra')?.remove();
+  showLoading();
+  try {
+    if (tipo === 'processo') {
+      await App.graph.updateItem(CONFIG.listas.processos, id, {
+        ExtraPago: true, ExtraDataPagamento: data, ExtraFormaPagamento: forma, ExtraBanco: banco,
+      });
+      App.invalidateCache('processos');
+    } else {
+      const lista = await App.graph._readFile('extras_avulsos').catch(() => []);
+      const arr = Array.isArray(lista) ? lista : [];
+      const idx = arr.findIndex(a => String(a.id) === String(id));
+      if (idx >= 0) {
+        arr[idx] = { ...arr[idx], pago: true, dataPagamento: data, formaPagamento: forma, banco };
+        await App.graph._writeFile('extras_avulsos', arr);
+      }
+    }
+    toast('Pagamento do extra registrado!', 'success');
+    await renderPagamentosExtras();
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function desfazerPagamentoExtra(tipo, id) {
+  if (!isAdminUser()) { toast('Apenas administradores podem desfazer.', 'error'); return; }
+  if (!confirm('Desfazer o registro de pagamento deste extra?')) return;
+  showLoading();
+  try {
+    if (tipo === 'processo') {
+      await App.graph.updateItem(CONFIG.listas.processos, id, {
+        ExtraPago: false, ExtraDataPagamento: null, ExtraFormaPagamento: null, ExtraBanco: null,
+      });
+      App.invalidateCache('processos');
+    } else {
+      const lista = await App.graph._readFile('extras_avulsos').catch(() => []);
+      const arr = Array.isArray(lista) ? lista : [];
+      const idx = arr.findIndex(a => String(a.id) === String(id));
+      if (idx >= 0) {
+        arr[idx] = { ...arr[idx], pago: false, dataPagamento: null, formaPagamento: null, banco: null };
+        await App.graph._writeFile('extras_avulsos', arr);
+      }
+    }
+    toast('Pagamento desfeito.', 'success');
+    await renderPagamentosExtras();
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
 
 // Nível de prioridade dos processos — 1 é a maior prioridade (Restituído é tratado à parte)
 const PRIORIDADE_PROCESSO = {
@@ -1380,10 +1514,11 @@ function renderPerfilIBAMA(c) {
         <div class="form-body" style="padding:0">
           <div class="table-wrapper">
             <table>
-              <thead><tr><th>Data</th><th>Renovado por</th>${admin ? '<th></th>' : ''}</tr></thead>
+              <thead><tr><th>Data</th><th>Tipo</th><th>Renovado por</th>${admin ? '<th></th>' : ''}</tr></thead>
               <tbody>
                 ${hist.map((h, i) => `<tr>
                   <td>${fmtDate(h.data)}</td>
+                  <td>${h.tipo === 'periodica' ? '<span class="badge badge-blue">Periódica</span>' : h.tipo === 'processo' ? '<span class="badge badge-purple">Via Processo</span>' : '—'}</td>
                   <td><span class="badge badge-blue">${esc(h.usuario||'—')}</span></td>
                   ${admin ? `<td><button class="btn btn-ghost btn-sm" onclick="excluirRenovacaoCTF('${c.id}',${i})" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button></td>` : ''}
                 </tr>`).join('')}
@@ -1445,7 +1580,32 @@ function renderPerfilIBAMA(c) {
             </table></div>`
         }
       </div>
-    </div>`;
+    </div>
+    ${(() => {
+      let histSimaf = [];
+      try { histSimaf = JSON.parse(c.HistoricoRenovacoesSIMAF || '[]'); } catch(e) {}
+      if (!Array.isArray(histSimaf) || histSimaf.length === 0) return '';
+      const admin = isAdminUser();
+      return `<div class="form-section">
+        <div class="form-section-title">Histórico de Renovações SIMAF</div>
+        <div class="form-body" style="padding:0">
+          <div class="table-wrapper">
+            <table>
+              <thead><tr><th>Data</th><th>Propriedade</th><th>Tipo</th><th>Renovado por</th>${admin ? '<th></th>' : ''}</tr></thead>
+              <tbody>
+                ${histSimaf.map((h, i) => `<tr>
+                  <td>${fmtDate(h.data)}</td>
+                  <td>${esc(h.propriedade||'—')}</td>
+                  <td>${h.tipo === 'periodica' ? '<span class="badge badge-blue">Periódica</span>' : h.tipo === 'processo' ? '<span class="badge badge-purple">Via Processo</span>' : '—'}</td>
+                  <td><span class="badge badge-blue">${esc(h.usuario||'—')}</span></td>
+                  ${admin ? `<td><button class="btn btn-ghost btn-sm" onclick="excluirRenovacaoSIMAF('${c.id}',${i})" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button></td>` : ''}
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>`;
+    })()}`;
 }
 
 async function imprimirDadosCliente(clienteId) {
@@ -1454,6 +1614,9 @@ async function imprimirDadosCliente(clienteId) {
     const c = await App.graph.getItem(CONFIG.listas.clientes, clienteId);
     const row = (label, value) => value ? `<tr><td style="font-weight:600;width:40%;padding:4px 8px;border:1px solid #ddd">${esc(label)}</td><td style="padding:4px 8px;border:1px solid #ddd">${esc(value)}</td></tr>` : '';
     const html = `
+      <div style="text-align:center;margin-bottom:8px">
+        <img src="logo-pr-autorizacao.png" alt="P&amp;R" style="height:70px;object-fit:contain" onerror="this.style.display='none'" />
+      </div>
       <h2>Dados do Cliente — ${esc(c.Title)}</h2>
       <table style="width:100%;border-collapse:collapse;margin-bottom:16px">
         <tr><td colspan="2" style="background:#333;color:#fff;font-weight:bold;padding:6px 8px;font-size:10pt">Identificação</td></tr>
@@ -1501,7 +1664,7 @@ async function imprimirArmasCliente(clienteId) {
     const html = `
       <h2>Relação de Armas — ${esc(c.Title)}</h2>
       <table>
-        <thead><tr><th>N° Série</th><th>N° SIGMA</th><th>Espécie</th><th>Marca</th><th>Modelo</th><th>Calibre</th><th>Atividade</th></tr></thead>
+        <thead><tr><th>N° Série</th><th>N° SIGMA</th><th>Espécie</th><th>Marca</th><th>Modelo</th><th>Calibre</th><th>Atividade</th><th>Status</th></tr></thead>
         <tbody>
           ${armas.map(a => `<tr>
             <td>${esc(a.NumeroSerie||'—')}</td>
@@ -1511,10 +1674,14 @@ async function imprimirArmasCliente(clienteId) {
             <td>${esc(a.Modelo||'—')}</td>
             <td>${esc(a.Calibre||'—')}</td>
             <td>${esc(a.AtividadeCadastrada||'—')}</td>
+            <td>${esc(a.StatusArma||'Ativa')}</td>
           </tr>`).join('')}
         </tbody>
       </table>
-      <p style="margin-top:16px;font-size:10pt;color:#555">Total: ${armas.length} arma(s)</p>`;
+      <p style="margin-top:16px;font-size:10pt;color:#555">Total: ${armas.length} arma(s)</p>
+      <div style="text-align:center;margin-top:40px">
+        <img src="logo-pr-autorizacao.png" alt="P&amp;R" style="height:70px;object-fit:contain" onerror="this.style.display='none'" />
+      </div>`;
     imprimirDocumento(html, `Armas — ${c.Title}`);
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
@@ -1687,9 +1854,9 @@ function renderPerfilArmas(armas, clienteId, cliente) {
     <div class="card">
       <div class="table-wrapper">
         <table>
-          <thead><tr><th>Status</th><th>N° Série</th><th>N° SIGMA</th><th>Atividade</th><th>Marca/Modelo</th><th>Calibre</th><th>Espécie</th><th>Grupo</th><th style="text-align:center">Dados</th><th>Ações</th></tr></thead>
+          <thead><tr><th>Data Aquisição</th><th>Status</th><th>N° Série</th><th>N° SIGMA</th><th>Atividade</th><th>Marca/Modelo</th><th>Calibre</th><th>Espécie</th><th>Grupo</th><th style="text-align:center">Dados</th><th>Ações</th></tr></thead>
           <tbody>${armas.length === 0
-            ? `<tr><td colspan="10"><div class="empty-state"><i class="bi bi-shield"></i><p>Nenhuma arma cadastrada.</p></div></td></tr>`
+            ? `<tr><td colspan="11"><div class="empty-state"><i class="bi bi-shield"></i><p>Nenhuma arma cadastrada.</p></div></td></tr>`
             : armas.map(a => {
                 const cad = checarCadastroArma(a);
                 const dotColor = cad.completo ? '#22c55e' : '#ef4444';
@@ -1697,6 +1864,7 @@ function renderPerfilArmas(armas, clienteId, cliente) {
                 const _sa = a.StatusArma || 'Ativa';
                 const _saBadge = _sa === 'Furtada' ? '<span class="badge badge-red">Furtada</span>' : _sa === 'Extraviada' ? '<span class="badge badge-orange">Extraviada</span>' : '<span class="badge badge-green">Ativa</span>';
                 return `<tr>
+                  <td style="white-space:nowrap">${a.DataAquisicao ? fmtDate(a.DataAquisicao) : '—'}</td>
                   <td>${_saBadge}</td>
                   <td>${esc(a.NumeroSerie||'—')}</td>
                   <td>${esc(a.NumeroSIGMA||'—')}</td>
@@ -1883,12 +2051,27 @@ function toggleCamposOrgaoCadastro() {
   const el = document.querySelector('[name="OrgaoCadastro"]');
   if (!el) return;
   const v = el.value;
-  const sigma    = document.getElementById('div-sigma');
-  const sinarm   = document.getElementById('div-sinarm');
-  const registro = document.getElementById('div-registro');
-  if (sigma)    sigma.style.display    = v === 'PF - Exército'       ? '' : 'none';
-  if (sinarm)   sinarm.style.display   = v === 'PF - Defesa Pessoal' ? '' : 'none';
-  if (registro) registro.style.display = v === 'PF - Defesa Pessoal' ? '' : 'none';
+  const sigma     = document.getElementById('div-sigma');
+  const sinarm    = document.getElementById('div-sinarm');
+  const registro  = document.getElementById('div-registro');
+  const atividade = document.getElementById('div-atividade');
+  const isDefesaPessoal = v === 'PF - Defesa Pessoal';
+  if (sigma)    sigma.style.display    = v === 'PF - Exército' ? '' : 'none';
+  if (sinarm)   sinarm.style.display   = isDefesaPessoal ? '' : 'none';
+  if (registro) registro.style.display = isDefesaPessoal ? '' : 'none';
+  if (atividade) {
+    atividade.style.display = isDefesaPessoal ? 'none' : '';
+    const atividadeSel = atividade.querySelector('[name="AtividadeCadastrada"]');
+    if (isDefesaPessoal && atividadeSel) {
+      if (!Array.from(atividadeSel.options).some(o => o.value === 'Defesa Pessoal')) {
+        const opt = document.createElement('option');
+        opt.value = 'Defesa Pessoal';
+        opt.textContent = 'Defesa Pessoal';
+        atividadeSel.appendChild(opt);
+      }
+      atividadeSel.value = 'Defesa Pessoal';
+    }
+  }
 }
 
 async function renderArmaForm(clienteId, id = null) {
@@ -1926,6 +2109,7 @@ async function renderArmaForm(clienteId, id = null) {
             <input name="NumeroSerie" value="${val('NumeroSerie')}" required ${!id ? `oninput="verificarSerieDuplicada(this.value,'${id||''}')"` : ''} />
             <div id="aviso-serie-duplicada" style="display:none;color:#dc2626;font-size:12px;margin-top:4px;padding:6px 10px;background:#fee2e2;border-radius:6px;border:1px solid #fca5a5"></div>
           </div>
+          <div><label>Data de Aquisição</label><input type="date" name="DataAquisicao" value="${val('DataAquisicao')}" /></div>
           <div><label>Status da Arma</label>
             <select name="StatusArma">
               <option value="Ativa" ${(a.StatusArma||'Ativa')==='Ativa'?'selected':''}>Ativa</option>
@@ -1943,7 +2127,7 @@ async function renderArmaForm(clienteId, id = null) {
           <div id="div-sigma" style="display:none"><label>Número SIGMA</label><input name="NumeroSIGMA" value="${val('NumeroSIGMA')}" /></div>
           <div id="div-sinarm" style="display:none"><label>Número SINARM</label><input name="NumeroSINARM" value="${val('NumeroSINARM')}" /></div>
           <div id="div-registro" style="display:none"><label>Número de Registro</label><input name="NumeroRegistro" value="${val('NumeroRegistro')}" /></div>
-          <div><label>Atividade Cadastrada *</label>
+          <div id="div-atividade"><label>Atividade Cadastrada *</label>
             <select name="AtividadeCadastrada" required>
               <option value="">Selecione...</option>
               ${atividadeOpts}
@@ -2071,6 +2255,7 @@ async function salvarArma(e, clienteId, id) {
     ClienteId:         clienteId,
     ClienteNome:       cliente.Title,
     NumeroSerie:       fd.get('NumeroSerie'),
+    DataAquisicao:     fd.get('DataAquisicao') || null,
     StatusArma:        fd.get('StatusArma') || 'Ativa',
     OrgaoCadastro:     fd.get('OrgaoCadastro') || null,
     NumeroSIGMA:       fd.get('NumeroSIGMA') || null,
@@ -5284,16 +5469,26 @@ async function confirmarRenovarSIMAF(clienteId, simafIndex) {
   const novaData = document.getElementById('nova-validade-simaf')?.value;
   if (!novaData) { toast('Informe a nova data de vencimento.', 'error'); return; }
   document.getElementById('modal-renovar-simaf')?.remove();
+  perguntarTipoRenovacao('Renovar SIMAF', tipoRenov => _confirmarRenovarSIMAF(clienteId, simafIndex, novaData, tipoRenov));
+}
+
+async function _confirmarRenovarSIMAF(clienteId, simafIndex, novaData, tipoRenov) {
   showLoading();
   try {
     const cliente = await App.graph.getItem(CONFIG.listas.clientes, clienteId);
     const simafList = JSON.parse(cliente.SIMAFs || '[]');
     if (!simafList[simafIndex]) { toast('SIMAF não encontrado.', 'error'); return; }
     simafList[simafIndex].DataValidade = novaData;
-    await App.graph.updateItem(CONFIG.listas.clientes, clienteId, { SIMAFs: JSON.stringify(simafList) });
+    const histSimaf = JSON.parse(cliente.HistoricoRenovacoesSIMAF || '[]');
+    histSimaf.push({ data: new Date().toISOString().split('T')[0], usuario: getCurrentUserName(), tipo: tipoRenov, propriedade: simafList[simafIndex].NomePropriedade || '' });
+    await App.graph.updateItem(CONFIG.listas.clientes, clienteId, {
+      SIMAFs: JSON.stringify(simafList),
+      HistoricoRenovacoesSIMAF: JSON.stringify(histSimaf),
+    });
     App.invalidateCache('clientes');
+    if (tipoRenov === 'periodica') await registrarExtraRenovacao('SIMAF', clienteId, cliente.Title, simafList[simafIndex].NomePropriedade || '');
     toast('Validade do SIMAF atualizada!', 'success');
-    navigate('clientes/perfil', { id: clienteId, tab: 'dados' });
+    navigate('clientes/perfil', { id: clienteId, tab: 'ibama' });
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
@@ -6025,6 +6220,104 @@ async function renderPagamentos() {
 }
 
 // ============================================================
+// RECEBIDOS (extrato de valores pagos)
+// ============================================================
+const NOMES_MESES_EXTENSO = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
+  'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+
+async function renderRecebidos() {
+  document.getElementById('page-title').textContent = 'Recebidos';
+  showLoading();
+  try {
+    const processos = await App.getProcessos();
+    const lancamentos = [];
+    processos.forEach(p => {
+      let pagamentos = {};
+      try { pagamentos = JSON.parse(p.PagamentosJSON || '{}'); } catch(e) {}
+      Object.entries(pagamentos).forEach(([key, item]) => {
+        if (!item || !item.pago) return;
+        let valor = 0, label = '';
+        if (key === 'avista') { valor = Number(p.ValorProcesso) || 0; label = 'À vista'; }
+        else if (key === 'entrada') { valor = Number(p.ValorEntrada) || 0; label = 'Entrada'; }
+        else if (key.startsWith('p')) {
+          const idx = parseInt(key.slice(1), 10);
+          valor = Number(p.ValorParcelas) || 0;
+          label = isNaN(idx) ? 'Parcela' : `Parcela ${idx + 1}`;
+        } else return;
+        lancamentos.push({
+          data:         item.dataPagamento || null,
+          clienteId:    p.ClienteId,
+          clienteNome:  p.ClienteNome,
+          processoId:   p.id,
+          tipoProcesso: p.TipoProcesso,
+          label,
+          valor,
+          forma:        item.formaPagamento || '',
+          banco:        item.banco || '',
+        });
+      });
+    });
+
+    function mesLabel(ym) {
+      if (ym === 'sem-data') return 'Sem data registrada';
+      const [y, m] = ym.split('-');
+      return `${NOMES_MESES_EXTENSO[parseInt(m,10)-1]} ${y}`;
+    }
+
+    const porMes = {};
+    lancamentos.forEach(l => {
+      const ym = l.data ? l.data.substring(0,7) : 'sem-data';
+      if (!porMes[ym]) porMes[ym] = [];
+      porMes[ym].push(l);
+    });
+    const mesesOrdenados = Object.keys(porMes).filter(m => m !== 'sem-data').sort().reverse();
+    if (porMes['sem-data']) mesesOrdenados.push('sem-data');
+
+    const totalGeral = lancamentos.reduce((s, l) => s + l.valor, 0);
+    const el = document.getElementById('page-content');
+
+    if (!lancamentos.length) {
+      el.innerHTML = `<div class="empty-state"><i class="bi bi-inbox" style="font-size:48px"></i><p>Nenhum pagamento recebido registrado ainda.</p></div>`;
+      return;
+    }
+
+    el.innerHTML = `
+      <div class="card" style="margin-bottom:16px;padding:16px">
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">Total Recebido (todos os períodos)</div>
+        <div style="font-size:22px;font-weight:700;color:var(--success)">${fmtMoeda(totalGeral)}</div>
+      </div>
+      ${mesesOrdenados.map(ym => {
+        const lista = porMes[ym].slice().sort((a,b) => (b.data||'').localeCompare(a.data||''));
+        const totalMes = lista.reduce((s,l) => s + l.valor, 0);
+        return `<div class="card" style="margin-bottom:16px">
+          <div class="card-header">
+            <h3><i class="bi bi-journal-text me-2"></i>${esc(mesLabel(ym))}</h3>
+            <span style="font-size:13px;font-weight:700;color:var(--success)">${fmtMoeda(totalMes)}</span>
+          </div>
+          <div class="card-body" style="padding:0">
+            <div class="table-wrapper"><table>
+              <thead><tr><th>Data</th><th>Cliente</th><th>Processo</th><th>Item</th><th>Forma</th><th>Banco</th><th style="text-align:right">Valor</th></tr></thead>
+              <tbody>
+                ${lista.map(l => `<tr>
+                  <td style="white-space:nowrap">${l.data ? fmtDate(l.data) : '—'}</td>
+                  <td><a style="cursor:pointer;color:var(--accent)" onclick="navigate('clientes/perfil',{id:'${l.clienteId}'})">${esc(l.clienteNome||'—')}</a></td>
+                  <td><a style="cursor:pointer;color:var(--accent)" onclick="navigate('processos/detalhe',{id:'${l.processoId}'})">${esc(l.tipoProcesso||'—')}</a></td>
+                  <td>${esc(l.label)}</td>
+                  <td>${esc(l.forma||'—')}</td>
+                  <td>${esc(l.banco||'—')}</td>
+                  <td style="text-align:right;font-weight:700;color:var(--success)">${fmtMoeda(l.valor)}</td>
+                </tr>`).join('')}
+              </tbody>
+            </table></div>
+          </div>
+        </div>`;
+      }).join('')}`;
+  } catch(e) {
+    document.getElementById('page-content').innerHTML = `<div class="empty-state"><i class="bi bi-exclamation-triangle"></i><p>${esc(e.message)}</p></div>`;
+  } finally { hideLoading(); }
+}
+
+// ============================================================
 // PAGAMENTOS DE GRU
 // ============================================================
 async function renderPagamentosGRU() {
@@ -6102,15 +6395,25 @@ function getProcessoDescExtra(p) {
   } catch(e) { return ''; }
 }
 
+function statusPagoExtraHtml(tipo, id, item, descricao) {
+  if (item.pago) {
+    return `<div style="text-align:right">
+      <span class="badge badge-green" style="font-size:11px"><i class="bi bi-check-circle-fill me-1"></i>Pago${item.dataPagamento ? ' ' + fmtDate(item.dataPagamento) : ''}</span>
+      <div style="font-size:10px;color:var(--text-muted);margin-top:2px">${esc(item.formaPagamento||'')}${item.banco ? ' · ' + esc(item.banco) : ''}</div>
+      ${isAdminUser() ? `<button class="btn btn-ghost btn-sm" style="padding:0 4px;font-size:10px" onclick="desfazerPagamentoExtra('${tipo}','${id}')" title="Desfazer"><i class="bi bi-arrow-counterclockwise"></i></button>` : ''}
+    </div>`;
+  }
+  return `<button class="btn btn-outline btn-sm" style="font-size:11px" data-tipo="${tipo}" data-id="${id}" data-desc="${esc(descricao||'')}" onclick="abrirModalPagarExtra(this.dataset.tipo,this.dataset.id,this.dataset.desc)">Marcar como Pago</button>`;
+}
+
 function imprimirExtras(responsavel) {
   const processos = window._extrasProcessos || [];
+  const avulsos = window._extrasAvulsos || [];
   const filtroMes = window._extrasFilterMes || '';
-  const NOMES_MESES = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
-                       'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
   function mesLbl(ym) {
     if (!ym) return '—';
     const [y, m] = ym.split('-');
-    return `${NOMES_MESES[parseInt(m)-1]} ${y}`;
+    return `${NOMES_MESES_EXTENSO[parseInt(m)-1]} ${y}`;
   }
 
   const meusDeferidos = processos.filter(p => {
@@ -6118,11 +6421,12 @@ function imprimirExtras(responsavel) {
     const iso = getDataDeferido(p);
     return iso && iso.startsWith(filtroMes);
   });
+  const meusAvulsos = avulsos.filter(a => a.responsavel === responsavel && (a.data||'').startsWith(filtroMes));
 
   const totalExtra = meusDeferidos.reduce((s, p) => {
     const taxa = TAXAS_PROCESSO[p.TipoProcesso] || 0;
     return s + Math.max(0, (Number(p.ValorProcesso)||0) - taxa) * 0.1;
-  }, 0);
+  }, 0) + meusAvulsos.reduce((s, a) => s + (Number(a.valor)||0), 0);
 
   const itensHtml = meusDeferidos.map(p => {
     const valor = Number(p.ValorProcesso) || 0;
@@ -6134,15 +6438,21 @@ function imprimirExtras(responsavel) {
       <td>${esc(p.TipoProcesso||'—')}${desc ? ` · ${esc(desc)}` : ''}</td>
       <td style="text-align:right">${fmtMoeda(valor)}</td>
       <td style="text-align:right;font-weight:700;color:#166534">${fmtMoeda(extra)}</td>
-      <td style="text-align:center">${p.Restituido ? 'Restituído' : ''}</td>
+      <td style="text-align:center">${p.ExtraPago ? 'Pago' : 'Pendente'}${p.Restituido ? ' · Restituído' : ''}</td>
     </tr>`;
-  }).join('');
+  }).join('') + meusAvulsos.map(a => `<tr>
+      <td>${esc(a.clienteNome||'—')}</td>
+      <td>Renovação ${esc(a.tipo)} (Periódica)${a.detalhe ? ` · ${esc(a.detalhe)}` : ''}</td>
+      <td style="text-align:right">—</td>
+      <td style="text-align:right;font-weight:700;color:#166534">${fmtMoeda(a.valor)}</td>
+      <td style="text-align:center">${a.pago ? 'Pago' : 'Pendente'}</td>
+    </tr>`).join('');
 
   const html = `
     <h2>Pagamentos de Extras — ${esc(responsavel)}</h2>
     <p style="text-align:center;color:#555;margin-top:-10px;font-size:11pt">${esc(mesLbl(filtroMes))}</p>
     <table>
-      <thead><tr><th>Cliente</th><th>Tipo de Processo</th><th style="text-align:right">Valor Total</th><th style="text-align:right">Extra (10%)</th><th style="text-align:center">Obs</th></tr></thead>
+      <thead><tr><th>Cliente</th><th>Tipo</th><th style="text-align:right">Valor Total</th><th style="text-align:right">Extra</th><th style="text-align:center">Status</th></tr></thead>
       <tbody>${itensHtml}</tbody>
     </table>
     <div style="margin-top:20px;text-align:right;font-size:13pt;border-top:2px solid #000;padding-top:10px">
@@ -6153,18 +6463,21 @@ function imprimirExtras(responsavel) {
 
 async function renderPagamentosExtras() {
   document.getElementById('page-title').textContent = 'Pagamentos de Extras';
-  const processos = await App.getProcessos();
+  const [processos, avulsosRaw] = await Promise.all([
+    App.getProcessos(),
+    App.graph._readFile('extras_avulsos').catch(() => []),
+  ]);
+  const avulsos = Array.isArray(avulsosRaw) ? avulsosRaw : [];
   window._extrasProcessos = processos;
+  window._extrasAvulsos = avulsos;
 
-  const NOMES_MESES = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
-                       'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
-
-  // Monta lista de meses disponíveis (de processos com data de Deferido)
+  // Monta lista de meses disponíveis (de processos com data de Deferido + extras avulsos)
   const mesesSet = new Set();
   processos.forEach(p => {
     const iso = getDataDeferido(p);
     if (iso) mesesSet.add(iso.substring(0, 7));
   });
+  avulsos.forEach(a => { if (a.data) mesesSet.add(a.data.substring(0, 7)); });
   const mesesList = [...mesesSet].sort().reverse();
 
   const hoje = new Date();
@@ -6175,24 +6488,27 @@ async function renderPagamentosExtras() {
   function mesLabel(ym) {
     if (!ym) return '—';
     const [y, m] = ym.split('-');
-    return `${NOMES_MESES[parseInt(m)-1]} ${y}`;
+    return `${NOMES_MESES_EXTENSO[parseInt(m)-1]} ${y}`;
   }
 
-  function renderPainelExtra(responsavel, corHeader, corIcon) {
+  function renderPainelExtra(responsavel) {
     const meusDeferidos = processos.filter(p => {
       if (p.Responsavel !== responsavel) return false;
       const iso = getDataDeferido(p);
       return iso && iso.startsWith(filtroMes);
     });
+    const meusAvulsos = avulsos.filter(a => a.responsavel === responsavel && (a.data||'').startsWith(filtroMes));
 
-    if (!meusDeferidos.length) {
-      return `<div class="card-body"><div class="empty-state" style="padding:24px"><i class="bi bi-inbox"></i><p>Nenhum processo deferido neste mês.</p></div></div>`;
+    if (!meusDeferidos.length && !meusAvulsos.length) {
+      return `<div class="card-body"><div class="empty-state" style="padding:24px"><i class="bi bi-inbox"></i><p>Nenhum extra neste mês.</p></div></div>`;
     }
 
-    const totalExtra = meusDeferidos.reduce((s, p) => {
+    const totalProcessos = meusDeferidos.reduce((s, p) => {
       const taxa = TAXAS_PROCESSO[p.TipoProcesso] || 0;
       return s + Math.max(0, (Number(p.ValorProcesso)||0) - taxa) * 0.1;
     }, 0);
+    const totalAvulsos = meusAvulsos.reduce((s, a) => s + (Number(a.valor)||0), 0);
+    const totalExtra = totalProcessos + totalAvulsos;
 
     return `<div class="card-body" style="padding:0">
       ${meusDeferidos.map(p => {
@@ -6200,37 +6516,46 @@ async function renderPagamentosExtras() {
         const taxa = TAXAS_PROCESSO[p.TipoProcesso] || 0;
         const extra = Math.max(0, valor - taxa) * 0.1;
         const desc = getProcessoDescExtra(p);
+        const pendente = getItensPendentesProcesso(p).length > 0;
+        const item = { pago: !!p.ExtraPago, dataPagamento: p.ExtraDataPagamento, formaPagamento: p.ExtraFormaPagamento, banco: p.ExtraBanco };
         return `<div style="padding:10px 16px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
           <div style="flex:1;min-width:0">
             <a style="font-size:13px;font-weight:600;cursor:pointer;color:var(--accent)" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.ClienteNome||'—')}</a>
             <div style="font-size:12px;color:#374151;margin-top:2px">${esc(p.TipoProcesso||'—')}${desc ? ` <span style="color:var(--text-muted)">· ${esc(desc)}</span>` : ''}</div>
             <div style="font-size:11px;color:var(--text-muted)">Valor total: ${fmtMoeda(valor)}</div>
+            ${pendente ? `<div style="margin-top:4px"><span class="badge badge-red" style="font-size:10px"><i class="bi bi-exclamation-triangle-fill me-1"></i>Pagamento do cliente pendente</span></div>` : ''}
+            ${p.Restituido ? `<div style="margin-top:4px"><span class="badge" style="background:#9333ea;color:#fff;font-size:11px"><i class="bi bi-arrow-return-left me-1"></i>Restituído</span></div>` : ''}
           </div>
-          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0">
-            ${p.Restituido ? `<span class="badge" style="background:#9333ea;color:#fff;font-size:11px"><i class="bi bi-arrow-return-left me-1"></i>Restituído</span>` : ''}
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0">
             <div style="text-align:right">
               <div style="font-size:14px;font-weight:700;color:var(--success)">${fmtMoeda(extra)}</div>
               <div style="font-size:10px;color:var(--text-muted)">10% extra</div>
             </div>
+            ${statusPagoExtraHtml('processo', p.id, item, `${p.ClienteNome||''} — ${p.TipoProcesso||''} (${fmtMoeda(extra)})`)}
+          </div>
+        </div>`;
+      }).join('')}
+      ${meusAvulsos.map(a => {
+        const item = { pago: !!a.pago, dataPagamento: a.dataPagamento, formaPagamento: a.formaPagamento, banco: a.banco };
+        return `<div style="padding:10px 16px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between;gap:12px;background:var(--bg-secondary)">
+          <div style="flex:1;min-width:0">
+            <a style="font-size:13px;font-weight:600;cursor:pointer;color:var(--accent)" onclick="navigate('clientes/perfil',{id:'${a.clienteId}',tab:'ibama'})">${esc(a.clienteNome||'—')}</a>
+            <div style="font-size:12px;color:#374151;margin-top:2px">Renovação ${esc(a.tipo)} (Periódica)${a.detalhe ? ` <span style="color:var(--text-muted)">· ${esc(a.detalhe)}</span>` : ''}</div>
+            <div style="font-size:11px;color:var(--text-muted)">${fmtDate(a.data)}</div>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0">
+            <div style="text-align:right">
+              <div style="font-size:14px;font-weight:700;color:var(--success)">${fmtMoeda(a.valor)}</div>
+              <div style="font-size:10px;color:var(--text-muted)">renovação ${esc(a.tipo)}</div>
+            </div>
+            ${statusPagoExtraHtml('avulso', a.id, item, `${a.clienteNome||''} — Renovação ${a.tipo} (${fmtMoeda(a.valor)})`)}
           </div>
         </div>`;
       }).join('')}
       <div style="padding:12px 16px;background:#f0fdf4;border-top:2px solid var(--success)">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;align-items:center">
           <span style="font-size:13px;font-weight:600;color:#166534">Total de Extras — ${esc(mesLabel(filtroMes))}</span>
           <span style="font-size:16px;font-weight:700;color:var(--success)">${fmtMoeda(totalExtra)}</span>
-        </div>
-        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-          <label class="checkbox-item" style="font-size:13px;font-weight:600;margin:0">
-            <input type="checkbox" id="chk-extra-pago-${responsavel}" ${window['_extraPago_'+responsavel+'_'+filtroMes] ? 'checked' : ''}
-              onchange="onExtraPagoChange('${responsavel}',this.checked)" /> Pago
-          </label>
-          <div id="extra-pago-data-wrap-${responsavel}" style="display:${window['_extraPago_'+responsavel+'_'+filtroMes] ? '' : 'none'}">
-            <input type="date" id="extra-pago-data-${responsavel}"
-              value="${window['_extraPagoData_'+responsavel+'_'+filtroMes] || ''}"
-              onchange="onExtraPagoDataChange('${responsavel}',this.value)"
-              style="font-size:12px;padding:4px 8px" />
-          </div>
         </div>
       </div>
     </div>`;
@@ -6266,22 +6591,6 @@ async function renderPagamentosExtras() {
         ${renderPainelExtra('Priscila')}
       </div>
     </div>`;
-}
-
-function onExtraPagoChange(responsavel, checked) {
-  const filtroMes = window._extrasFilterMes || '';
-  window[`_extraPago_${responsavel}_${filtroMes}`] = checked;
-  const wrap = document.getElementById(`extra-pago-data-wrap-${responsavel}`);
-  if (wrap) wrap.style.display = checked ? '' : 'none';
-  if (checked) {
-    const inp = document.getElementById(`extra-pago-data-${responsavel}`);
-    if (inp && !inp.value) inp.value = new Date().toISOString().split('T')[0];
-  }
-}
-
-function onExtraPagoDataChange(responsavel, value) {
-  const filtroMes = window._extrasFilterMes || '';
-  window[`_extraPagoData_${responsavel}_${filtroMes}`] = value;
 }
 
 // ============================================================
@@ -6891,7 +7200,10 @@ function onCatAtiradorChange(checked) {
 }
 
 async function renovarCTF(clienteId) {
-  if (!confirm('Confirmar renovação do CTF por +3 meses a partir de hoje?')) return;
+  perguntarTipoRenovacao('Renovar CTF (+3 meses)', tipoRenov => _confirmarRenovarCTF(clienteId, tipoRenov));
+}
+
+async function _confirmarRenovarCTF(clienteId, tipoRenov) {
   showLoading();
   try {
     const c = await App.graph.getItem(CONFIG.listas.clientes, clienteId);
@@ -6900,12 +7212,13 @@ async function renovarCTF(clienteId) {
     let hist = [];
     try { hist = JSON.parse(c.HistoricoRenovacoesCTF || '[]'); } catch(e) {}
     if (!Array.isArray(hist)) hist = [];
-    hist.push({ data: hoje, usuario: getCurrentUserName() });
+    hist.push({ data: hoje, usuario: getCurrentUserName(), tipo: tipoRenov });
     await App.graph.updateItem(CONFIG.listas.clientes, clienteId, {
       DataValidadeCTF: novaValidade,
       HistoricoRenovacoesCTF: JSON.stringify(hist),
     });
     App.invalidateCache('clientes');
+    if (tipoRenov === 'periodica') await registrarExtraRenovacao('CTF', clienteId, c.Title, '');
     toast('CTF renovado! Nova validade: ' + fmtDate(novaValidade), 'success');
     await renderClientePerfil(clienteId, 'ibama');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
@@ -6923,6 +7236,25 @@ async function excluirRenovacaoCTF(clienteId, idx) {
     hist.splice(idx, 1);
     await App.graph.updateItem(CONFIG.listas.clientes, clienteId, {
       HistoricoRenovacoesCTF: JSON.stringify(hist),
+    });
+    App.invalidateCache('clientes');
+    toast('Registro excluído.', 'success');
+    await renderClientePerfil(clienteId, 'ibama');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function excluirRenovacaoSIMAF(clienteId, idx) {
+  if (!isAdminUser()) { toast('Apenas administradores podem excluir registros.', 'error'); return; }
+  if (!confirm('Excluir este registro de renovação do SIMAF?')) return;
+  showLoading();
+  try {
+    const c = await App.graph.getItem(CONFIG.listas.clientes, clienteId);
+    let hist = [];
+    try { hist = JSON.parse(c.HistoricoRenovacoesSIMAF || '[]'); } catch(e) {}
+    if (!Array.isArray(hist)) hist = [];
+    hist.splice(idx, 1);
+    await App.graph.updateItem(CONFIG.listas.clientes, clienteId, {
+      HistoricoRenovacoesSIMAF: JSON.stringify(hist),
     });
     App.invalidateCache('clientes');
     toast('Registro excluído.', 'success');
@@ -6979,24 +7311,35 @@ function toggleSIMAFForm(clienteId) {
 async function salvarSIMAF(e, clienteId) {
   e.preventDefault();
   const fd = new FormData(e.target);
+  const novoSimaf = {
+    DataValidade:         fd.get('DataValidade') || null,
+    NomePropriedade:      fd.get('NomePropriedade') || '',
+    CARPropriedade:       fd.get('CARPropriedade') || '',
+    NomeProprietario:     fd.get('NomeProprietario') || '',
+    CPFProprietario:      fd.get('CPFProprietario') || '',
+    TelefoneProprietario: fd.get('TelefoneProprietario') || '',
+    CidadeSimaf:          fd.get('CidadeSimaf') || '',
+    UFSimaf:              (fd.get('UFSimaf') || '').toUpperCase(),
+  };
+  perguntarTipoRenovacao('Adicionar SIMAF', tipoRenov => _salvarSIMAF(clienteId, novoSimaf, tipoRenov));
+}
+
+async function _salvarSIMAF(clienteId, novoSimaf, tipoRenov) {
   showLoading();
   try {
     const cliente = await App.graph.getItem(CONFIG.listas.clientes, clienteId);
     const simafList = JSON.parse(cliente.SIMAFs || '[]');
-    simafList.push({
-      DataValidade:         fd.get('DataValidade') || null,
-      NomePropriedade:      fd.get('NomePropriedade') || '',
-      CARPropriedade:       fd.get('CARPropriedade') || '',
-      NomeProprietario:     fd.get('NomeProprietario') || '',
-      CPFProprietario:      fd.get('CPFProprietario') || '',
-      TelefoneProprietario: fd.get('TelefoneProprietario') || '',
-      CidadeSimaf:          fd.get('CidadeSimaf') || '',
-      UFSimaf:              (fd.get('UFSimaf') || '').toUpperCase(),
+    simafList.push(novoSimaf);
+    const histSimaf = JSON.parse(cliente.HistoricoRenovacoesSIMAF || '[]');
+    histSimaf.push({ data: new Date().toISOString().split('T')[0], usuario: getCurrentUserName(), tipo: tipoRenov, propriedade: novoSimaf.NomePropriedade || '' });
+    await App.graph.updateItem(CONFIG.listas.clientes, clienteId, {
+      SIMAFs: JSON.stringify(simafList),
+      HistoricoRenovacoesSIMAF: JSON.stringify(histSimaf),
     });
-    await App.graph.updateItem(CONFIG.listas.clientes, clienteId, { SIMAFs: JSON.stringify(simafList) });
     App.invalidateCache('clientes');
+    if (tipoRenov === 'periodica') await registrarExtraRenovacao('SIMAF', clienteId, cliente.Title, novoSimaf.NomePropriedade || '');
     toast('SIMAF adicionado!', 'success');
-    registrarMovimentacao('Novo SIMAF', `${fd.get('NomePropriedade')||''} — ${cliente.Title||''}`);
+    registrarMovimentacao('Novo SIMAF', `${novoSimaf.NomePropriedade||''} — ${cliente.Title||''}`);
     await renderClientePerfil(clienteId, 'ibama');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
