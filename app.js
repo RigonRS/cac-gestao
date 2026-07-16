@@ -7838,6 +7838,7 @@ async function renderOrcamentoForm(clienteId = null, orcId = null) {
             ${sorted.map(c => `<option value="${esc(c.id)}|${esc(c.Title)}|${esc(c.Celular||'')}" ${String(c.id)===String(clienteId)?'selected':''} ${isClienteInativo(c)?'disabled':''}>${esc(c.Title)}${isClienteInativo(c)?' (Inativo)':''}</option>`).join('')}
           </select>
         </div>
+        <div id="orc-endereco-panel" style="display:none;margin-bottom:16px"></div>
         <div id="orc-armas-panel" style="display:none;margin-bottom:16px"></div>
         <div class="card" style="margin-bottom:16px">
           <div class="card-header"><h3>Serviços</h3></div>
@@ -7854,7 +7855,9 @@ async function renderOrcamentoForm(clienteId = null, orcId = null) {
                     <select id="orc-qty-${i}" style="width:65px" onchange="atualizarOrcamento()">
                       ${[...Array(20)].map((_,n) => `<option value="${n+1}">${n+1}x</option>`).join('')}
                     </select>
-                    <span style="font-size:12px;color:var(--text-muted)">${fmtMoeda(valor)} / un.</span>
+                    <span style="font-size:12px;color:var(--text-muted)">R$</span>
+                    <input type="number" id="orc-valor-${i}" value="${valor}" step="0.01" min="0" title="Valor unitário (padrão: ${fmtMoeda(valor)}) — alterar aqui vale só para este orçamento" style="width:90px;font-size:12px" oninput="atualizarOrcamento()" />
+                    <span style="font-size:11px;color:var(--text-muted)">/ un.</span>
                   </div>
                   <span id="orc-sub-${i}" style="font-weight:600;font-size:13px;min-width:90px;text-align:right;color:var(--accent)"></span>
                 </div>
@@ -7911,6 +7914,10 @@ async function renderOrcamentoForm(clienteId = null, orcId = null) {
       if (chk) { chk.checked = true; onOrcItemChange(idx); }
       const qty = document.getElementById(`orc-qty-${idx}`);
       if (qty) { qty.value = item.qtd; atualizarOrcamento(); }
+      if (item.valor != null) {
+        const valorEl = document.getElementById(`orc-valor-${idx}`);
+        if (valorEl) valorEl.value = item.valor;
+      }
       if (item.obs) {
         const obs = document.getElementById(`orc-obs-${idx}`);
         if (obs) obs.value = item.obs;
@@ -7942,7 +7949,29 @@ function onOrcItemChange(i) {
 
 async function onOrcClienteChange(value) {
   const clienteId = (value || '').split('|')[0];
+  const encPanel = document.getElementById('orc-endereco-panel');
   const panel = document.getElementById('orc-armas-panel');
+  if (encPanel) {
+    if (!clienteId) { encPanel.style.display = 'none'; encPanel.innerHTML = ''; }
+    else {
+      try {
+        const clientesList = await App.getClientes();
+        const cliente = clientesList.find(c => String(c.id) === String(clienteId));
+        const end1 = cliente ? [cliente.Endereco1, cliente.Numero1 ? 'n° '+cliente.Numero1 : '', cliente.Complemento1, cliente.Bairro1, cliente.Cidade1, cliente.UF1Endereco].filter(Boolean).join(', ') : '';
+        const end2 = cliente ? [cliente.Endereco2, cliente.Numero2 ? 'n° '+cliente.Numero2 : '', cliente.Complemento2, cliente.Bairro2, cliente.Cidade2, cliente.UF2Endereco].filter(Boolean).join(', ') : '';
+        if (end1 || end2) {
+          encPanel.style.display = '';
+          encPanel.innerHTML = `<div class="card">
+            <div class="card-header"><h3><i class="bi bi-geo-alt-fill me-2"></i>Endereços do Cliente</h3></div>
+            <div class="card-body">
+              ${end1 ? `<div style="margin-bottom:${end2?'6px':'0'};font-size:13px"><strong>1° Endereço:</strong> ${esc(end1)}${cliente.CEP1?' · CEP '+esc(cliente.CEP1):''}</div>` : ''}
+              ${end2 ? `<div style="font-size:13px"><strong>2° Endereço:</strong> ${esc(end2)}${cliente.CEP2?' · CEP '+esc(cliente.CEP2):''}</div>` : ''}
+            </div>
+          </div>`;
+        } else { encPanel.style.display = 'none'; encPanel.innerHTML = ''; }
+      } catch(e) { encPanel.style.display = 'none'; encPanel.innerHTML = ''; }
+    }
+  }
   if (!panel) return;
   if (!clienteId) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
   try {
@@ -7982,7 +8011,7 @@ function atualizarOrcamento() {
     const sub = document.getElementById(`orc-sub-${i}`);
     if (!chk?.checked) return;
     const qtd = parseInt(document.getElementById(`orc-qty-${i}`)?.value || '1');
-    const valor = VALORES_PROCESSO[tipo] || 0;
+    const valor = parseFloat(document.getElementById(`orc-valor-${i}`)?.value) || 0;
     const subtotal = qtd * valor;
     total += subtotal;
     if (sub) sub.textContent = fmtMoeda(subtotal);
@@ -8048,7 +8077,7 @@ async function salvarOrcamento() {
     const chkEl = document.getElementById(`orc-chk-${i}`);
     if (!chkEl?.checked) return;
     const qtd = parseInt(document.getElementById(`orc-qty-${i}`)?.value || '1');
-    const valor = VALORES_PROCESSO[tipo] || 0;
+    const valor = parseFloat(document.getElementById(`orc-valor-${i}`)?.value) || 0;
     const subtotal = qtd * valor;
     total += subtotal;
     const obs = (document.getElementById(`orc-obs-${i}`)?.value || '').trim();
@@ -8395,7 +8424,8 @@ async function renderControleDemandas() {
       const progItems = (d.itens||[]).map(item => {
         const criados = processos.filter(p => p.demandaId && String(p.demandaId) === String(d.id) && p.TipoProcesso === item.tipo).length;
         const pct = item.qtd > 0 ? Math.min(100, Math.round(criados/item.qtd*100)) : 100;
-        return `<div style="font-size:12px;margin-bottom:2px">${item.qtd>1?item.qtd+'× ':''}${esc(item.tipo)} <span style="color:${criados>=item.qtd?'var(--success)':'var(--text-muted)'}">(${criados}/${item.qtd})</span></div>`;
+        const obsBtn = item.obs ? `<button class="btn btn-ghost btn-sm" style="padding:0 2px" title="${esc(item.obs)}"><i class="bi bi-eye" style="color:var(--accent)"></i></button>` : '';
+        return `<div style="font-size:12px;margin-bottom:2px;display:flex;align-items:center;gap:2px">${item.qtd>1?item.qtd+'× ':''}${esc(item.tipo)} <span style="color:${criados>=item.qtd?'var(--success)':'var(--text-muted)'}">(${criados}/${item.qtd})</span>${obsBtn}</div>`;
       }).join('');
 
       const delegarOpts = d.status !== 'Concluída'
@@ -8488,9 +8518,10 @@ async function renderMinhasDemandas() {
       const itensHtml = (d.itens||[]).map(item => {
         const criados = processos.filter(p => p.demandaId && String(p.demandaId) === String(d.id) && p.TipoProcesso === item.tipo).length;
         const concluido = criados >= item.qtd;
+        const obsBtn = item.obs ? `<button class="btn btn-ghost btn-sm" style="padding:0 2px" title="${esc(item.obs)}"><i class="bi bi-eye" style="color:var(--accent)"></i></button>` : '';
         return `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);gap:12px;flex-wrap:wrap">
           <div>
-            <div style="font-weight:600;font-size:13px">${esc(item.tipo)}</div>
+            <div style="font-weight:600;font-size:13px;display:flex;align-items:center;gap:2px">${esc(item.tipo)}${obsBtn}</div>
             <div style="font-size:12px;color:var(--text-muted);margin-top:2px">
               ${criados} de ${item.qtd} processo(s) criado(s)
               ${concluido ? '<span class="badge badge-green" style="margin-left:6px">Concluído</span>' : ''}
