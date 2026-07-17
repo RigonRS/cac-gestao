@@ -16,6 +16,7 @@ const TIPOS_PROCESSO = [
   'Concessão/Renovação de CR',
   'Guia de Tráfego',
   'Alteração de Endereço',
+  'Mudança de endereço SINARM PF',
   'Inclusão de Atividade',
   'Exclusão de Atividade',
   'Mudança de Acervo',

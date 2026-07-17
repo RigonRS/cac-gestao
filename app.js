@@ -291,6 +291,7 @@ async function renderPage() {
       case 'registro-movimentacoes':   await renderRegistroMovimentacoes(); break;
       case 'acessos-portal':           await renderRegistroAcessosPortal(); break;
       case 'orcamentos':           await renderOrcamentos(); break;
+      case 'configuracoes':        await renderConfiguracoes(); break;
       case 'orcamento/novo':       await renderOrcamentoForm(params.clienteId); break;
       case 'orcamento/editar':     await renderOrcamentoForm(params.clienteId, params.orcId); break;
       default:                     await renderDashboard();
@@ -589,6 +590,35 @@ const STATUS_FECHADOS = ['Deferido', 'Indeferido', 'Desistência Cliente'];
 const RESPONSAVEIS = ['Andrieli', 'Matheus', 'Priscila', 'Simone'];
 const FORMAS_PAGAMENTO_OPTS = ['Pix', 'Dinheiro', 'Cartão'];
 const BANCOS_PAGAMENTO_OPTS = ['Banco do Brasil', 'Sicredi', 'Cresol'];
+
+// ============================================================
+// MENSAGENS AUTOMÁTICAS DE WHATSAPP (editáveis em Configurações)
+// ============================================================
+const MENSAGENS_WHATSAPP_CONFIG = [
+  { chave: 'statusProntoAnalise', label: 'Status: Pronto para Análise', placeholders: ['nome','tipo','status'],
+    padrao: 'Olá, {nome}! Informamos que seu processo de *{tipo}* está com o status de: *{status}*. Isso significa que o processo está na fila para ser analisado. Para qualquer dúvida, favor entrar em contato conosco, atenciosamente *P&R Despachante Belico*.' },
+  { chave: 'statusEmAnalise', label: 'Status: Em Análise', placeholders: ['nome','tipo','status'],
+    padrao: 'Olá, {nome}! Informamos que seu processo de *{tipo}* está com o status de: *{status}*. Isso significa que o processo está sendo analisado. Para qualquer dúvida, favor entrar em contato conosco, atenciosamente *P&R Despachante Belico*.' },
+  { chave: 'statusAguardandoProtocolo', label: 'Status: Aguardando Protocolo (email)', placeholders: ['nome','tipo','status'],
+    padrao: 'Olá, {nome}! Informamos que seu processo de *{tipo}* está com o status de: *{status}*. Isso significa que o processo foi enviado por email e está aguardando retorno da PF com o número de protocolo. Para qualquer dúvida, favor entrar em contato conosco, atenciosamente *P&R Despachante Belico*.' },
+  { chave: 'statusDeferido', label: 'Status: Deferido', placeholders: ['nome','tipo'],
+    padrao: 'Olá, {nome}! Informamos que seu processo de *{tipo}* foi Deferido. Isso significa que o processo está pronto, e se houver emissão de documentação, favor informar se deseja retirá-la de forma física em nosso escritório ou se deseja ter acesso de forma digital em nosso portal exclusivo para os clientes. Para qualquer dúvida, favor entrar em contato conosco, atenciosamente *P&R Despachante Belico*.' },
+  { chave: 'statusGenerico', label: 'Status: Outros (genérico)', placeholders: ['nome','tipo','protocolo','status','escritorio'],
+    padrao: 'Olá, {nome}! Informamos que seu processo de *{tipo}* (Protocolo: {protocolo}) teve seu status atualizado para: *{status}*.\n\nEm caso de dúvidas, entre em contato conosco.\n\n{escritorio}' },
+  { chave: 'solicitarDeclaracao', label: 'Solicitar Declaração ao Clube', placeholders: ['declaracao','nome','cpf'],
+    padrao: 'Solicito por gentileza a Declaração de {declaracao} do {nome}, {cpf}' },
+  { chave: 'documentoVencendo', label: 'Aviso de Documento/Validade Vencendo', placeholders: ['cliente','documento','prazo'],
+    padrao: 'Olá {cliente}, Verificamos no sistema que o seu {documento} está vencendo em {prazo}, deseja iniciar o processo de renovação do mesmo?' },
+  { chave: 'pagamentoPendente', label: 'Aviso de Pagamento em Aberto', placeholders: ['cliente','valor'],
+    padrao: 'Olá {cliente}, verificamos em nosso sistema que constam valores em aberto referentes aos serviços prestados no valor de {valor}.' },
+];
+const MENSAGENS_WHATSAPP = {};
+MENSAGENS_WHATSAPP_CONFIG.forEach(m => { MENSAGENS_WHATSAPP[m.chave] = m.padrao; });
+
+function msgWhatsApp(chave, vars) {
+  const template = MENSAGENS_WHATSAPP[chave] || '';
+  return template.replace(/\{(\w+)\}/g, (m, k) => (vars && vars[k] != null ? String(vars[k]) : ''));
+}
 const VALORES_EXTRA_RENOVACAO = { CTF: 15, SIMAF: 75 };
 
 function perguntarTipoRenovacao(titulo, onEscolha) {
@@ -739,6 +769,7 @@ const VALORES_PROCESSO = {
   'Concessão/Renovação de CR':                 1843.00,
   'Guia de Tráfego':                           176.00,
   'Alteração de Endereço':                     450.00,
+  'Mudança de endereço SINARM PF':             176.00,
   'Inclusão de Atividade':                     567.00,
   'Exclusão de Atividade':                     567.00,
   'Mudança de Acervo':                         644.00,
@@ -762,6 +793,7 @@ const TAXAS_PROCESSO = {
   'Concessão/Renovação de CR':                  100,
   'Guia de Tráfego':                             20,
   'Alteração de Endereço':                       50,
+  'Mudança de endereço SINARM PF':                0,
   'Inclusão de Atividade':                       50,
   'Exclusão de Atividade':                       50,
   'Mudança de Acervo':                           88,
@@ -2497,6 +2529,8 @@ async function renderProcessosList() {
   window._selectedProcessos = new Set();
   window._processosSortField = window._processosSortField || 'DataAbertura';
   window._processosSortDir   = window._processosSortDir   || 'desc';
+  window._processosTab = window._processosTab || 'aprotocolar';
+  window._processos_filtro = processos;
   const el = document.getElementById('page-content');
 
   function sortTh(field, label) {
@@ -2506,10 +2540,25 @@ async function renderProcessosList() {
     return `<th style="cursor:pointer;user-select:none;white-space:nowrap" onclick="sortProcessos('${field}')">${label}<span style="font-size:10px;color:${active?'var(--accent)':'#9ca3af'}">${icon}</span></th>`;
   }
 
+  const contagensTab = {
+    aprotocolar:  processos.filter(p => STATUS_A_PROTOCOLAR.includes(p.Status)).length,
+    protocolados: processos.filter(p => STATUS_PROTOCOLADOS.includes(p.Status)).length,
+    futuro:       processos.filter(p => p.Status === 'Processo Futuro').length,
+    todos:        processos.length,
+  };
+  const tabsHtml = `<div class="tabs">
+    ${MEUS_PROCESSOS_TABS.map(t => `<button class="tab-btn ${window._processosTab===t.key?'active':''}" onclick="mudarTabProcessos('${t.key}')">${esc(t.label)} (${contagensTab[t.key]})</button>`).join('')}
+  </div>`;
+
   el.innerHTML = `
-    <div class="toolbar">
+    ${tabsHtml}
+    <div class="toolbar" style="margin-top:12px">
       <div class="search-bar"><i class="bi bi-search"></i><input id="busca-proc" placeholder="Buscar por cliente ou tipo..." oninput="filtrarProcessos()" /></div>
       <div class="btn-group">
+        <select id="filtro-responsavel" onchange="filtrarProcessos()" style="padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px">
+          <option value="">Todos os responsáveis</option>
+          ${RESPONSAVEIS.map(r => `<option value="${r}">${r}</option>`).join('')}
+        </select>
         <select id="filtro-status" onchange="filtrarProcessos()" style="padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px">
           <option value="">Todos os status</option>
           ${[...STATUS_PROCESSO,'Deferido'].map(s => `<option value="${s}">${s}</option>`).join('')}
@@ -2534,11 +2583,30 @@ async function renderProcessosList() {
             ${sortTh('Status','Status')}
             <th>Ações</th>
           </tr></thead>
-          <tbody id="tbody-processos">${renderProcessosRows(processos)}</tbody>
+          <tbody id="tbody-processos">${renderProcessosRows(aplicarFiltrosProcessos())}</tbody>
         </table>
       </div>
     </div>`;
-  window._processos_filtro = processos;
+}
+
+function mudarTabProcessos(tab) {
+  window._processosTab = tab;
+  renderProcessosList();
+}
+
+function aplicarFiltrosProcessos() {
+  const q = document.getElementById('busca-proc')?.value.toLowerCase() || '';
+  const s = document.getElementById('filtro-status')?.value || '';
+  const r = document.getElementById('filtro-responsavel')?.value || '';
+  const tab = window._processosTab || 'aprotocolar';
+  let lista = window._processos_filtro || [];
+  if (tab === 'aprotocolar')       lista = lista.filter(p => STATUS_A_PROTOCOLAR.includes(p.Status));
+  else if (tab === 'protocolados') lista = lista.filter(p => STATUS_PROTOCOLADOS.includes(p.Status));
+  else if (tab === 'futuro')       lista = lista.filter(p => p.Status === 'Processo Futuro');
+  if (q) lista = lista.filter(p => (p.ClienteNome||'').toLowerCase().includes(q) || (p.TipoProcesso||'').toLowerCase().includes(q));
+  if (s) lista = lista.filter(p => p.Status === s);
+  if (r) lista = lista.filter(p => p.Responsavel === r);
+  return lista;
 }
 
 
@@ -2638,13 +2706,8 @@ async function excluirProcessosSelecionados() {
 }
 
 function filtrarProcessos() {
-  const q = document.getElementById('busca-proc')?.value.toLowerCase() || '';
-  const s = document.getElementById('filtro-status')?.value || '';
-  let lista = window._processos_filtro || [];
-  if (q) lista = lista.filter(p => (p.ClienteNome||'').toLowerCase().includes(q) || (p.TipoProcesso||'').toLowerCase().includes(q));
-  if (s) lista = lista.filter(p => p.Status === s);
   const tbody = document.getElementById('tbody-processos');
-  if (tbody) tbody.innerHTML = renderProcessosRows(lista);
+  if (tbody) tbody.innerHTML = renderProcessosRows(aplicarFiltrosProcessos());
 }
 
 function sortProcessos(field) {
@@ -5406,15 +5469,15 @@ async function abrirWhatsApp(processoId) {
   const tipo  = p.TipoProcesso || '';
   let msg;
   if (status === 'Pronto para Análise') {
-    msg = `Olá, ${nome}! Informamos que seu processo de *${tipo}* está com o status de: *${status}*. Isso significa que o processo está na fila para ser analisado. Para qualquer dúvida, favor entrar em contato conosco, atenciosamente *P&R Despachante Belico*.`;
+    msg = msgWhatsApp('statusProntoAnalise', { nome, tipo, status });
   } else if (status === 'Em análise') {
-    msg = `Olá, ${nome}! Informamos que seu processo de *${tipo}* está com o status de: *${status}*. Isso significa que o processo está sendo analisado. Para qualquer dúvida, favor entrar em contato conosco, atenciosamente *P&R Despachante Belico*.`;
+    msg = msgWhatsApp('statusEmAnalise', { nome, tipo, status });
   } else if (status === 'Aguardando Protocolo (email)') {
-    msg = `Olá, ${nome}! Informamos que seu processo de *${tipo}* está com o status de: *${status}*. Isso significa que o processo foi enviado por email e está aguardando retorno da PF com o número de protocolo. Para qualquer dúvida, favor entrar em contato conosco, atenciosamente *P&R Despachante Belico*.`;
+    msg = msgWhatsApp('statusAguardandoProtocolo', { nome, tipo, status });
   } else if (status === 'Deferido') {
-    msg = `Olá, ${nome}! Informamos que seu processo de *${tipo}* foi Deferido. Isso significa que o processo está pronto, e se houver emissão de documentação, favor informar se deseja retirá-la de forma física em nosso escritório ou se deseja ter acesso de forma digital em nosso portal exclusivo para os clientes. Para qualquer dúvida, favor entrar em contato conosco, atenciosamente *P&R Despachante Belico*.`;
+    msg = msgWhatsApp('statusDeferido', { nome, tipo });
   } else {
-    msg = `Olá, ${nome}! Informamos que seu processo de *${tipo}* (Protocolo: ${p.NumeroProtocolo || 'N/A'}) teve seu status atualizado para: *${status}*.\n\nEm caso de dúvidas, entre em contato conosco.\n\n${CONFIG.nomeEscritorio}`;
+    msg = msgWhatsApp('statusGenerico', { nome, tipo, protocolo: p.NumeroProtocolo || 'N/A', status, escritorio: CONFIG.nomeEscritorio });
   }
   window.open(`https://wa.me/55${celular}?text=${encodeURIComponent(msg)}`, '_blank');
 }
@@ -5473,7 +5536,7 @@ async function _confirmarRenovarSIMAF(clienteId, simafIndex, novaData, tipoRenov
     App.invalidateCache('clientes');
     if (tipoRenov === 'periodica') await registrarExtraRenovacao('SIMAF', clienteId, cliente.Title, simafList[simafIndex].NomePropriedade || '');
     toast('Validade do SIMAF atualizada!', 'success');
-    navigate('clientes/perfil', { id: clienteId, tab: 'ibama' });
+    await renderClientePerfil(clienteId, 'ibama');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
@@ -5602,7 +5665,7 @@ function solicitarDeclaracao(tipo) {
   const nome  = cliente?.Title || '—';
   const cpf   = cliente?.CPF   || '—';
   const decl  = tipo === 'filiacao' ? 'Filiação' : 'Habitualidade';
-  const msg   = `Solicito por gentileza a Declaração de ${decl} do ${nome}, ${cpf}`;
+  const msg   = msgWhatsApp('solicitarDeclaracao', { declaracao: decl, nome, cpf });
   window.open(`https://wa.me/55${celular}?text=${encodeURIComponent(msg)}`, '_blank');
 }
 
@@ -5989,7 +6052,7 @@ function filtrarValidades(limpar) {
       : `${item.dias}d restantes`;
     const celularLimpo = (item.celular || '').replace(/\D/g, '');
     const nomeDoc = item.descricao || item.tipo;
-    const msgWa = encodeURIComponent(`Olá ${item.cliente}, Verificamos no sistema que o seu ${nomeDoc} está vencendo em ${label}, deseja iniciar o processo de renovação do mesmo?`);
+    const msgWa = encodeURIComponent(msgWhatsApp('documentoVencendo', { cliente: item.cliente, documento: nomeDoc, prazo: label }));
     const btnWa = celularLimpo
       ? `<a href="https://wa.me/55${celularLimpo}?text=${msgWa}" target="_blank" class="btn btn-outline btn-sm" title="Avisar via WhatsApp"><i class="bi bi-whatsapp" style="color:#25D366"></i></a>`
       : `<button class="btn btn-ghost btn-sm" disabled title="Sem telefone cadastrado"><i class="bi bi-whatsapp" style="color:#ccc"></i></button>`;
@@ -6164,7 +6227,7 @@ async function renderPagamentos() {
         ${grupos.map(g => {
           const total = g.processos.reduce((s, p) => s + getItensPendentesProcesso(p).reduce((ss, i) => ss + i.valor, 0), 0);
           const celularLimpo = (g.celular || '').replace(/\D/g, '');
-          const msgWa = `Olá ${esc(g.nome)}, verificamos em nosso sistema que constam valores em aberto referentes aos serviços prestados no valor de ${fmtMoeda(total)}.`;
+          const msgWa = msgWhatsApp('pagamentoPendente', { cliente: g.nome, valor: fmtMoeda(total) });
           return `<div style="padding:16px 20px;border-bottom:1px solid var(--border)">
             <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:10px">
               <a style="font-size:15px;font-weight:700;cursor:pointer;color:var(--accent)" onclick="navigate('clientes/perfil',{id:'${g.clienteId}',tab:'pagamentos'})">${esc(g.nome)}</a>
@@ -6778,6 +6841,58 @@ async function salvarValoresProcessos() {
     Object.assign(TAXAS_PROCESSO, taxasPadrao);
     toast(`${alteracoes} valor(es) atualizado(s) com sucesso.`, 'success');
     await renderValoresProcessos();
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+// ============================================================
+// CONFIGURAÇÕES (restrito a Matheus e Simone)
+// ============================================================
+async function renderConfiguracoes() {
+  document.getElementById('page-title').textContent = 'Configurações';
+  if (!isAdminUser()) {
+    document.getElementById('page-content').innerHTML = `<div class="empty-state"><i class="bi bi-lock" style="font-size:48px"></i><p>Acesso restrito.</p></div>`;
+    return;
+  }
+  const el = document.getElementById('page-content');
+  el.innerHTML = `
+    <div class="card">
+      <div class="card-header">
+        <h3><i class="bi bi-whatsapp me-2" style="color:#25D366"></i>Mensagens Automáticas de WhatsApp</h3>
+        <button class="btn btn-primary" onclick="salvarMensagensWhatsApp()"><i class="bi bi-floppy me-1"></i>Salvar Alterações</button>
+      </div>
+      <div class="card-body">
+        <p style="font-size:12px;color:var(--text-muted);margin-bottom:16px">Use chaves entre { } para inserir dados automaticamente. Campos disponíveis por mensagem estão indicados abaixo de cada uma.</p>
+        ${MENSAGENS_WHATSAPP_CONFIG.map(m => `
+          <div style="margin-bottom:18px">
+            <label style="font-size:13px;font-weight:600">${esc(m.label)}</label>
+            <textarea id="cfg-msg-${m.chave}" rows="3" style="width:100%;margin-top:4px;font-size:13px;font-family:inherit">${esc(MENSAGENS_WHATSAPP[m.chave] || '')}</textarea>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px">
+              <span style="font-size:11px;color:var(--text-muted)">Campos: ${m.placeholders.map(p => `{${p}}`).join(', ')}</span>
+              <button class="btn btn-ghost btn-sm" style="font-size:11px" onclick="restaurarMensagemPadrao('${m.chave}')">Restaurar padrão</button>
+            </div>
+          </div>`).join('')}
+      </div>
+    </div>`;
+}
+
+function restaurarMensagemPadrao(chave) {
+  const cfg = MENSAGENS_WHATSAPP_CONFIG.find(m => m.chave === chave);
+  if (!cfg) return;
+  const el = document.getElementById(`cfg-msg-${chave}`);
+  if (el) el.value = cfg.padrao;
+}
+
+async function salvarMensagensWhatsApp() {
+  showLoading();
+  try {
+    const overrides = {};
+    MENSAGENS_WHATSAPP_CONFIG.forEach(m => {
+      const el = document.getElementById(`cfg-msg-${m.chave}`);
+      if (el) overrides[m.chave] = el.value;
+    });
+    await App.graph._writeFile('mensagens_whatsapp', overrides);
+    Object.assign(MENSAGENS_WHATSAPP, overrides);
+    toast('Mensagens salvas com sucesso!', 'success');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
@@ -8385,6 +8500,7 @@ async function renderControleDemandas() {
       App.getProcessos(),
     ]);
     const demandas = Array.isArray(demandasRaw) ? demandasRaw : [];
+    window._controleDemandasProcessos = processos;
 
     // Painel por operador
     const painelHtml = RESPONSAVEIS.map(op => {
@@ -8400,7 +8516,10 @@ async function renderControleDemandas() {
             <div style="font-size:11px;color:var(--text-muted)">demandas</div>
           </div>
           <div title="Processos pendentes de ação">
-            <div style="font-size:26px;font-weight:800;color:var(--warning,#f59e0b)">${processosOp}</div>
+            <div style="display:flex;align-items:center;gap:4px;justify-content:center">
+              <div style="font-size:26px;font-weight:800;color:var(--warning,#f59e0b)">${processosOp}</div>
+              <button class="btn btn-ghost btn-sm" style="padding:0 4px" onclick="abrirModalProcessosOperador('${esc(op)}')" title="Ver processos pendentes de ${esc(op)}"><i class="bi bi-eye"></i></button>
+            </div>
             <div style="font-size:11px;color:var(--text-muted)">processos</div>
           </div>
         </div>
@@ -8462,6 +8581,43 @@ async function renderControleDemandas() {
         </div>
       </div>`;
   } catch(e) { document.getElementById('page-content').innerHTML = `<div class="empty-state"><i class="bi bi-exclamation-triangle"></i><p>${esc(e.message)}</p></div>`; } finally { hideLoading(); }
+}
+
+function abrirModalProcessosOperador(operador) {
+  const processos = window._controleDemandasProcessos || [];
+  const lista = processos.filter(p =>
+    p.Responsavel === operador && !STATUS_DEMANDA_EXCLUIR_OPERADOR.includes(p.Status) && !STATUS_FECHADOS.includes(p.Status)
+  );
+  document.getElementById('modal-processos-operador')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modal-processos-operador';
+  modal.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this) this.remove()">
+      <div style="background:#fff;border-radius:14px;padding:24px;max-width:720px;width:100%;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+          <h3 style="margin:0;font-size:16px"><i class="bi bi-person-badge me-2"></i>Processos pendentes — ${esc(operador)}</h3>
+          <button onclick="document.getElementById('modal-processos-operador').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:#666;line-height:1">×</button>
+        </div>
+        ${lista.length === 0
+          ? `<div class="empty-state" style="padding:24px"><i class="bi bi-check-circle"></i><p>Nenhum processo pendente de ação para ${esc(operador)}.</p></div>`
+          : `<div class="table-wrapper"><table>
+              <thead><tr><th>Cliente</th><th>Tipo de Processo</th><th>Informações</th><th>Status</th></tr></thead>
+              <tbody>
+                ${lista.map(p => {
+                  const b = statusBadge(p.Status);
+                  const info = infoArmaLocalProcesso(p);
+                  return `<tr style="cursor:pointer" onclick="document.getElementById('modal-processos-operador').remove();navigate('processos/detalhe',{id:'${p.id}'})">
+                    <td style="font-weight:600">${esc(p.ClienteNome||'—')}</td>
+                    <td>${esc(p.TipoProcesso||'—')}</td>
+                    <td style="font-size:12px;color:var(--text-muted)">${esc(info)||'—'}</td>
+                    <td><span class="badge ${b.cls}">${b.txt}</span></td>
+                  </tr>`;
+                }).join('')}
+              </tbody>
+            </table></div>`}
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
 }
 
 async function excluirDemanda(demandaId) {
@@ -8749,6 +8905,8 @@ async function iniciarApp() {
     if (navDemandas) navDemandas.style.display = '';
     const navOrcamentos = document.getElementById('nav-orcamentos');
     if (navOrcamentos) navOrcamentos.style.display = '';
+    const btnConfig = document.getElementById('btn-config');
+    if (btnConfig) btnConfig.style.display = '';
   }
   if (isExtrasUser()) {
     const navExt = document.getElementById('nav-pagamentos-extras');
@@ -8763,6 +8921,12 @@ async function iniciarApp() {
     ]);
     if (vp && !Array.isArray(vp)) Object.assign(VALORES_PROCESSO, vp);
     if (tp && !Array.isArray(tp)) Object.assign(TAXAS_PROCESSO, tp);
+  } catch(e) {}
+
+  // Carrega mensagens de WhatsApp personalizadas
+  try {
+    const mp = await App.graph._readFile('mensagens_whatsapp');
+    if (mp && !Array.isArray(mp)) Object.assign(MENSAGENS_WHATSAPP, mp);
   } catch(e) {}
 
   // Verifica e cria listas se necessário
