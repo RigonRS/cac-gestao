@@ -3005,6 +3005,8 @@ async function renderProcessoForm(clienteId = null, routeParams = {}) {
   const demandaId     = routeParams.demandaId     || null;
   const demandaNumero = routeParams.demandaNumero  || null;
   const tipoProcesso  = routeParams.tipoProcesso   ? decodeURIComponent(routeParams.tipoProcesso) : null;
+  window._processoValorDemanda = (demandaId && routeParams.valorDemanda != null && routeParams.valorDemanda !== '')
+    ? parseFloat(routeParams.valorDemanda) : null;
 
   // Restrição: não-admins só podem abrir processo via demanda delegada
   if (!isAdminUser()) {
@@ -3250,9 +3252,14 @@ function onTipoProcessoChange(tipo, skipValor = false) {
 
   if (!skipValor) {
     const valorInput = document.querySelector('[name="ValorProcesso"]');
-    if (valorInput && tipo && VALORES_PROCESSO[tipo] !== undefined) {
-      valorInput.value = VALORES_PROCESSO[tipo].toFixed(2);
-      calcularParcelas();
+    if (valorInput && tipo) {
+      if (window._processoValorDemanda != null) {
+        valorInput.value = window._processoValorDemanda.toFixed(2);
+        calcularParcelas();
+      } else if (VALORES_PROCESSO[tipo] !== undefined) {
+        valorInput.value = VALORES_PROCESSO[tipo].toFixed(2);
+        calcularParcelas();
+      }
     }
   }
 
@@ -8484,12 +8491,6 @@ async function renderOrcamentos() {
 // ============================================================
 // CONTROLE DE DEMANDAS
 // ============================================================
-const STATUS_DEMANDA_EXCLUIR_OPERADOR = [
-  'Deferido','Em análise','Pronto para Análise',
-  'Aguardando Pagamento GRU','Aguardando Protocolo (email)',
-  'Indeferido','Desistência Cliente'
-];
-
 async function renderControleDemandas() {
   if (!isAdminUser()) { document.getElementById('page-content').innerHTML = `<div class="empty-state"><i class="bi bi-lock"></i><p>Acesso restrito a administradores.</p></div>`; return; }
   document.getElementById('page-title').textContent = 'Controle de Demandas';
@@ -8504,24 +8505,27 @@ async function renderControleDemandas() {
 
     // Painel por operador
     const painelHtml = RESPONSAVEIS.map(op => {
-      const demandasOp = demandas.filter(d => d.operador === op && d.status === 'Aberta').length;
-      const processosOp = processos.filter(p =>
-        p.Responsavel === op && !STATUS_DEMANDA_EXCLUIR_OPERADOR.includes(p.Status) && !STATUS_FECHADOS.includes(p.Status)
-      ).length;
-      return `<div class="card" style="flex:1;min-width:160px;text-align:center;padding:16px">
+      const demandasOp      = demandas.filter(d => d.operador === op && d.status === 'Aberta').length;
+      const aProtocolarOp   = processos.filter(p => p.Responsavel === op && STATUS_A_PROTOCOLAR.includes(p.Status)).length;
+      const futuroOp        = processos.filter(p => p.Responsavel === op && p.Status === 'Processo Futuro').length;
+      const protocoladosOp  = processos.filter(p => p.Responsavel === op && STATUS_PROTOCOLADOS.includes(p.Status)).length;
+      const contador = (valor, cor, label, filtro) => `<div title="${esc(label)}">
+        <div style="display:flex;align-items:center;gap:2px;justify-content:center">
+          <div style="font-size:24px;font-weight:800;color:${cor}">${valor}</div>
+          <button class="btn btn-ghost btn-sm" style="padding:0 2px" onclick="abrirModalProcessosOperador('${esc(op)}','${filtro}')" title="Ver processos — ${esc(label)}"><i class="bi bi-eye" style="font-size:12px"></i></button>
+        </div>
+        <div style="font-size:10px;color:var(--text-muted)">${esc(label)}</div>
+      </div>`;
+      return `<div class="card" style="flex:1;min-width:260px;text-align:center;padding:16px">
         <div style="font-size:14px;font-weight:700;margin-bottom:10px">${esc(op)}</div>
-        <div style="display:flex;gap:12px;justify-content:center">
+        <div style="display:flex;gap:14px;justify-content:center;flex-wrap:wrap">
           <div title="Demandas em aberto">
-            <div style="font-size:26px;font-weight:800;color:var(--accent)">${demandasOp}</div>
-            <div style="font-size:11px;color:var(--text-muted)">demandas</div>
+            <div style="font-size:24px;font-weight:800;color:var(--accent)">${demandasOp}</div>
+            <div style="font-size:10px;color:var(--text-muted)">demandas</div>
           </div>
-          <div title="Processos pendentes de ação">
-            <div style="display:flex;align-items:center;gap:4px;justify-content:center">
-              <div style="font-size:26px;font-weight:800;color:var(--warning,#f59e0b)">${processosOp}</div>
-              <button class="btn btn-ghost btn-sm" style="padding:0 4px" onclick="abrirModalProcessosOperador('${esc(op)}')" title="Ver processos pendentes de ${esc(op)}"><i class="bi bi-eye"></i></button>
-            </div>
-            <div style="font-size:11px;color:var(--text-muted)">processos</div>
-          </div>
+          ${contador(aProtocolarOp, 'var(--warning,#f59e0b)', 'a protocolar', 'aprotocolar')}
+          ${contador(futuroOp, '#7c3aed', 'futuro', 'futuro')}
+          ${contador(protocoladosOp, 'var(--accent)', 'protocolados', 'protocolados')}
         </div>
       </div>`;
     }).join('');
@@ -8544,7 +8548,7 @@ async function renderControleDemandas() {
         const criados = processos.filter(p => p.demandaId && String(p.demandaId) === String(d.id) && p.TipoProcesso === item.tipo).length;
         const pct = item.qtd > 0 ? Math.min(100, Math.round(criados/item.qtd*100)) : 100;
         const obsBtn = item.obs ? `<button class="btn btn-ghost btn-sm" style="padding:0 2px" title="${esc(item.obs)}"><i class="bi bi-eye" style="color:var(--accent)"></i></button>` : '';
-        return `<div style="font-size:12px;margin-bottom:2px;display:flex;align-items:center;gap:2px">${item.qtd>1?item.qtd+'× ':''}${esc(item.tipo)} <span style="color:${criados>=item.qtd?'var(--success)':'var(--text-muted)'}">(${criados}/${item.qtd})</span>${obsBtn}</div>`;
+        return `<div style="font-size:12px;margin-bottom:2px;display:flex;align-items:center;gap:2px">${item.qtd>1?item.qtd+'× ':''}${esc(item.tipo)} <span style="color:${criados>=item.qtd?'var(--success)':'var(--text-muted)'}">(${criados}/${item.qtd})</span> <span style="color:var(--text-muted)">· ${fmtMoeda(item.valor||0)}</span>${obsBtn}</div>`;
       }).join('');
 
       const delegarOpts = d.status !== 'Concluída'
@@ -8583,11 +8587,19 @@ async function renderControleDemandas() {
   } catch(e) { document.getElementById('page-content').innerHTML = `<div class="empty-state"><i class="bi bi-exclamation-triangle"></i><p>${esc(e.message)}</p></div>`; } finally { hideLoading(); }
 }
 
-function abrirModalProcessosOperador(operador) {
+function abrirModalProcessosOperador(operador, filtro) {
   const processos = window._controleDemandasProcessos || [];
-  const lista = processos.filter(p =>
-    p.Responsavel === operador && !STATUS_DEMANDA_EXCLUIR_OPERADOR.includes(p.Status) && !STATUS_FECHADOS.includes(p.Status)
-  );
+  let lista, tituloFiltro;
+  if (filtro === 'futuro') {
+    lista = processos.filter(p => p.Responsavel === operador && p.Status === 'Processo Futuro');
+    tituloFiltro = 'Futuro';
+  } else if (filtro === 'protocolados') {
+    lista = processos.filter(p => p.Responsavel === operador && STATUS_PROTOCOLADOS.includes(p.Status));
+    tituloFiltro = 'Protocolados';
+  } else {
+    lista = processos.filter(p => p.Responsavel === operador && STATUS_A_PROTOCOLAR.includes(p.Status));
+    tituloFiltro = 'A Protocolar';
+  }
   document.getElementById('modal-processos-operador')?.remove();
   const modal = document.createElement('div');
   modal.id = 'modal-processos-operador';
@@ -8595,11 +8607,11 @@ function abrirModalProcessosOperador(operador) {
     <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this) this.remove()">
       <div style="background:#fff;border-radius:14px;padding:24px;max-width:720px;width:100%;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-          <h3 style="margin:0;font-size:16px"><i class="bi bi-person-badge me-2"></i>Processos pendentes — ${esc(operador)}</h3>
+          <h3 style="margin:0;font-size:16px"><i class="bi bi-person-badge me-2"></i>Processos ${esc(tituloFiltro)} — ${esc(operador)}</h3>
           <button onclick="document.getElementById('modal-processos-operador').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:#666;line-height:1">×</button>
         </div>
         ${lista.length === 0
-          ? `<div class="empty-state" style="padding:24px"><i class="bi bi-check-circle"></i><p>Nenhum processo pendente de ação para ${esc(operador)}.</p></div>`
+          ? `<div class="empty-state" style="padding:24px"><i class="bi bi-check-circle"></i><p>Nenhum processo ${esc(tituloFiltro)} para ${esc(operador)}.</p></div>`
           : `<div class="table-wrapper"><table>
               <thead><tr><th>Cliente</th><th>Tipo de Processo</th><th>Informações</th><th>Status</th></tr></thead>
               <tbody>
@@ -8679,12 +8691,12 @@ async function renderMinhasDemandas() {
           <div>
             <div style="font-weight:600;font-size:13px;display:flex;align-items:center;gap:2px">${esc(item.tipo)}${obsBtn}</div>
             <div style="font-size:12px;color:var(--text-muted);margin-top:2px">
-              ${criados} de ${item.qtd} processo(s) criado(s)
+              ${criados} de ${item.qtd} processo(s) criado(s) · ${fmtMoeda(item.valor||0)} cada
               ${concluido ? '<span class="badge badge-green" style="margin-left:6px">Concluído</span>' : ''}
             </div>
           </div>
           ${!concluido && d.status === 'Aberta'
-            ? `<button class="btn btn-primary btn-sm" onclick="navigate('processos/novo',{clienteId:'${d.clienteId}',demandaId:'${d.id}',demandaNumero:'${esc(d.numero||'')}',tipoProcesso:encodeURIComponent('${esc(item.tipo)}')})">
+            ? `<button class="btn btn-primary btn-sm" onclick="navigate('processos/novo',{clienteId:'${d.clienteId}',demandaId:'${d.id}',demandaNumero:'${esc(d.numero||'')}',tipoProcesso:encodeURIComponent('${esc(item.tipo)}'),valorDemanda:'${item.valor||0}'})">
                 <i class="bi bi-plus-lg me-1"></i>Abrir Processo
               </button>`
             : `<button class="btn btn-outline btn-sm" disabled>${concluido ? 'Concluído' : 'Encerrada'}</button>`}
