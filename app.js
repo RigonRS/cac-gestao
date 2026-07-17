@@ -588,6 +588,7 @@ const STATUS_PROCESSO = [
 ];
 const STATUS_FECHADOS = ['Deferido', 'Indeferido', 'Desistência Cliente'];
 const RESPONSAVEIS = ['Andrieli', 'Matheus', 'Priscila', 'Simone'];
+const TIPOS_SEM_GRU = ['Defesa de Notificação', 'Mudança de endereço SINARM PF', 'Porte de Arma PF', 'Correção de dados de arma', 'Comunicado de Furto/Extravio'];
 const FORMAS_PAGAMENTO_OPTS = ['Pix', 'Dinheiro', 'Cartão'];
 const BANCOS_PAGAMENTO_OPTS = ['Banco do Brasil', 'Sicredi', 'Cresol'];
 
@@ -1937,7 +1938,8 @@ function renderPerfilDocumentos(docs, clienteId, cliente) {
                 } else if (d.TipoDocumento === 'Guia de Tráfego') {
                   const arma = d.ArmaVinculadaDesc ? esc(d.ArmaVinculadaDesc) : '';
                   const loc = d.CidadeGuia ? esc(d.CidadeGuia) + (d.UFGuia ? '/' + esc(d.UFGuia) : '') : (d.NomeClubeTiro ? esc(d.NomeClubeTiro) : '');
-                  armaLocal = [arma, loc].filter(Boolean).join('<br>') || '—';
+                  const ngt = d.NumeroGT ? `N° GT: ${esc(d.NumeroGT)}` : '';
+                  armaLocal = [arma, loc, ngt].filter(Boolean).join('<br>') || '—';
                 }
                 return `<tr>
                   <td><strong>${esc(d.TipoDocumento||'—')}</strong></td>
@@ -2396,6 +2398,7 @@ async function renderDocumentoForm(clienteId, id = null) {
                 <option value="Tiro Esportivo"          ${d.TipoGuia==='Tiro Esportivo'?'selected':''}>Tiro Esportivo</option>
               </select>
             </div>
+            <div><label>N° GT</label><input name="NumeroGT" value="${esc(d.NumeroGT||'')}" placeholder="Preenchido automaticamente ao deferir o processo" /></div>
           </div>
           <div id="guia-caca" style="display:none;margin-top:8px">
             <div class="form-grid">
@@ -2499,6 +2502,7 @@ async function salvarDocumento(e, clienteId, id) {
     fields.ArmaVinculadaDesc = adesc || '';
     fields.EnderecoGuia = fd.get('EnderecoGuia');
     fields.TipoGuia     = fd.get('TipoGuia');
+    fields.NumeroGT     = fd.get('NumeroGT') || '';
     const tguia = fd.get('TipoGuia');
     if (tguia === 'Caça') {
       fields.CidadeGuia = fd.get('CidadeGuia');
@@ -4707,7 +4711,7 @@ async function renderProcessoDetalhe(id) {
               <div style="font-size:12px;color:#7c3aed"><i class="bi bi-hourglass me-1"></i>Aguardando: <strong>${esc(processo.ProcessoFuturoNome||'—')}</strong></div>
             </div>` : ''}
             <div style="margin-top:12px" id="gru-paga-wrapper">
-              ${gruPagaSalva ? `
+              ${TIPOS_SEM_GRU.includes(processo.TipoProcesso) ? '' : gruPagaSalva ? `
               <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
                 <i class="bi bi-check-circle-fill" style="color:#16a34a"></i>
                 <span style="font-size:13px;font-weight:600;color:#16a34a">GRU Paga</span>
@@ -4810,9 +4814,10 @@ async function atualizarStatus(id, novoStatus) {
   const statusRestritos = ['Pronto para Análise', 'Em análise'];
   if (statusRestritos.includes(novoStatus)) {
     const p = window._processoDetalhe;
+    const semGRU = TIPOS_SEM_GRU.includes(p?.TipoProcesso);
     const faltando = [];
-    if (!p?.NumeroProtocolo) faltando.push('N° de Protocolo');
-    if (!p?.GruPaga)         faltando.push('GRU Paga');
+    if (!p?.NumeroProtocolo)     faltando.push('N° de Protocolo');
+    if (!semGRU && !p?.GruPaga) faltando.push('GRU Paga');
     if (faltando.length) {
       const sel = document.getElementById('sel-status');
       if (sel) sel.value = p?.Status || '';
@@ -4894,9 +4899,10 @@ async function deferirProcesso(id) {
   if (!p) return;
 
   // Validação: N° Protocolo e GRU Paga são obrigatórios
+  const semGRUDefer = TIPOS_SEM_GRU.includes(p.TipoProcesso);
   const faltando = [];
-  if (!p.NumeroProtocolo) faltando.push('N° de Protocolo');
-  if (!p.GruPaga)         faltando.push('GRU Paga');
+  if (!p.NumeroProtocolo)         faltando.push('N° de Protocolo');
+  if (!semGRUDefer && !p.GruPaga) faltando.push('GRU Paga');
   if (faltando.length) {
     const aviso = document.createElement('div');
     aviso.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center';
@@ -5044,6 +5050,7 @@ async function deferirProcesso(id) {
             NomeClubeTiro:     dados.nomeClube || '',
             CRClubeTiro:       dados.crClube || '',
             EnderecoClubeTiro: dados.enderecoClube || '',
+            NumeroGT:     p.NumeroProtocolo || '',
             DataEmissao:  _dataEmissaoGuia || null,
             DataValidade: _dataValidadeGuia || null,
           });
@@ -6402,7 +6409,7 @@ async function renderPagamentosGRU() {
   document.getElementById('page-title').textContent = 'Pagamentos de GRU';
   const processos = await App.getProcessos();
 
-  const gruPendentes = processos.filter(p => !p.GruPaga && !STATUS_FECHADOS.includes(p.Status));
+  const gruPendentes = processos.filter(p => !p.GruPaga && !STATUS_FECHADOS.includes(p.Status) && !TIPOS_SEM_GRU.includes(p.TipoProcesso));
   const el = document.getElementById('page-content');
 
   if (!gruPendentes.length) {
@@ -8814,6 +8821,7 @@ async function renderControleDemandas() {
         <td style="white-space:nowrap;font-weight:600">${fmtMoeda(d.total)}</td>
         <td>${statusBadge}</td>
         <td>${d.operador ? `<span class="badge badge-blue">${esc(d.operador)}</span>` : '<span style="color:var(--text-muted)">—</span>'}</td>
+        <td style="white-space:nowrap;font-size:12px">${d.dataDelegacao ? fmtDate(d.dataDelegacao) : '<span style="color:var(--text-muted)">—</span>'}</td>
         <td>${delegarOpts}</td>
         <td><button class="btn btn-ghost btn-sm" onclick="excluirDemanda('${d.id}')" title="Excluir Demanda"><i class="bi bi-trash" style="color:var(--danger)"></i></button></td>
       </tr>`;
@@ -8827,7 +8835,7 @@ async function renderControleDemandas() {
         <div class="card-header"><h3><i class="bi bi-list-task me-2"></i>Demandas</h3></div>
         <div class="card-body" style="padding:0">
           ${demandas.length ? `<div class="table-wrapper"><table>
-            <thead><tr><th>Nº</th><th>Orçamento</th><th>Cliente</th><th>Criado em</th><th>Serviços / Progresso</th><th>Total</th><th>Status</th><th>Operador</th><th>Delegar</th><th>Ações</th></tr></thead>
+            <thead><tr><th>Nº</th><th>Orçamento</th><th>Cliente</th><th>Criado em</th><th>Serviços / Progresso</th><th>Total</th><th>Status</th><th>Operador</th><th>Delegado em</th><th>Delegar</th><th>Ações</th></tr></thead>
             <tbody>${linhasTabela}</tbody>
           </table></div>` : `<div class="empty-state" style="padding:40px"><i class="bi bi-inbox"></i><p>Nenhuma demanda criada ainda. Aprove um orçamento para gerar a primeira demanda.</p></div>`}
         </div>
