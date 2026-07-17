@@ -113,7 +113,7 @@
           <div style="font-size:12px;color:rgba(255,255,255,.6);overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><i class="bi bi-person-circle" style="margin-right:4px"></i><span id="user-name"></span></div>
           <button id="btn-config" onclick="navigate('configuracoes')" title="Configurações" style="display:none;flex-shrink:0;background:none;border:none;color:rgba(255,255,255,.6);cursor:pointer;padding:2px;font-size:15px;line-height:1"><i class="bi bi-gear-fill"></i></button>
         </div>
-        <div style="text-align:center;font-size:11px;color:#94a3b8;margin-bottom:8px;letter-spacing:0.5px">V3.64</div>
+        <div style="text-align:center;font-size:11px;color:#94a3b8;margin-bottom:8px;letter-spacing:0.5px">V3.65</div>
         <button id="btn-logout" class="btn-logout">
           <i class="bi bi-box-arrow-left"></i> Sair
         </button>
@@ -125,6 +125,10 @@
       <header id="page-header" style="display:flex;align-items:center;gap:10px">
         <button id="btn-back-nav" class="btn btn-outline btn-sm" style="display:none;flex-shrink:0" onclick="voltarPaginaAnterior()" title="Voltar"><i class="bi bi-arrow-left"></i></button>
         <h2 id="page-title" style="margin:0">Dashboard</h2>
+        <button id="btn-sino-notificacoes" onclick="abrirPopupNotificacoes()" title="Notificações" style="margin-left:auto;position:relative;background:none;border:none;cursor:pointer;font-size:20px;color:var(--text-muted,#555);flex-shrink:0;padding:4px 8px">
+          <i class="bi bi-bell-fill"></i>
+          <span id="sino-badge" style="display:none;position:absolute;top:0;right:2px;background:#dc2626;color:#fff;font-size:10px;font-weight:700;border-radius:999px;min-width:16px;height:16px;line-height:16px;text-align:center;padding:0 3px"></span>
+        </button>
       </header>
       <main id="page-content"></main>
     </div>

@@ -3005,6 +3005,7 @@ async function renderProcessoForm(clienteId = null, routeParams = {}) {
   const demandaId     = routeParams.demandaId     || null;
   const demandaNumero = routeParams.demandaNumero  || null;
   const tipoProcesso  = routeParams.tipoProcesso   ? decodeURIComponent(routeParams.tipoProcesso) : null;
+  const dataOrcamento = (demandaId && routeParams.dataOrcamento) ? routeParams.dataOrcamento : null;
   window._processoValorDemanda = (demandaId && routeParams.valorDemanda != null && routeParams.valorDemanda !== '')
     ? parseFloat(routeParams.valorDemanda) : null;
 
@@ -3095,10 +3096,11 @@ async function renderProcessoForm(clienteId = null, routeParams = {}) {
     </select>
   </div>`;
 
-  // Data de abertura: travada para não-admins vindos de demanda
+  // Data de abertura: travada para não-admins vindos de demanda; usa a data do orçamento (define prioridade) quando disponível
+  const valorDataAbertura = dataOrcamento || hoje;
   const dataAberturaHtml = lockFields
-    ? `<div><label>Data de Abertura</label><input type="date" name="DataAbertura" value="${hoje}" readonly style="background:var(--bg-secondary)" /></div>`
-    : `<div><label>Data de Abertura</label><input type="date" name="DataAbertura" value="${hoje}" /></div>`;
+    ? `<div><label>Data de Abertura</label><input type="date" name="DataAbertura" value="${valorDataAbertura}" readonly style="background:var(--bg-secondary)" /></div>`
+    : `<div><label>Data de Abertura</label><input type="date" name="DataAbertura" value="${valorDataAbertura}" /></div>`;
 
   // Campos ocultos de demanda
   const hiddenDemanda = fromDemanda
@@ -3293,6 +3295,8 @@ function onTipoProcessoChange(tipo, skipValor = false) {
     const armasPFOpts = _processoArmasCache.filter(a => a.OrgaoCadastro === 'PF - Defesa Pessoal')
       .map(a => `<option value="${a.id}|${esc(a.AtividadeCadastrada||'')}|${esc(a.Marca||'')}|${esc(a.Modelo||'')}">${esc(a.Marca||'')} ${esc(a.Modelo||'')}${a.NumeroSerie ? ' ('+esc(a.NumeroSerie)+')' : ''}</option>`).join('');
     camposEl.innerHTML = buildCamposPortePF(armasPFOpts);
+  } else if (tipo === 'Defesa de Notificação') {
+    camposEl.innerHTML = buildCamposDefesaNotificacao();
   }
 
   // Checklist
@@ -3784,6 +3788,14 @@ function buildCamposPortePF(armasOptsPF) {
   </div></div>`;
 }
 
+function buildCamposDefesaNotificacao() {
+  return `<div class="form-section"><div class="form-section-title">Defesa de Notificação</div><div class="form-body">
+    <div class="form-grid">
+      <div><label>Data Máxima de Protocolo</label><input type="date" name="proc_dataMaximaProtocolo" /></div>
+    </div>
+  </div></div>`;
+}
+
 function onMesmoTitularRadio(value) {
   document.getElementById('proc-mesmo-titular').style.display = value === 'sim' ? '' : 'none';
   document.getElementById('proc-outro-titular').style.display = value === 'nao' ? '' : 'none';
@@ -4108,6 +4120,7 @@ async function gerarProcuracao() {
     const endFmt = [d.end, d.num ? `n° ${d.num}` : '', d.compl, d.bairro, d.cidade, d.uf, d.cep ? `CEP ${d.cep}` : ''].filter(Boolean).join(', ');
     const hoje = new Date().toISOString().split('T')[0];
     const html = `
+      <div style="text-align:right;font-size:10pt;color:#555;margin-bottom:8px">Data de Emissão: ${fmtDate(hoje)}</div>
       <h1>PROCURAÇÃO</h1>
       <p><strong>Outorgante</strong> Eu, <strong>${esc(d.nome)}</strong>, ${esc(usaComp ? 'Brasileiro(a)' : ((c.Nacionalidade||'').toLowerCase().includes('brasil') ? 'Brasileiro(a)' : (c.Nacionalidade||'')))}, ${esc(d.profissao)},
       natural de ${esc(d.nat)}${d.ufNat ? '/' + esc(d.ufNat) : ''}, nascido em ${esc(d.dataNasc)},
@@ -4840,6 +4853,11 @@ async function atualizarStatus(id, novoStatus) {
     }
     await App.graph.updateItem(CONFIG.listas.processos, id, updates);
     App.invalidateCache('processos');
+    if (proc.Status === 'Processo Futuro' && proc.Responsavel) {
+      await criarNotificacao(proc.Responsavel, 'futuro_liberado', 'Processo Liberado para Protocolo',
+        `${proc.ClienteNome||'Cliente'} — ${proc.TipoProcesso||''} foi liberado para protocolo (status: ${novoStatus}).`,
+        { clienteId: proc.ClienteId, clienteNome: proc.ClienteNome, processoId: id, chaveUnica: `futuroliberado_${id}_${new Date().toISOString().split('T')[0]}` });
+    }
     const b = statusBadge(novoStatus);
     const badge = document.querySelector('#page-content .badge');
     if (badge) { badge.className = `badge ${b.cls}`; badge.textContent = b.txt; }
@@ -5323,6 +5341,11 @@ async function liberarProcessosFuturos(deferidoId) {
         ProcessoFuturoId:   null,
         ProcessoFuturoNome: null
       });
+      if (proc.Responsavel) {
+        await criarNotificacao(proc.Responsavel, 'futuro_liberado', 'Processo Liberado para Protocolo',
+          `${proc.ClienteNome||'Cliente'} — ${proc.TipoProcesso||''} foi liberado para protocolo (status: Aguardando Documentos).`,
+          { clienteId: proc.ClienteId, clienteNome: proc.ClienteNome, processoId: proc.id, chaveUnica: `futuroliberado_${proc.id}_${new Date().toISOString().split('T')[0]}` });
+      }
       toast(`Processo liberado: ${proc.TipoProcesso||'—'} (${proc.ClienteNome||'?'})`, 'success');
     }
     App.invalidateCache('processos');
@@ -6904,6 +6927,221 @@ async function salvarMensagensWhatsApp() {
 }
 
 // ============================================================
+// NOTIFICAÇÕES
+// ============================================================
+const STATUS_NOTIFICAR_PARADO = ['Aguardando Pagamento Cliente', 'Parado', 'Aguardando Documentos', 'Aguardando Assinatura', 'Aguardando Protocolo (email)'];
+
+function getUltimaAlteracaoStatusISO(p) {
+  try {
+    const hist = JSON.parse(p.HistoricoStatus || '[]');
+    if (hist.length) {
+      const ult = hist[hist.length - 1];
+      const raw = ult.data ? String(ult.data).split('T')[0] : null;
+      if (raw && /^\d{2}\/\d{2}\/\d{4}$/.test(raw)) { const [d,m,y] = raw.split('/'); return `${y}-${m}-${d}`; }
+      if (raw && /^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+    }
+  } catch(e) {}
+  return p.DataAbertura ? normISO(p.DataAbertura) : null;
+}
+
+async function criarNotificacao(usuario, tipo, titulo, mensagem, extra = {}) {
+  if (!usuario) return;
+  try {
+    const lista = await App.graph._readFile('notificacoes').catch(() => []);
+    const arr = Array.isArray(lista) ? lista : [];
+    if (extra.chaveUnica && arr.some(n => n.chaveUnica === extra.chaveUnica)) return;
+    arr.push({
+      id:           Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+      usuario, tipo, titulo, mensagem,
+      clienteId:    extra.clienteId || null,
+      clienteNome:  extra.clienteNome || '',
+      processoId:   extra.processoId || null,
+      demandaId:    extra.demandaId || null,
+      chaveUnica:   extra.chaveUnica || null,
+      data:         new Date().toISOString().split('T')[0],
+      criadaEm:     new Date().toISOString(),
+      lida:         false,
+      dataLeitura:  null,
+    });
+    await App.graph._writeFile('notificacoes', arr);
+  } catch(e) { console.error('criarNotificacao:', e); }
+}
+
+async function gerarNotificacoesAutomaticas() {
+  try {
+    const [processos, notifRaw] = await Promise.all([
+      App.getProcessos(),
+      App.graph._readFile('notificacoes').catch(() => []),
+    ]);
+    const notificacoes = Array.isArray(notifRaw) ? notifRaw : [];
+    const chaves = new Set(notificacoes.map(n => n.chaveUnica).filter(Boolean));
+    const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+    const hojeStr = hoje.toISOString().split('T')[0];
+    let alterou = false;
+
+    function add(usuario, tipo, titulo, mensagem, extra) {
+      if (!usuario || !extra.chaveUnica || chaves.has(extra.chaveUnica)) return;
+      chaves.add(extra.chaveUnica);
+      notificacoes.push({
+        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7) + notificacoes.length,
+        usuario, tipo, titulo, mensagem,
+        clienteId:   extra.clienteId || null,
+        clienteNome: extra.clienteNome || '',
+        processoId:  extra.processoId || null,
+        demandaId:   extra.demandaId || null,
+        chaveUnica:  extra.chaveUnica,
+        data:        hojeStr,
+        criadaEm:    new Date().toISOString(),
+        lida:        false,
+        dataLeitura: null,
+      });
+      alterou = true;
+    }
+
+    processos.forEach(p => {
+      if (!p.Responsavel || STATUS_FECHADOS.includes(p.Status)) return;
+
+      if (STATUS_NOTIFICAR_PARADO.includes(p.Status)) {
+        const ultAlt = getUltimaAlteracaoStatusISO(p);
+        if (ultAlt) {
+          const dias = Math.floor((hoje - new Date(ultAlt + 'T00:00:00')) / 86400000);
+          if (dias >= 3) {
+            add(p.Responsavel, 'parado', 'Processo parado',
+              `${p.ClienteNome||'Cliente'} — ${p.TipoProcesso||''} está com status "${p.Status}" sem alteração há ${dias} dia(s).`,
+              { clienteId: p.ClienteId, clienteNome: p.ClienteNome, processoId: p.id, chaveUnica: `parado_${p.id}_${ultAlt}` });
+          }
+        }
+      }
+
+      if (p.Restituido) {
+        add(p.Responsavel, 'restituido', 'Processo Restituído',
+          `${p.ClienteNome||'Cliente'} — ${p.TipoProcesso||''} está marcado como Restituído.`,
+          { clienteId: p.ClienteId, clienteNome: p.ClienteNome, processoId: p.id, chaveUnica: `restituido_${p.id}_${hojeStr}` });
+      }
+
+      if (p.TipoProcesso === 'Defesa de Notificação') {
+        let dados = {};
+        try { dados = JSON.parse(p.DadosEspecificosJSON || '{}'); } catch(e) {}
+        if (dados.dataMaximaProtocolo) {
+          const diasRestantes = Math.floor((new Date(dados.dataMaximaProtocolo + 'T00:00:00') - hoje) / 86400000);
+          const msgDias = diasRestantes < 0 ? `venceu há ${Math.abs(diasRestantes)} dia(s)` : diasRestantes === 0 ? 'vence hoje' : `faltam ${diasRestantes} dia(s)`;
+          add(p.Responsavel, 'defesa_notificacao', 'Defesa de Notificação — Prazo de Protocolo',
+            `${p.ClienteNome||'Cliente'}: ${msgDias} para o protocolo (${fmtDate(dados.dataMaximaProtocolo)}).`,
+            { clienteId: p.ClienteId, clienteNome: p.ClienteNome, processoId: p.id, chaveUnica: `defesanotif_${p.id}_${hojeStr}` });
+        }
+      }
+    });
+
+    if (alterou) await App.graph._writeFile('notificacoes', notificacoes);
+  } catch(e) { console.error('gerarNotificacoesAutomaticas:', e); }
+}
+
+async function atualizarBadgeNotificacoes() {
+  try {
+    const user = getCurrentUserName();
+    const lista = await App.graph._readFile('notificacoes').catch(() => []);
+    const minhas = (Array.isArray(lista) ? lista : []).filter(n => n.usuario === user);
+    window._minhasNotificacoes = minhas;
+    const naoLidas = minhas.filter(n => !n.lida).length;
+    const badge = document.getElementById('sino-badge');
+    if (badge) {
+      if (naoLidas > 0) { badge.style.display = ''; badge.textContent = naoLidas > 99 ? '99+' : String(naoLidas); }
+      else badge.style.display = 'none';
+    }
+    return naoLidas;
+  } catch(e) { return 0; }
+}
+
+function abrirPopupNotificacoes() {
+  const lista = (window._minhasNotificacoes || []).slice().sort((a,b) => (b.criadaEm||'').localeCompare(a.criadaEm||''));
+  document.getElementById('modal-notificacoes')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modal-notificacoes';
+  modal.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this) this.remove()">
+      <div style="background:#fff;border-radius:14px;padding:20px;max-width:560px;width:100%;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+          <h3 style="margin:0;font-size:16px"><i class="bi bi-bell-fill me-2"></i>Notificações</h3>
+          <div style="display:flex;gap:8px;align-items:center">
+            ${lista.some(n=>!n.lida) ? `<button class="btn btn-ghost btn-sm" onclick="marcarTodasNotificacoesLidas()">Marcar todas como lidas</button>` : ''}
+            <button onclick="document.getElementById('modal-notificacoes').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:#666;line-height:1">×</button>
+          </div>
+        </div>
+        ${lista.length === 0
+          ? `<div class="empty-state" style="padding:24px"><i class="bi bi-bell-slash"></i><p>Nenhuma notificação.</p></div>`
+          : lista.map(n => `
+            <div style="padding:12px;border-bottom:1px solid var(--border);cursor:pointer;background:${n.lida?'transparent':'#eff6ff'}" onclick="abrirNotificacao('${n.id}')">
+              <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
+                <div style="font-weight:700;font-size:13px">${!n.lida?'<span style="color:#2563eb">● </span>':''}${esc(n.titulo)}</div>
+                <span style="font-size:11px;color:var(--text-muted);white-space:nowrap">${fmtDate(n.data)}</span>
+              </div>
+              <div style="font-size:12px;color:#374151;margin-top:4px">${esc(n.mensagem)}</div>
+            </div>`).join('')}
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
+async function marcarNotificacaoLida(id) {
+  try {
+    const lista = await App.graph._readFile('notificacoes').catch(() => []);
+    const arr = Array.isArray(lista) ? lista : [];
+    const idx = arr.findIndex(n => String(n.id) === String(id));
+    if (idx >= 0 && !arr[idx].lida) {
+      arr[idx].lida = true;
+      arr[idx].dataLeitura = new Date().toISOString();
+      await App.graph._writeFile('notificacoes', arr);
+    }
+  } catch(e) {}
+}
+
+async function abrirNotificacao(id) {
+  const n = (window._minhasNotificacoes || []).find(x => String(x.id) === String(id));
+  document.getElementById('modal-notificacoes')?.remove();
+  await marcarNotificacaoLida(id);
+  await atualizarBadgeNotificacoes();
+  if (n) {
+    if (n.processoId) navigate('processos/detalhe', { id: n.processoId });
+    else if (n.demandaId) navigate('minhas-demandas');
+    else if (n.clienteId) navigate('clientes/perfil', { id: n.clienteId });
+  }
+}
+
+async function marcarTodasNotificacoesLidas() {
+  showLoading();
+  try {
+    const user = getCurrentUserName();
+    const lista = await App.graph._readFile('notificacoes').catch(() => []);
+    const arr = Array.isArray(lista) ? lista : [];
+    const agora = new Date().toISOString();
+    arr.forEach(n => { if (n.usuario === user && !n.lida) { n.lida = true; n.dataLeitura = agora; } });
+    await App.graph._writeFile('notificacoes', arr);
+    await atualizarBadgeNotificacoes();
+    document.getElementById('modal-notificacoes')?.remove();
+    toast('Notificações marcadas como lidas.', 'success');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+function alertaNovasNotificacoes(n) {
+  document.getElementById('modal-alerta-notif')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modal-alerta-notif';
+  modal.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px">
+      <div style="background:#fff;border-radius:14px;padding:24px;max-width:380px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.25);text-align:center">
+        <i class="bi bi-bell-fill" style="font-size:32px;color:#2563eb"></i>
+        <h3 style="margin:12px 0 8px;font-size:16px">Você tem ${n} notificaç${n>1?'ões':'ão'} não lida${n>1?'s':''}</h3>
+        <p style="font-size:13px;color:var(--text-muted);margin:0 0 20px">Confira os avisos pendentes sobre seus processos e demandas.</p>
+        <div style="display:flex;gap:10px;justify-content:center">
+          <button onclick="document.getElementById('modal-alerta-notif').remove()" class="btn btn-outline btn-sm">Depois</button>
+          <button onclick="document.getElementById('modal-alerta-notif').remove();abrirPopupNotificacoes()" class="btn btn-primary btn-sm">Ver agora</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
+// ============================================================
 // PROCESSOS — EDITAR
 // ============================================================
 async function renderProcessoEditar(id) {
@@ -6918,6 +7156,7 @@ async function renderProcessoEditar(id) {
 
   const d = (f) => processo[f] ? processo[f].split('T')[0] : '';
   const tipoPag = processo.TipoPagamento || 'À vista';
+  const lockValor = !!processo.demandaId && !isAdminUser();
 
   document.getElementById('page-content').innerHTML = `
   <div style="margin-bottom:12px"><span style="color:var(--text-muted);font-size:13px">Cliente: </span><strong>${esc(processo.ClienteNome||'—')}</strong> &nbsp;·&nbsp; <span style="color:var(--text-muted);font-size:13px">Tipo: </span><strong>${esc(processo.TipoProcesso||'—')}</strong></div>
@@ -6949,7 +7188,7 @@ async function renderProcessoEditar(id) {
       <div class="form-section-title">Pagamento</div>
       <div class="form-body">
         <div class="form-grid">
-          <div><label>Valor do Processo (R$)</label><input type="number" name="ValorProcesso" step="0.01" min="0" value="${processo.ValorProcesso||''}" placeholder="0,00" oninput="calcularParcelasEdit()" /></div>
+          <div><label>Valor do Processo (R$)</label><input type="number" name="ValorProcesso" step="0.01" min="0" value="${processo.ValorProcesso||''}" placeholder="0,00" oninput="calcularParcelasEdit()" ${lockValor?'readonly style="background:var(--bg-secondary)"':''} /></div>
           <div>
             <label>Tipo de Pagamento</label>
             <div class="checkbox-group">
@@ -7953,12 +8192,18 @@ async function renderOrcamentoForm(clienteId = null, orcId = null) {
     <div class="card">
       <div class="card-header"><h3><i class="bi bi-calculator me-2"></i>${modoEdicao ? 'Editar Orçamento' : 'Novo Orçamento'}</h3></div>
       <div class="card-body">
-        <div style="margin-bottom:16px">
-          <label>Cliente</label>
-          <select id="orc-cliente-sel" style="margin-top:4px" onchange="atualizarOrcamento();onOrcClienteChange(this.value)">
-            <option value="">Selecione o cliente...</option>
-            ${sorted.map(c => `<option value="${esc(c.id)}|${esc(c.Title)}|${esc(c.Celular||'')}" ${String(c.id)===String(clienteId)?'selected':''} ${isClienteInativo(c)?'disabled':''}>${esc(c.Title)}${isClienteInativo(c)?' (Inativo)':''}</option>`).join('')}
-          </select>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px">
+          <div style="flex:1;min-width:220px">
+            <label>Cliente</label>
+            <select id="orc-cliente-sel" style="margin-top:4px" onchange="atualizarOrcamento();onOrcClienteChange(this.value)">
+              <option value="">Selecione o cliente...</option>
+              ${sorted.map(c => `<option value="${esc(c.id)}|${esc(c.Title)}|${esc(c.Celular||'')}" ${String(c.id)===String(clienteId)?'selected':''} ${isClienteInativo(c)?'disabled':''}>${esc(c.Title)}${isClienteInativo(c)?' (Inativo)':''}</option>`).join('')}
+            </select>
+          </div>
+          <div style="min-width:160px">
+            <label>Data do Orçamento</label>
+            <input type="date" id="orc-data" style="margin-top:4px" value="${esc((orcExistente?.data || new Date().toISOString().split('T')[0]))}" title="Define a prioridade dos processos quando criados a partir da demanda gerada por este orçamento" />
+          </div>
         </div>
         <div id="orc-endereco-panel" style="display:none;margin-bottom:16px"></div>
         <div id="orc-armas-panel" style="display:none;margin-bottom:16px"></div>
@@ -8192,6 +8437,7 @@ async function salvarOrcamento() {
   const parts = (sel?.value || '').split('|');
   const clienteId   = parts[0] || '';
   const clienteNome = parts[1] || '';
+  const dataOrc = document.getElementById('orc-data')?.value || new Date().toISOString().split('T')[0];
 
   const linhas = [];
   let total = 0;
@@ -8222,6 +8468,7 @@ async function salvarOrcamento() {
           ...lista[idx],
           clienteId,
           clienteNome,
+          data:    dataOrc,
           itens:   linhas,
           desconto: desconto || undefined,
           total:   totalFinal,
@@ -8240,7 +8487,7 @@ async function salvarOrcamento() {
         numero,
         clienteId,
         clienteNome,
-        data:         new Date().toISOString().split('T')[0],
+        data:         dataOrc,
         itens:        linhas,
         desconto:     desconto || undefined,
         total:        totalFinal,
@@ -8369,6 +8616,7 @@ async function aprovarOrcamento(orcId, clienteId, source) {
       numero:          numDemanda,
       orcamentoId:     orc.id,
       orcamentoNumero: orc.numero || '—',
+      orcamentoData:   orc.data || hoje,
       clienteId:       orc.clienteId,
       clienteNome:     orc.clienteNome,
       itens:           orc.itens,
@@ -8661,6 +8909,11 @@ async function delegarDemanda(demandaId, operador) {
       delegadoPor: getCurrentUserName(),
     };
     await App.graph._writeFile('demandas', arr);
+    const demanda = arr[idx];
+    const tiposTxt = (demanda.itens || []).map(i => i.tipo).join(', ') || 'serviços diversos';
+    await criarNotificacao(operador, 'demanda_recebida', 'Nova Demanda Recebida',
+      `${demanda.clienteNome || 'Cliente'} — ${tiposTxt}`,
+      { clienteId: demanda.clienteId, clienteNome: demanda.clienteNome, demandaId: demanda.id, chaveUnica: `demanda_${demanda.id}_${operador}` });
     toast(`Demanda delegada para ${operador}.`, 'success');
     await renderControleDemandas();
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
@@ -8696,7 +8949,7 @@ async function renderMinhasDemandas() {
             </div>
           </div>
           ${!concluido && d.status === 'Aberta'
-            ? `<button class="btn btn-primary btn-sm" onclick="navigate('processos/novo',{clienteId:'${d.clienteId}',demandaId:'${d.id}',demandaNumero:'${esc(d.numero||'')}',tipoProcesso:encodeURIComponent('${esc(item.tipo)}'),valorDemanda:'${item.valor||0}'})">
+            ? `<button class="btn btn-primary btn-sm" onclick="navigate('processos/novo',{clienteId:'${d.clienteId}',demandaId:'${d.id}',demandaNumero:'${esc(d.numero||'')}',tipoProcesso:encodeURIComponent('${esc(item.tipo)}'),valorDemanda:'${item.valor||0}',dataOrcamento:'${esc(d.orcamentoData||'')}'})">
                 <i class="bi bi-plus-lg me-1"></i>Abrir Processo
               </button>`
             : `<button class="btn btn-outline btn-sm" disabled>${concluido ? 'Concluído' : 'Encerrada'}</button>`}
@@ -8962,6 +9215,20 @@ async function iniciarApp() {
   registrarMovimentacao('Login', '');
 
   renderPage();
+
+  // Notificações: gera automáticas, atualiza o sino e avisa se houver novas (uma vez por sessão do navegador)
+  (async () => {
+    await gerarNotificacoesAutomaticas();
+    const naoLidas = await atualizarBadgeNotificacoes();
+    if (naoLidas > 0 && !sessionStorage.getItem('notif_popup_mostrado')) {
+      sessionStorage.setItem('notif_popup_mostrado', '1');
+      setTimeout(() => alertaNovasNotificacoes(naoLidas), 800);
+    }
+  })();
+  if (!window._notifPollingAtivo) {
+    window._notifPollingAtivo = true;
+    setInterval(() => { atualizarBadgeNotificacoes(); }, 5 * 60 * 1000);
+  }
 }
 
 async function init() {
