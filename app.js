@@ -2398,7 +2398,7 @@ async function renderDocumentoForm(clienteId, id = null) {
                 <option value="Tiro Esportivo"          ${d.TipoGuia==='Tiro Esportivo'?'selected':''}>Tiro Esportivo</option>
               </select>
             </div>
-            <div><label>N° GT</label><input name="NumeroGT" value="${esc(d.NumeroGT||'')}" placeholder="Preenchido automaticamente ao deferir o processo" /></div>
+            <div><label>N° GT</label><input name="NumeroGT" value="${esc(d.NumeroGT||'')}" /></div>
           </div>
           <div id="guia-caca" style="display:none;margin-top:8px">
             <div class="form-grid">
@@ -5678,7 +5678,7 @@ async function gerarAutorizacaoCaca(clienteId, simafIndex) {
         <div style="margin-top:50px;text-align:center">
           <div style="border-top:1px solid #000;width:400px;margin:0 auto 6px"></div>
         </div>
-        <p style="color:#cc0000;font-weight:bold;margin-top:10px">ATENÇÃO: Esta autorização somente terá validade com firma reconhecida em tabelionato, seja por autenticidade ou por semelhança.</p>
+        <p style="color:#cc0000;font-weight:bold;margin-top:10px">ATENÇÃO: Se esta autorização for impressa, somente terá validade com firma reconhecida em tabelionato, seja por autenticidade ou por semelhança.</p>
         <p style="margin-top:6px"><strong>NOTA: Documentos necessários para portar junto com esta autorização:</strong><br>
         <span style="font-size:9.5pt">1) Certificado de registro (CR); 2) Certificado de registro de arma de fogo (CRAF); 3) Guia de trânsito (GT); 4) Certificado Técnico Federal junto do IBAMA (CTF), 5) Autorização de Manejo do Javali. (SIMAF), 6) Documento de identificação válido, 7) No caso de uso de cães: certificado anual de vacinação dos animais (em dia) e atestado de saúde - assinado por médico veterinário com validade máxima de 30 dias.</span></p>
         <p style="color:#cc6600;font-weight:bold;margin-top:6px">⚠ Atenção: Cabe ao portador, a responsabilidade de garantir que toda a documentação esteja válida.</p>
@@ -7020,7 +7020,7 @@ async function gerarNotificacoesAutomaticas() {
         }
       }
 
-      if (p.Restituido) {
+      if (p.Status === 'Restituído') {
         add(p.Responsavel, 'restituido', 'Processo Restituído',
           `${p.ClienteNome||'Cliente'} — ${p.TipoProcesso||''} está marcado como Restituído.`,
           { clienteId: p.ClienteId, clienteNome: p.ClienteNome, processoId: p.id, chaveUnica: `restituido_${p.id}_${hojeStr}` });
@@ -7061,32 +7061,79 @@ async function atualizarBadgeNotificacoes() {
 
 function abrirPopupNotificacoes() {
   const lista = (window._minhasNotificacoes || []).slice().sort((a,b) => (b.criadaEm||'').localeCompare(a.criadaEm||''));
+  const modoSelecao = !!window._notifModoSelecao;
+  if (!modoSelecao) window._notifSelecionadas = new Set();
+  const selecionadas = window._notifSelecionadas || new Set();
   document.getElementById('modal-notificacoes')?.remove();
   const modal = document.createElement('div');
   modal.id = 'modal-notificacoes';
   modal.innerHTML = `
     <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this) this.remove()">
       <div style="background:#fff;border-radius:14px;padding:20px;max-width:560px;width:100%;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:8px;flex-wrap:wrap">
           <h3 style="margin:0;font-size:16px"><i class="bi bi-bell-fill me-2"></i>Notificações</h3>
           <div style="display:flex;gap:8px;align-items:center">
-            ${lista.some(n=>!n.lida) ? `<button class="btn btn-ghost btn-sm" onclick="marcarTodasNotificacoesLidas()">Marcar todas como lidas</button>` : ''}
-            <button onclick="document.getElementById('modal-notificacoes').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:#666;line-height:1">×</button>
+            ${modoSelecao ? `
+              <button id="btn-excluir-notif-sel" class="btn btn-ghost btn-sm" style="color:var(--danger)" ${selecionadas.size===0?'disabled':''} onclick="excluirNotificacoesSelecionadas()"><i class="bi bi-trash"></i> Excluir${selecionadas.size?` (${selecionadas.size})`:''}</button>
+              <button class="btn btn-ghost btn-sm" onclick="toggleModoSelecaoNotificacoes(false)">Cancelar</button>
+            ` : `
+              ${lista.some(n=>!n.lida) ? `<button class="btn btn-ghost btn-sm" onclick="marcarTodasNotificacoesLidas()">Marcar todas como lidas</button>` : ''}
+              ${lista.length ? `<button class="btn btn-ghost btn-sm" onclick="toggleModoSelecaoNotificacoes(true)"><i class="bi bi-check2-square"></i> Selecionar</button>` : ''}
+              <button onclick="document.getElementById('modal-notificacoes').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:#666;line-height:1">×</button>
+            `}
           </div>
         </div>
         ${lista.length === 0
           ? `<div class="empty-state" style="padding:24px"><i class="bi bi-bell-slash"></i><p>Nenhuma notificação.</p></div>`
           : lista.map(n => `
-            <div style="padding:12px;border-bottom:1px solid var(--border);cursor:pointer;background:${n.lida?'transparent':'#eff6ff'}" onclick="abrirNotificacao('${n.id}')">
-              <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
-                <div style="font-weight:700;font-size:13px">${!n.lida?'<span style="color:#2563eb">● </span>':''}${esc(n.titulo)}</div>
-                <span style="font-size:11px;color:var(--text-muted);white-space:nowrap">${fmtDate(n.data)}</span>
+            <div style="padding:12px;border-bottom:1px solid var(--border);cursor:pointer;background:${n.lida?'transparent':'#eff6ff'};display:flex;gap:10px;align-items:flex-start" onclick="${modoSelecao ? `toggleSelecaoNotificacao('${n.id}',!document.getElementById('chk-notif-${n.id}').checked)` : `abrirNotificacao('${n.id}')`}">
+              ${modoSelecao ? `<input type="checkbox" id="chk-notif-${n.id}" style="margin-top:3px;flex-shrink:0" ${selecionadas.has(String(n.id))?'checked':''} onclick="event.stopPropagation();toggleSelecaoNotificacao('${n.id}',this.checked)" />` : ''}
+              <div style="flex:1;min-width:0">
+                <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
+                  <div style="font-weight:700;font-size:13px">${!n.lida?'<span style="color:#2563eb">● </span>':''}${esc(n.titulo)}</div>
+                  <span style="font-size:11px;color:var(--text-muted);white-space:nowrap">${fmtDate(n.data)}</span>
+                </div>
+                <div style="font-size:12px;color:#374151;margin-top:4px">${esc(n.mensagem)}</div>
               </div>
-              <div style="font-size:12px;color:#374151;margin-top:4px">${esc(n.mensagem)}</div>
             </div>`).join('')}
       </div>
     </div>`;
   document.body.appendChild(modal);
+}
+
+function toggleModoSelecaoNotificacoes(on) {
+  window._notifModoSelecao = on;
+  window._notifSelecionadas = new Set();
+  abrirPopupNotificacoes();
+}
+
+function toggleSelecaoNotificacao(id, checked) {
+  window._notifSelecionadas = window._notifSelecionadas || new Set();
+  if (checked) window._notifSelecionadas.add(String(id));
+  else window._notifSelecionadas.delete(String(id));
+  const btn = document.getElementById('btn-excluir-notif-sel');
+  if (btn) {
+    const n = window._notifSelecionadas.size;
+    btn.disabled = n === 0;
+    btn.innerHTML = `<i class="bi bi-trash"></i> Excluir${n?` (${n})`:''}`;
+  }
+}
+
+async function excluirNotificacoesSelecionadas() {
+  const ids = Array.from(window._notifSelecionadas || []);
+  if (!ids.length) return;
+  if (!confirm(`Excluir ${ids.length} notificação(ões) selecionada(s)? Esta ação não pode ser desfeita.`)) return;
+  showLoading();
+  try {
+    const lista = await App.graph._readFile('notificacoes').catch(() => []);
+    const arr = (Array.isArray(lista) ? lista : []).filter(n => !ids.includes(String(n.id)));
+    await App.graph._writeFile('notificacoes', arr);
+    window._notifModoSelecao = false;
+    window._notifSelecionadas = new Set();
+    await atualizarBadgeNotificacoes();
+    toast('Notificação(ões) excluída(s).', 'success');
+    abrirPopupNotificacoes();
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 async function marcarNotificacaoLida(id) {
