@@ -157,29 +157,13 @@ function toTitleCase(s) {
 }
 // Calcula quanto foi recebido e quanto está pendente num processo
 function calcPagamento(p) {
-  const hoje = new Date(); hoje.setHours(0,0,0,0);
   const valor = Number(p.ValorProcesso) || 0;
   if (!valor) return { recebido: 0, pendente: 0 };
-
-  if (p.TipoPagamento === 'Parcelado') {
-    const entrada      = Number(p.ValorEntrada) || 0;
-    const nParcelas    = Number(p.NumeroParcelas) || 0;
-    const valorParcela = Number(p.ValorParcelas) || 0;
-    const entradaPaga  = p.DataPagamento && new Date(p.DataPagamento.split('T')[0] + 'T00:00:00') <= hoje;
-
-    let parcelasRecebidas = 0;
-    if (nParcelas > 0 && p.DataVencimentoParcelas) {
-      for (let i = 0; i < nParcelas; i++) {
-        const dpIso = calcDataParcela(p.DataVencimentoParcelas, i);
-        if (dpIso && new Date(dpIso + 'T00:00:00') <= hoje) parcelasRecebidas++;
-      }
-    }
-    const recebido = (entradaPaga ? entrada : 0) + valorParcela * parcelasRecebidas;
-    return { recebido: Math.max(0, recebido), pendente: Math.max(0, valor - recebido) };
-  }
-  // À vista
-  const pago = p.DataPagamento && new Date(p.DataPagamento.split('T')[0] + 'T00:00:00') <= hoje;
-  return pago ? { recebido: valor, pendente: 0 } : { recebido: 0, pendente: valor };
+  // Fonte única de verdade: PagamentosJSON (mesma usada na tela do processo e em Pagamentos Pendentes).
+  // getItensPendentesProcesso devolve os itens ainda NÃO marcados como pagos.
+  const pendente = getItensPendentesProcesso(p).reduce((s, i) => s + (Number(i.valor) || 0), 0);
+  const recebido = Math.max(0, valor - pendente);
+  return { recebido, pendente: Math.max(0, pendente) };
 }
 
 function fmtMoeda(v) {
@@ -8528,6 +8512,7 @@ async function salvarOrcamento() {
           total:   totalFinal,
         };
         await App.graph._writeFile('orcamentos', lista);
+        if (desconto > 0) await aplicarDescontoProcessosOrcamento(orcId, linhas, total, totalFinal);
         toast('Orçamento atualizado!', 'success');
         window._orcamentoEditando = null;
         navigate('clientes/perfil', { id: clienteId, tab: 'orcamentos' });
@@ -8556,6 +8541,38 @@ async function salvarOrcamento() {
       if (clienteId) navigate('clientes/perfil', { id: clienteId, tab: 'orcamentos' });
     }
   } catch(e) { toast('Erro ao salvar: ' + e.message, 'error'); } finally { hideLoading(); }
+}
+
+// Aplica o desconto do orçamento proporcionalmente ao valor de cada processo já
+// criado a partir da(s) demanda(s) desse orçamento. Usa o valor bruto do item
+// como base (não o valor atual) para evitar acumular desconto em salvamentos repetidos.
+async function aplicarDescontoProcessosOrcamento(orcId, itens, totalBruto, totalFinal) {
+  try {
+    if (!orcId || !(totalBruto > 0)) return;
+    const ratio = totalFinal / totalBruto;
+    const demandasRaw = await App.graph._readFile('demandas').catch(() => []);
+    const demandaIds = new Set(
+      (Array.isArray(demandasRaw) ? demandasRaw : [])
+        .filter(d => String(d.orcamentoId) === String(orcId))
+        .map(d => String(d.id))
+    );
+    if (!demandaIds.size) return;
+    const valorPorTipo = {};
+    (itens || []).forEach(it => { valorPorTipo[it.tipo] = Number(it.valor) || 0; });
+    const processos = await App.getProcessos();
+    const vinculados = processos.filter(p => p.demandaId && demandaIds.has(String(p.demandaId)));
+    let alterou = false;
+    for (const p of vinculados) {
+      const base = valorPorTipo[p.TipoProcesso];
+      if (base == null) continue;
+      const novoValor = Math.round(base * ratio * 100) / 100;
+      if (Number(p.ValorProcesso) !== novoValor) {
+        await App.graph.updateItem(CONFIG.listas.processos, p.id, { ValorProcesso: novoValor });
+        alterou = true;
+      }
+    }
+    if (alterou) App.invalidateCache('processos');
+  } catch(e) { console.error('aplicarDescontoProcessosOrcamento:', e); }
 }
 
 async function renderPerfilOrcamentos(clienteId) {
@@ -8846,10 +8863,10 @@ async function renderControleDemandas() {
           : `<span class="badge badge-green">Concluída</span>`;
 
       // Progresso: conta processos vinculados
-      const progItems = (d.itens||[]).map(item => {
+      const progItems = (d.itens||[]).map((item, itemIdx) => {
         const criados = processos.filter(p => p.demandaId && String(p.demandaId) === String(d.id) && p.TipoProcesso === item.tipo).length;
         const pct = item.qtd > 0 ? Math.min(100, Math.round(criados/item.qtd*100)) : 100;
-        const obsBtn = item.obs ? `<button class="btn btn-ghost btn-sm" style="padding:0 2px" title="${esc(item.obs)}"><i class="bi bi-eye" style="color:var(--accent)"></i></button>` : '';
+        const obsBtn = `<button class="btn btn-ghost btn-sm" style="padding:0 2px" onclick="editarObsItemDemanda('${d.id}',${itemIdx})" title="${item.obs ? 'Editar observação: ' + esc(item.obs) : 'Adicionar observação'}"><i class="bi ${item.obs ? 'bi-chat-left-text-fill' : 'bi-chat-left-text'}" style="color:${item.obs ? 'var(--accent)' : 'var(--text-muted)'}"></i></button>`;
         return `<div style="font-size:12px;margin-bottom:2px;display:flex;align-items:center;gap:2px">${item.qtd>1?item.qtd+'× ':''}${esc(item.tipo)} <span style="color:${criados>=item.qtd?'var(--success)':'var(--text-muted)'}">(${criados}/${item.qtd})</span> <span style="color:var(--text-muted)">· ${fmtMoeda(item.valor||0)}</span>${obsBtn}</div>`;
       }).join('');
 
@@ -8948,14 +8965,65 @@ async function excluirDemanda(demandaId) {
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
+async function editarObsItemDemanda(demandaId, itemIdx) {
+  const lista = await App.graph._readFile('demandas').catch(() => []);
+  const arr = Array.isArray(lista) ? lista : [];
+  const demanda = arr.find(d => String(d.id) === String(demandaId));
+  if (!demanda || !demanda.itens || !demanda.itens[itemIdx]) { toast('Item não encontrado.', 'error'); return; }
+  const item = demanda.itens[itemIdx];
+  document.getElementById('modal-obs-item-demanda')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modal-obs-item-demanda';
+  modal.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this) this.remove()">
+      <div style="background:#fff;border-radius:14px;padding:22px;max-width:460px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+        <h3 style="margin:0 0 4px;font-size:16px"><i class="bi bi-chat-left-text me-2"></i>Observação do Serviço</h3>
+        <p style="font-size:13px;color:var(--text-muted);margin:0 0 12px">${esc(item.tipo)} — Demanda ${esc(demanda.numero||'')}</p>
+        <textarea id="txt-obs-item-demanda" rows="4" style="width:100%;box-sizing:border-box;font-size:13px;resize:vertical" placeholder="Digite uma observação para este serviço...">${esc(item.obs||'')}</textarea>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
+          <button class="btn btn-outline btn-sm" onclick="document.getElementById('modal-obs-item-demanda').remove()">Cancelar</button>
+          <button class="btn btn-primary btn-sm" onclick="salvarObsItemDemanda('${demandaId}',${itemIdx})"><i class="bi bi-floppy me-1"></i>Salvar</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  setTimeout(() => document.getElementById('txt-obs-item-demanda')?.focus(), 50);
+}
+
+async function salvarObsItemDemanda(demandaId, itemIdx) {
+  const novoTexto = (document.getElementById('txt-obs-item-demanda')?.value || '').trim();
+  showLoading();
+  try {
+    const lista = await App.graph._readFile('demandas').catch(() => []);
+    const arr = Array.isArray(lista) ? lista : [];
+    const idx = arr.findIndex(d => String(d.id) === String(demandaId));
+    if (idx < 0 || !arr[idx].itens || !arr[idx].itens[itemIdx]) throw new Error('Item não encontrado.');
+    if (novoTexto) arr[idx].itens[itemIdx].obs = novoTexto;
+    else delete arr[idx].itens[itemIdx].obs;
+    await App.graph._writeFile('demandas', arr);
+    document.getElementById('modal-obs-item-demanda')?.remove();
+    toast('Observação salva.', 'success');
+    await renderControleDemandas();
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
 async function delegarDemanda(demandaId, operador) {
-  if (!operador) return;
   showLoading();
   try {
     const lista = await App.graph._readFile('demandas').catch(() => []);
     const arr = Array.isArray(lista) ? lista : [];
     const idx = arr.findIndex(d => String(d.id) === String(demandaId));
     if (idx < 0) throw new Error('Demanda não encontrada.');
+    if (!operador) {
+      // "Delegar a..." (vazio) selecionado em uma demanda já delegada → volta a Aguardando Delegação
+      if (arr[idx].operador || arr[idx].status === 'Aberta') {
+        arr[idx] = { ...arr[idx], operador: null, status: 'Aguardando Delegação', dataDelegacao: null, delegadoPor: null };
+        await App.graph._writeFile('demandas', arr);
+        toast('Demanda retornada para Aguardando Delegação.', 'info');
+        await renderControleDemandas();
+      }
+      return;
+    }
     arr[idx] = {
       ...arr[idx],
       operador,
