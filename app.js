@@ -166,6 +166,58 @@ function calcPagamento(p) {
   return { recebido, pendente: Math.max(0, pendente) };
 }
 
+// ============================================================
+// PAGAMENTO DO ORÇAMENTO (modelo por orçamento)
+// ============================================================
+const FORMAS_PAG_ORC = ['Pix', 'Dinheiro', 'Cartão'];
+const BANCOS_ORC     = ['Sicredi', 'Banco do Brasil', 'Cresol'];
+const PARCELAS_OPTS  = [2,3,4,5,6,7,8,9,10,11,12];
+
+// Retorna: 'aberto' | 'pago' | 'pago_parcial' | 'devedor'
+function statusPagamentoOrcamento(orc) {
+  const pg = orc && orc.pagamento;
+  if (!pg || !pg.modalidade) return 'aberto';
+  if (pg.modalidade === 'avista') return 'pago';
+  // parcelado
+  if (pg.formaPagamento === 'Cartão') return 'pago'; // cartão: sem controle de parcelas
+  const parcelas = Array.isArray(pg.parcelas) ? pg.parcelas : [];
+  if (!parcelas.length) return 'pago';
+  if (parcelas.every(p => p.pago)) return 'pago';
+  const hoje = new Date().toISOString().split('T')[0];
+  const temAtrasada = parcelas.some(p => !p.pago && p.dataVencimento && p.dataVencimento < hoje);
+  return temAtrasada ? 'devedor' : 'pago_parcial';
+}
+
+// Badge para a situação do processo (usado no detalhe do processo e em Extras)
+function badgePagamentoProcesso(status) {
+  switch (status) {
+    case 'pago':         return { cls:'badge-green',  txt:'Processo Pago' };
+    case 'pago_parcial': return { cls:'badge-orange', txt:'Processo com Pagamento Parcial' };
+    case 'devedor':      return { cls:'badge-red',    txt:'Processo com Pagamento Devedor' };
+    default:             return { cls:'badge-gray',   txt:'Pagamento em aberto' };
+  }
+}
+
+// Cache dos orçamentos/demandas para resolver o status de pagamento de um processo
+async function _carregarOrcamentosDemandas() {
+  const [orcRaw, demRaw] = await Promise.all([
+    App.graph._readFile('orcamentos').catch(() => []),
+    App.graph._readFile('demandas').catch(() => []),
+  ]);
+  return {
+    orcamentos: Array.isArray(orcRaw) ? orcRaw : [],
+    demandas:   Array.isArray(demRaw) ? demRaw : [],
+  };
+}
+
+// Dado um processo com demandaId, encontra o orçamento de origem
+function orcamentoDoProcesso(processo, orcamentos, demandas) {
+  if (!processo || !processo.demandaId) return null;
+  const demanda = demandas.find(d => String(d.id) === String(processo.demandaId));
+  if (!demanda || !demanda.orcamentoId) return null;
+  return orcamentos.find(o => String(o.id) === String(demanda.orcamentoId)) || null;
+}
+
 function fmtMoeda(v) {
   if (v === null || v === undefined || v === '') return '—';
   return Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -3361,7 +3413,7 @@ function buildCamposAtualizacaoDoc() {
 }
 
 function buildEndOrigemGuiaOpts() {
-  const cli = window._processoClienteObj;
+  const cli = _processoClienteObj;
   if (!cli) return '';
   const end1 = [cli.Endereco1, cli.Numero1, cli.Bairro1, cli.Cidade1, cli.UF1Endereco].filter(Boolean).join(', ');
   const end2 = [cli.Endereco2, cli.Numero2, cli.Bairro2, cli.Cidade2, cli.UF2Endereco].filter(Boolean).join(', ');
@@ -4511,6 +4563,18 @@ async function renderProcessoDetalhe(id) {
   } catch(e) {}
   const dadosEspRaw = JSON.parse(processo.DadosEspecificosJSON || '{}');
 
+  // Modelo novo (por orçamento): processos vindos de uma demanda mostram o orçamento
+  // vinculado + situação de pagamento; processos antigos (sem demandaId) mantêm o quadro "Dados de Pagamento".
+  const usaModeloOrcamento = !!processo.demandaId;
+  let _orcVinculado = null, _demandaVinculada = null;
+  if (processo.demandaId) {
+    try {
+      const { orcamentos, demandas } = await _carregarOrcamentosDemandas();
+      _demandaVinculada = demandas.find(d => String(d.id) === String(processo.demandaId)) || null;
+      _orcVinculado = orcamentoDoProcesso(processo, orcamentos, demandas);
+    } catch(e) {}
+  }
+
   // Pré-processa dadosEsp: resolve IDs de cliente para nomes e IDs de arma para descrição
   const dadosEsp = {};
   {
@@ -4570,6 +4634,7 @@ async function renderProcessoDetalhe(id) {
         <div>
           <div style="font-size:18px;font-weight:700;margin-bottom:4px">${esc(processo.TipoProcesso||'—')}${processo.Restituido ? ' <span style="background:#9333ea;color:#fff;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:700;vertical-align:middle"><i class="bi bi-arrow-return-left"></i> Restituído</span>' : ''}</div>
           ${processo.Responsavel ? `<div style="font-size:12px;color:var(--text-muted);margin-bottom:4px"><i class="bi bi-person-check me-1"></i>Responsável: <strong style="color:#1f2937">${esc(processo.Responsavel)}</strong></div>` : ''}
+          ${(processo.demandaNumero || _demandaVinculada) ? `<div style="font-size:12px;color:var(--text-muted);margin-bottom:4px"><i class="bi bi-clipboard-check me-1"></i>Demanda: <strong style="color:#1f2937">${esc(processo.demandaNumero || _demandaVinculada?.numero || '—')}</strong>${_orcVinculado ? ` <span style="color:var(--text-muted)">· Orçamento ${esc(_orcVinculado.numero||'')}</span>` : ''}</div>` : ''}
           <div style="color:var(--text-muted);font-size:13px">
             <strong>${esc(processo.ClienteNome||'—')}</strong>
             &nbsp;·&nbsp; Protocolo: ${esc(processo.NumeroProtocolo||'—')}
@@ -4672,7 +4737,7 @@ async function renderProcessoDetalhe(id) {
           </div>
         </div>` : ''}
 
-        <div id="dados-pagamento-wrapper">${renderDadosPagamento(processo)}</div>
+        <div id="dados-pagamento-wrapper">${usaModeloOrcamento ? renderPagamentoViaOrcamento(_orcVinculado) : renderDadosPagamento(processo)}</div>
 
       </div>
 
@@ -5034,6 +5099,7 @@ async function deferirProcesso(id) {
             NomeClubeTiro:     dados.nomeClube || '',
             CRClubeTiro:       dados.crClube || '',
             EnderecoClubeTiro: dados.enderecoClube || '',
+            EnderecoGuia:      dados.endOrigemGuia || '',
             NumeroGT:     p.NumeroProtocolo || '',
             DataEmissao:  _dataEmissaoGuia || null,
             DataValidade: _dataValidadeGuia || null,
@@ -6557,13 +6623,16 @@ function imprimirExtras(responsavel) {
 
 async function renderPagamentosExtras() {
   document.getElementById('page-title').textContent = 'Pagamentos de Extras';
-  const [processos, avulsosRaw, extrasPagosMesRaw] = await Promise.all([
+  const [processos, avulsosRaw, extrasPagosMesRaw, orcDemRaw] = await Promise.all([
     App.getProcessos(),
     App.graph._readFile('extras_avulsos').catch(() => []),
     App.graph._readFile('extras_pagos_mes').catch(() => []),
+    _carregarOrcamentosDemandas(),
   ]);
   const avulsos = Array.isArray(avulsosRaw) ? avulsosRaw : [];
   const extrasPagosMes = Array.isArray(extrasPagosMesRaw) ? extrasPagosMesRaw : [];
+  const _orcExtras = orcDemRaw.orcamentos;
+  const _demExtras = orcDemRaw.demandas;
   window._extrasProcessos = processos;
   window._extrasAvulsos = avulsos;
   window._extrasPagosMes = extrasPagosMes;
@@ -6614,14 +6683,23 @@ async function renderPagamentosExtras() {
         const taxa = TAXAS_PROCESSO[p.TipoProcesso] || 0;
         const extra = Math.max(0, valor - taxa) * 0.1;
         const desc = getProcessoDescExtra(p);
-        const pendente = getItensPendentesProcesso(p).length > 0;
         const infoPag = infoPagamentoProcessoTxt(p);
+        // Situação de pagamento via orçamento vinculado (modelo novo); legado usa PagamentosJSON
+        let badgePagHtml = '';
+        if (p.demandaId) {
+          const orcP = orcamentoDoProcesso(p, _orcExtras, _demExtras);
+          const st = statusPagamentoOrcamento(orcP);
+          const bp = badgePagamentoProcesso(st);
+          badgePagHtml = `<div style="margin-top:4px"><span class="badge ${bp.cls}" style="font-size:10px">${bp.txt}</span></div>`;
+        } else if (getItensPendentesProcesso(p).length > 0) {
+          badgePagHtml = `<div style="margin-top:4px"><span class="badge badge-red" style="font-size:10px"><i class="bi bi-exclamation-triangle-fill me-1"></i>Pagamento do cliente pendente</span></div>`;
+        }
         return `<div style="padding:10px 16px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
           <div style="flex:1;min-width:0">
             <a style="font-size:13px;font-weight:600;cursor:pointer;color:var(--accent)" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.ClienteNome||'—')}</a>
             <div style="font-size:12px;color:#374151;margin-top:2px">${esc(p.TipoProcesso||'—')}${desc ? ` <span style="color:var(--text-muted)">· ${esc(desc)}</span>` : ''}</div>
             <div style="font-size:11px;color:var(--text-muted)">Valor total: ${fmtMoeda(valor)}${infoPag ? ` · ${esc(infoPag)}` : ''}</div>
-            ${pendente ? `<div style="margin-top:4px"><span class="badge badge-red" style="font-size:10px"><i class="bi bi-exclamation-triangle-fill me-1"></i>Pagamento do cliente pendente</span></div>` : ''}
+            ${badgePagHtml}
             ${p.Restituido ? `<div style="margin-top:4px"><span class="badge" style="background:#9333ea;color:#fff;font-size:11px"><i class="bi bi-arrow-return-left me-1"></i>Restituído</span></div>` : ''}
           </div>
           <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0">
@@ -7405,6 +7483,49 @@ function _atualizarDataPagDetalhe() {
   } else {
     elDataPag.style.display = (parseFloat(document.querySelector('[name="ValorEntrada"]')?.value) || 0) > 0 ? '' : 'none';
   }
+}
+
+// Card de pagamento para processos do modelo novo (vinculados a um orçamento):
+// mostra o número do orçamento e a situação de pagamento (Pago / Parcial / Devedor).
+function renderPagamentoViaOrcamento(orc) {
+  if (!orc) {
+    return `<div class="card" style="margin-top:20px">
+      <div class="card-header"><h3><i class="bi bi-cash-coin me-2"></i>Pagamento</h3></div>
+      <div class="card-body"><div style="font-size:13px;color:var(--text-muted)"><i class="bi bi-info-circle me-1"></i>Orçamento de origem não encontrado.</div></div>
+    </div>`;
+  }
+  const status = statusPagamentoOrcamento(orc);
+  const b = badgePagamentoProcesso(status);
+  let detalhe = '';
+  const pg = orc.pagamento;
+  if (pg && pg.modalidade === 'avista') {
+    detalhe = `Pago à vista${pg.dataPagamento?` em ${fmtDate(pg.dataPagamento)}`:''}${pg.formaPagamento?` · ${esc(pg.formaPagamento)}`:''}`;
+  } else if (pg && pg.modalidade === 'parcelado') {
+    if (pg.formaPagamento === 'Cartão') {
+      detalhe = `Cartão · ${pg.vezes}x`;
+    } else {
+      const parcelas = pg.parcelas || [];
+      const pagas = parcelas.filter(p => p.pago).length;
+      detalhe = `Parcelado · ${pagas}/${parcelas.length} parcela(s) paga(s)`;
+    }
+  } else {
+    detalhe = 'Pagamento ainda não registrado neste orçamento.';
+  }
+  return `<div class="card" style="margin-top:20px">
+    <div class="card-header"><h3><i class="bi bi-cash-coin me-2"></i>Pagamento</h3></div>
+    <div class="card-body">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:13px">Orçamento <strong>${esc(orc.numero||'—')}</strong> · Total ${fmtMoeda(orc.total)}</div>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:2px">${detalhe}</div>
+        </div>
+        <span class="badge ${b.cls}" style="font-size:12px">${b.txt}</span>
+      </div>
+      <div style="margin-top:10px;text-align:right">
+        <button class="btn btn-outline btn-sm" onclick="abrirPagamentoOrcamento('${orc.id}')"><i class="bi bi-pencil-square me-1"></i>Ver/editar pagamento</button>
+      </div>
+    </div>
+  </div>`;
 }
 
 function renderDadosPagamento(p) {
@@ -8295,6 +8416,10 @@ async function renderOrcamentoForm(clienteId = null, orcId = null) {
             &nbsp;·&nbsp; Cartão: em até 10x com juros da máquina
           </div>
         </div>
+        <div id="orc-pago-box" style="border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:16px">
+          <label class="checkbox-item" style="margin:0;font-weight:600"><input type="checkbox" id="orc-pago-chk" onchange="onOrcPagoChange()"> Pago?</label>
+          <div id="orc-pago-panel" style="display:none;margin-top:12px">${pagOrcFormHTML('orc', orcExistente?.pagamento)}</div>
+        </div>
         <div style="display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap">
           <button id="orc-salvar-btn" class="btn btn-primary" onclick="salvarOrcamento()" style="pointer-events:none;opacity:0.45">
             <i class="bi bi-floppy"></i> Salvar Orçamento
@@ -8329,6 +8454,11 @@ async function renderOrcamentoForm(clienteId = null, orcId = null) {
       }
     });
     atualizarOrcamento();
+    // Pré-marca "Pago?" se houver pagamento registrado
+    if (orcExistente.pagamento) {
+      const pagoChk = document.getElementById('orc-pago-chk');
+      if (pagoChk) { pagoChk.checked = true; onOrcPagoChange(); }
+    }
     // Carrega painel de armas do cliente existente
     const sel = document.getElementById('orc-cliente-sel');
     if (sel?.value) onOrcClienteChange(sel.value);
@@ -8425,6 +8555,8 @@ function atualizarOrcamento() {
 
   const desconto     = Math.max(0, parseFloat(document.getElementById('orc-desconto')?.value) || 0);
   const totalComDesc = Math.max(0, total - desconto);
+  window._orcTotalAtual = totalComDesc;
+  if (document.getElementById('orc-pago-panel')?.style.display !== 'none') recalcPagOrc('orc');
 
   const totalDiv       = document.getElementById('orc-total-div');
   const subtotalVal    = document.getElementById('orc-subtotal-val');
@@ -8470,6 +8602,134 @@ function atualizarOrcamento() {
   }
 }
 
+// ------------------------------------------------------------
+// UI reutilizável de pagamento do orçamento (à vista / parcelado)
+// pfx = prefixo dos ids ('orc' no Novo Orçamento; 'emab-<id>' no quadro em aberto)
+// ------------------------------------------------------------
+function pagOrcFormHTML(pfx, pg) {
+  pg = pg || {};
+  const hoje = new Date().toISOString().split('T')[0];
+  const mod = pg.modalidade || '';
+  const formaOpts = (sel) => `<option value="">Selecione...</option>` + FORMAS_PAG_ORC.map(f => `<option value="${f}" ${sel===f?'selected':''}>${f}</option>`).join('');
+  const bancoOpts = (sel) => `<option value="">Selecione...</option>` + BANCOS_ORC.map(b => `<option value="${b}" ${sel===b?'selected':''}>${b}</option>`).join('');
+  const vezesOpts = (sel) => `<option value="">Selecione...</option>` + PARCELAS_OPTS.map(n => `<option value="${n}" ${String(sel)===String(n)?'selected':''}>${n}x</option>`).join('');
+  return `
+    <div style="display:flex;gap:20px;margin-bottom:12px">
+      <label class="checkbox-item" style="margin:0"><input type="radio" name="${pfx}-mod" value="avista" ${mod==='avista'?'checked':''} onchange="onPagModChange('${pfx}')"> À vista</label>
+      <label class="checkbox-item" style="margin:0"><input type="radio" name="${pfx}-mod" value="parcelado" ${mod==='parcelado'?'checked':''} onchange="onPagModChange('${pfx}')"> Parcelado</label>
+    </div>
+    <div id="${pfx}-avista" style="display:${mod==='avista'?'':'none'}">
+      <label class="checkbox-item" style="margin:0 0 6px"><input type="checkbox" id="${pfx}-desc5" ${pg.desconto5?'checked':''} onchange="recalcPagOrc('${pfx}')"> 5% de desconto</label>
+      <div id="${pfx}-desc5-info" style="font-size:12px;color:var(--success);margin-bottom:8px"></div>
+      <div class="form-grid">
+        <div><label>Data de Pagamento</label><input type="date" id="${pfx}-data" value="${esc(pg.dataPagamento||hoje)}"></div>
+        <div><label>Forma de Pagamento</label><select id="${pfx}-forma">${formaOpts(pg.formaPagamento)}</select></div>
+        <div><label>Banco</label><select id="${pfx}-banco">${bancoOpts(pg.banco)}</select></div>
+      </div>
+    </div>
+    <div id="${pfx}-parcelado" style="display:${mod==='parcelado'?'':'none'}">
+      <label class="checkbox-item" style="margin:0 0 6px"><input type="checkbox" id="${pfx}-entrada-chk" ${pg.temEntrada?'checked':''} onchange="onPagEntradaChange('${pfx}')"> Entrada?</label>
+      <div id="${pfx}-entrada-wrap" style="display:${pg.temEntrada?'':'none'};margin-bottom:8px;max-width:220px">
+        <label>Valor de Entrada (R$)</label><input type="number" step="0.01" min="0" id="${pfx}-entrada-val" value="${pg.valorEntrada||''}" oninput="recalcPagOrc('${pfx}')">
+      </div>
+      <div class="form-grid">
+        <div><label>Forma de Pagamento</label><select id="${pfx}-forma-parc" onchange="recalcPagOrc('${pfx}')">${formaOpts(pg.formaPagamento)}</select></div>
+        <div><label>Quantas vezes</label><select id="${pfx}-vezes" onchange="recalcPagOrc('${pfx}')">${vezesOpts(pg.vezes)}</select></div>
+        <div><label>Valor das Parcelas</label><input type="text" id="${pfx}-valorparc" readonly style="background:var(--bg-secondary)"></div>
+        <div><label>Vencimento (1ª parcela)</label><input type="date" id="${pfx}-venc" value="${esc(pg.dataVencimento||'')}"></div>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:6px"><i class="bi bi-info-circle me-1"></i>Para pagamento no Cartão não são geradas parcelas de controle.</div>
+    </div>`;
+}
+
+function onPagModChange(pfx) {
+  const mod = document.querySelector(`input[name="${pfx}-mod"]:checked`)?.value;
+  const av = document.getElementById(`${pfx}-avista`);
+  const pa = document.getElementById(`${pfx}-parcelado`);
+  if (av) av.style.display = mod === 'avista' ? '' : 'none';
+  if (pa) pa.style.display = mod === 'parcelado' ? '' : 'none';
+  recalcPagOrc(pfx);
+}
+
+function onPagEntradaChange(pfx) {
+  const chk = document.getElementById(`${pfx}-entrada-chk`)?.checked;
+  const wrap = document.getElementById(`${pfx}-entrada-wrap`);
+  if (wrap) wrap.style.display = chk ? '' : 'none';
+  if (!chk) { const v = document.getElementById(`${pfx}-entrada-val`); if (v) v.value = ''; }
+  recalcPagOrc(pfx);
+}
+
+function getPagTotal(pfx) {
+  if (pfx === 'orc') return window._orcTotalAtual || 0;
+  return (window._pagTotais && window._pagTotais[pfx]) || 0;
+}
+
+function recalcPagOrc(pfx) {
+  const total = getPagTotal(pfx);
+  const desc5 = document.getElementById(`${pfx}-desc5`)?.checked;
+  const info = document.getElementById(`${pfx}-desc5-info`);
+  if (info) info.textContent = desc5 ? `Valor à vista com 5% de desconto: ${fmtMoeda(total * 0.95)}` : '';
+  const entradaChk = document.getElementById(`${pfx}-entrada-chk`)?.checked;
+  const entrada = entradaChk ? (parseFloat(document.getElementById(`${pfx}-entrada-val`)?.value) || 0) : 0;
+  const vezes = parseInt(document.getElementById(`${pfx}-vezes`)?.value || '0');
+  const vp = document.getElementById(`${pfx}-valorparc`);
+  if (vp) vp.value = (vezes > 0) ? fmtMoeda(Math.max(0, total - entrada) / vezes) : '';
+}
+
+// Valida a UI; retorna string de erro ou null
+function validarPagamentoOrc(pfx) {
+  const mod = document.querySelector(`input[name="${pfx}-mod"]:checked`)?.value;
+  if (!mod) return 'Selecione a modalidade de pagamento (À vista ou Parcelado).';
+  if (mod === 'avista') {
+    if (!document.getElementById(`${pfx}-data`)?.value) return 'Informe a data de pagamento.';
+    if (!document.getElementById(`${pfx}-forma`)?.value) return 'Selecione a forma de pagamento.';
+    return null;
+  }
+  if (!document.getElementById(`${pfx}-forma-parc`)?.value) return 'Selecione a forma de pagamento.';
+  if (!(parseInt(document.getElementById(`${pfx}-vezes`)?.value || '0') > 0)) return 'Selecione em quantas vezes.';
+  const forma = document.getElementById(`${pfx}-forma-parc`)?.value;
+  if (forma !== 'Cartão' && !document.getElementById(`${pfx}-venc`)?.value) return 'Informe a data de vencimento da 1ª parcela.';
+  return null;
+}
+
+// Monta o objeto pagamento a partir da UI
+function coletarPagamentoOrc(pfx, total) {
+  const mod = document.querySelector(`input[name="${pfx}-mod"]:checked`)?.value;
+  if (!mod) return null;
+  if (mod === 'avista') {
+    const desconto5 = document.getElementById(`${pfx}-desc5`)?.checked || false;
+    return {
+      modalidade: 'avista',
+      desconto5,
+      valorPago: Math.round(total * (desconto5 ? 0.95 : 1) * 100) / 100,
+      dataPagamento: document.getElementById(`${pfx}-data`)?.value || null,
+      formaPagamento: document.getElementById(`${pfx}-forma`)?.value || null,
+      banco: document.getElementById(`${pfx}-banco`)?.value || null,
+    };
+  }
+  const temEntrada = document.getElementById(`${pfx}-entrada-chk`)?.checked || false;
+  const valorEntrada = temEntrada ? (parseFloat(document.getElementById(`${pfx}-entrada-val`)?.value) || 0) : 0;
+  const forma = document.getElementById(`${pfx}-forma-parc`)?.value || null;
+  const vezes = parseInt(document.getElementById(`${pfx}-vezes`)?.value || '0');
+  const dataVenc = document.getElementById(`${pfx}-venc`)?.value || null;
+  const valorParcela = vezes > 0 ? Math.round(Math.max(0, total - valorEntrada) / vezes * 100) / 100 : 0;
+  const pg = { modalidade: 'parcelado', temEntrada, valorEntrada, formaPagamento: forma, vezes, valorParcela, dataVencimento: dataVenc };
+  if (forma && forma !== 'Cartão' && vezes > 0 && dataVenc) {
+    pg.parcelas = [];
+    for (let i = 0; i < vezes; i++) {
+      pg.parcelas.push({ valor: valorParcela, dataVencimento: calcDataParcela(dataVenc, i), pago: false, dataPagamento: null });
+    }
+  }
+  return pg;
+}
+
+function onOrcPagoChange() {
+  const chk = document.getElementById('orc-pago-chk')?.checked;
+  const panel = document.getElementById('orc-pago-panel');
+  if (panel) panel.style.display = chk ? '' : 'none';
+  if (chk) recalcPagOrc('orc');
+}
+
 async function salvarOrcamento() {
   const sel = document.getElementById('orc-cliente-sel');
   const parts = (sel?.value || '').split('|');
@@ -8493,6 +8753,14 @@ async function salvarOrcamento() {
   const desconto = Math.max(0, parseFloat(document.getElementById('orc-desconto')?.value) || 0);
   const totalFinal = Math.max(0, total - desconto);
 
+  // Pagamento (opcional): só quando "Pago?" está marcado
+  let pagamento;
+  if (document.getElementById('orc-pago-chk')?.checked) {
+    const erroPag = validarPagamentoOrc('orc');
+    if (erroPag) { toast(erroPag, 'warning'); return; }
+    pagamento = coletarPagamentoOrc('orc', totalFinal);
+  }
+
   showLoading();
   try {
     const todos = await App.graph._readFile('orcamentos').catch(() => []);
@@ -8510,6 +8778,7 @@ async function salvarOrcamento() {
           itens:   linhas,
           desconto: desconto || undefined,
           total:   totalFinal,
+          pagamento: pagamento || lista[idx].pagamento || undefined,
         };
         await App.graph._writeFile('orcamentos', lista);
         if (desconto > 0) await aplicarDescontoProcessosOrcamento(orcId, linhas, total, totalFinal);
@@ -8530,6 +8799,7 @@ async function salvarOrcamento() {
         itens:        linhas,
         desconto:     desconto || undefined,
         total:        totalFinal,
+        pagamento:    pagamento || undefined,
         criadoPor:    getCurrentUserName(),
         status:       'Pendente',
         dataAprovacao: null,
@@ -8753,6 +9023,9 @@ async function renderOrcamentos() {
     const aprovados     = aprovadosTot.slice(0, 10);
     const rejeitados    = rejeitadosTot.slice(0, 10);
 
+    const emAberto = todos.filter(o => o.status !== 'Rejeitado' && statusPagamentoOrcamento(o) !== 'pago')
+                          .sort((a,b) => (b.data||'').localeCompare(a.data||''));
+
     function linhaOrc(o, modo) {
       let acoesBtns = '';
       if (modo === 'pendente') {
@@ -8794,7 +9067,35 @@ async function renderOrcamentos() {
       </div>`;
     }
 
+    function cardEmAberto(lista) {
+      const rows = lista.map(o => {
+        const st = statusPagamentoOrcamento(o);
+        const lbl = st === 'devedor'      ? { c:'badge-red',    t:'Devedor' }
+                  : st === 'pago_parcial' ? { c:'badge-orange', t:'Pago Parcial' }
+                  :                         { c:'badge-gray',   t:'Em aberto' };
+        return `<tr style="cursor:pointer" onclick="abrirPagamentoOrcamento('${o.id}')">
+          <td style="white-space:nowrap;font-weight:600">${esc(o.numero||'—')}</td>
+          <td style="white-space:nowrap">${fmtDate(o.data)}</td>
+          <td>${esc(o.clienteNome||'—')}</td>
+          <td style="white-space:nowrap;font-weight:600">${fmtMoeda(o.total)}</td>
+          <td><span class="badge ${lbl.c}">${lbl.t}</span></td>
+          <td style="white-space:nowrap"><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();abrirPagamentoOrcamento('${o.id}')" title="Registrar/ver pagamento"><i class="bi bi-cash-coin" style="color:var(--accent)"></i></button></td>
+        </tr>`;
+      }).join('');
+      const body = lista.length
+        ? `<div class="table-wrapper"><table><thead><tr><th>Nº</th><th>Data</th><th>Cliente</th><th>Total</th><th>Situação</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
+        : `<div class="empty-state" style="padding:24px"><i class="bi bi-check-circle" style="color:var(--success)"></i><p>Nenhum orçamento com valores em aberto.</p></div>`;
+      return `<div class="card" style="margin-bottom:20px">
+        <div class="card-header" style="display:flex;align-items:center;gap:10px">
+          <h3 style="margin:0"><i class="bi bi-cash-stack me-2"></i>Orçamentos com valores em aberto</h3>
+          <span class="badge" style="background:#fee2e2;color:#991b1b;font-size:12px">${lista.length}</span>
+        </div>
+        <div class="card-body" style="padding:0">${body}</div>
+      </div>`;
+    }
+
     document.getElementById('page-content').innerHTML =
+      cardEmAberto(emAberto) +
       cardSecao('Orçamentos em Aberto', pendentes, pendentes.length,
         'background:#fef3c7;color:#92400e', 'Nenhum orçamento pendente.', 'pendente') +
       cardSecao('Últimos Aprovados', aprovados, aprovadosTot.length,
@@ -8805,6 +9106,156 @@ async function renderOrcamentos() {
   } catch(e) {
     document.getElementById('page-content').innerHTML = `<div class="empty-state"><i class="bi bi-exclamation-triangle"></i><p>${esc(e.message)}</p></div>`;
   } finally { hideLoading(); }
+}
+
+// ------------------------------------------------------------
+// Modal de pagamento de um orçamento (quadro "valores em aberto")
+// ------------------------------------------------------------
+// Atualiza a tela após alterar o pagamento de um orçamento, respeitando a página atual
+async function _refreshAposPagamentoOrc() {
+  const { page, params } = getRoute();
+  if (page === 'orcamentos') return renderOrcamentos();
+  if (page === 'processos/detalhe' && params.id) return renderProcessoDetalhe(params.id);
+  // outras páginas: apenas re-renderiza a atual
+  return renderPage();
+}
+
+async function abrirPagamentoOrcamento(orcId) {
+  showLoading();
+  let orc;
+  try {
+    const lista = await App.graph._readFile('orcamentos').catch(() => []);
+    orc = (Array.isArray(lista) ? lista : []).find(o => String(o.id) === String(orcId));
+  } catch(e) {}
+  hideLoading();
+  if (!orc) { toast('Orçamento não encontrado.', 'error'); return; }
+
+  const pfx = `emab-${orcId}`;
+  window._pagTotais = window._pagTotais || {};
+  window._pagTotais[pfx] = Number(orc.total) || 0;
+  const pg = orc.pagamento;
+  const itensTxt = (orc.itens || []).map(i => `${i.qtd>1?i.qtd+'× ':''}${esc(i.tipo)} — ${fmtMoeda(i.subtotal != null ? i.subtotal : (i.qtd*i.valor))}`).join('<br>');
+
+  let corpo;
+  if (pg && pg.modalidade === 'parcelado' && Array.isArray(pg.parcelas) && pg.parcelas.length) {
+    corpo = renderParcelasEditor(orcId, pg);
+  } else if (pg && pg.modalidade === 'avista') {
+    corpo = `<div style="font-size:13px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px">
+        <i class="bi bi-check-circle-fill me-1" style="color:#16a34a"></i>Pago à vista em <strong>${fmtDate(pg.dataPagamento)}</strong> · ${esc(pg.formaPagamento||'')}${pg.banco?(' · '+esc(pg.banco)):''}${pg.desconto5?' · 5% de desconto':''}
+        ${pg.valorPago!=null?`<div style="margin-top:4px">Valor pago: <strong>${fmtMoeda(pg.valorPago)}</strong></div>`:''}
+      </div>
+      <div style="text-align:right;margin-top:14px"><button class="btn btn-outline btn-sm" onclick="removerPagamentoOrcamento('${orcId}')">Remover pagamento</button></div>`;
+  } else {
+    corpo = `<div id="${pfx}-form">${pagOrcFormHTML(pfx, null)}</div>
+      <div style="text-align:right;margin-top:16px"><button class="btn btn-primary btn-sm" onclick="salvarPagamentoOrcamentoModal('${orcId}')"><i class="bi bi-floppy me-1"></i>Salvar Pagamento</button></div>`;
+  }
+
+  document.getElementById('modal-pag-orc')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modal-pag-orc';
+  modal.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this) this.remove()">
+      <div style="background:#fff;border-radius:14px;padding:22px;max-width:640px;width:100%;max-height:88vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+          <h3 style="margin:0;font-size:16px"><i class="bi bi-cash-coin me-2"></i>Pagamento — Orçamento ${esc(orc.numero||'')}</h3>
+          <button onclick="document.getElementById('modal-pag-orc').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:#666;line-height:1">×</button>
+        </div>
+        <div style="font-size:13px;font-weight:600;margin-bottom:4px">${esc(orc.clienteNome||'')}</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px">${itensTxt}</div>
+        <div style="font-weight:700;margin-bottom:16px;padding-bottom:10px;border-bottom:1px solid var(--border)">Total: ${fmtMoeda(orc.total)}</div>
+        ${corpo}
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  if (!(pg && pg.modalidade === 'parcelado')) recalcPagOrc(pfx);
+}
+
+function renderParcelasEditor(orcId, pg) {
+  const hoje = new Date().toISOString().split('T')[0];
+  const linhas = pg.parcelas.map((pc, i) => {
+    const atrasada = !pc.pago && pc.dataVencimento && pc.dataVencimento < hoje;
+    return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);flex-wrap:wrap">
+      <div style="min-width:150px"><strong>Parcela ${i+1}/${pg.parcelas.length}</strong><div style="font-size:11px;color:${atrasada?'#dc2626':'var(--text-muted)'}">Venc: ${fmtDate(pc.dataVencimento)}${atrasada?' · atrasada':''}</div></div>
+      <div style="min-width:90px;font-weight:600">${fmtMoeda(pc.valor)}</div>
+      <label class="checkbox-item" style="margin:0"><input type="checkbox" id="parc-${orcId}-${i}" ${pc.pago?'checked':''} onchange="onParcelaPagoToggle('${orcId}',${i},this.checked)"> Pago</label>
+      <input type="date" id="parc-data-${orcId}-${i}" value="${esc(pc.dataPagamento||'')}" style="display:${pc.pago?'':'none'};font-size:12px;padding:4px 8px" title="Data de pagamento">
+    </div>`;
+  }).join('');
+  const entradaTxt = pg.temEntrada ? `<div style="font-size:12px;margin-bottom:8px">Entrada: <strong>${fmtMoeda(pg.valorEntrada||0)}</strong></div>` : '';
+  return `<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">${esc(pg.formaPagamento||'')} · ${pg.vezes}x de ${fmtMoeda(pg.valorParcela)}</div>
+    ${entradaTxt}
+    ${linhas}
+    <div style="display:flex;justify-content:space-between;gap:8px;margin-top:16px">
+      <button class="btn btn-outline btn-sm" onclick="removerPagamentoOrcamento('${orcId}')">Redefinir pagamento</button>
+      <button class="btn btn-primary btn-sm" onclick="salvarParcelasOrcamento('${orcId}')"><i class="bi bi-floppy me-1"></i>Salvar Parcelas</button>
+    </div>`;
+}
+
+function onParcelaPagoToggle(orcId, i, checked) {
+  const dt = document.getElementById(`parc-data-${orcId}-${i}`);
+  if (dt) {
+    dt.style.display = checked ? '' : 'none';
+    if (checked && !dt.value) dt.value = new Date().toISOString().split('T')[0];
+  }
+}
+
+async function salvarPagamentoOrcamentoModal(orcId) {
+  const pfx = `emab-${orcId}`;
+  const erro = validarPagamentoOrc(pfx);
+  if (erro) { toast(erro, 'warning'); return; }
+  const total = getPagTotal(pfx);
+  const pagamento = coletarPagamentoOrc(pfx, total);
+  showLoading();
+  try {
+    const lista = await App.graph._readFile('orcamentos').catch(() => []);
+    const arr = Array.isArray(lista) ? lista : [];
+    const idx = arr.findIndex(o => String(o.id) === String(orcId));
+    if (idx < 0) throw new Error('Orçamento não encontrado.');
+    arr[idx].pagamento = pagamento;
+    await App.graph._writeFile('orcamentos', arr);
+    document.getElementById('modal-pag-orc')?.remove();
+    toast('Pagamento registrado.', 'success');
+    await _refreshAposPagamentoOrc();
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function salvarParcelasOrcamento(orcId) {
+  showLoading();
+  try {
+    const lista = await App.graph._readFile('orcamentos').catch(() => []);
+    const arr = Array.isArray(lista) ? lista : [];
+    const idx = arr.findIndex(o => String(o.id) === String(orcId));
+    if (idx < 0) throw new Error('Orçamento não encontrado.');
+    const pg = arr[idx].pagamento;
+    if (pg && Array.isArray(pg.parcelas)) {
+      pg.parcelas.forEach((pc, i) => {
+        const chk = document.getElementById(`parc-${orcId}-${i}`);
+        const dt = document.getElementById(`parc-data-${orcId}-${i}`);
+        pc.pago = chk?.checked || false;
+        pc.dataPagamento = pc.pago ? (dt?.value || null) : null;
+      });
+    }
+    await App.graph._writeFile('orcamentos', arr);
+    document.getElementById('modal-pag-orc')?.remove();
+    toast('Parcelas atualizadas.', 'success');
+    await _refreshAposPagamentoOrc();
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function removerPagamentoOrcamento(orcId) {
+  if (!confirm('Remover as informações de pagamento deste orçamento?')) return;
+  showLoading();
+  try {
+    const lista = await App.graph._readFile('orcamentos').catch(() => []);
+    const arr = Array.isArray(lista) ? lista : [];
+    const idx = arr.findIndex(o => String(o.id) === String(orcId));
+    if (idx < 0) throw new Error('Orçamento não encontrado.');
+    delete arr[idx].pagamento;
+    await App.graph._writeFile('orcamentos', arr);
+    document.getElementById('modal-pag-orc')?.remove();
+    toast('Pagamento removido.', 'success');
+    await _refreshAposPagamentoOrc();
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 // ============================================================
