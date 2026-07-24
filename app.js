@@ -218,6 +218,27 @@ function orcamentoDoProcesso(processo, orcamentos, demandas) {
   return orcamentos.find(o => String(o.id) === String(demanda.orcamentoId)) || null;
 }
 
+// Valor do processo usado no cálculo dos extras (10%): aplica proporcionalmente
+// o desconto manual do orçamento e o desconto de 5% (à vista), quando existirem.
+function valorProcessoParaExtras(p, orcamentos, demandas) {
+  const bruto = Number(p.ValorProcesso) || 0;
+  if (!p.demandaId) return bruto;
+  const orc = orcamentoDoProcesso(p, orcamentos, demandas);
+  if (!orc) return bruto;
+  const itens = orc.itens || [];
+  const grossSubtotal = itens.reduce((s, i) => s + (Number(i.subtotal != null ? i.subtotal : (i.qtd * i.valor)) || 0), 0);
+  const totalComManual = Number(orc.total);
+  const fator5 = (orc.pagamento && orc.pagamento.modalidade === 'avista' && orc.pagamento.desconto5) ? 0.95 : 1;
+  const item = itens.find(i => i.tipo === p.TipoProcesso);
+  if (item && grossSubtotal > 0 && Number.isFinite(totalComManual)) {
+    const grossUnit = Number(item.valor) || 0;
+    const ratio = (totalComManual * fator5) / grossSubtotal; // desconto manual + 5%, proporcional
+    return grossUnit * ratio;
+  }
+  // Fallback: aplica apenas o 5% sobre o valor atual do processo
+  return bruto * fator5;
+}
+
 function fmtMoeda(v) {
   if (v === null || v === undefined || v === '') return '—';
   return Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -6566,6 +6587,8 @@ function imprimirExtras(responsavel) {
   const processos = window._extrasProcessos || [];
   const avulsos = window._extrasAvulsos || [];
   const extrasPagosMes = window._extrasPagosMes || [];
+  const _orcExtras = window._extrasOrc || [];
+  const _demExtras = window._extrasDem || [];
   const filtroMes = window._extrasFilterMes || '';
   function mesLbl(ym) {
     if (!ym) return '—';
@@ -6582,13 +6605,13 @@ function imprimirExtras(responsavel) {
 
   const totalExtra = meusDeferidos.reduce((s, p) => {
     const taxa = TAXAS_PROCESSO[p.TipoProcesso] || 0;
-    return s + Math.max(0, (Number(p.ValorProcesso)||0) - taxa) * 0.1;
+    return s + Math.max(0, valorProcessoParaExtras(p, _orcExtras, _demExtras) - taxa) * 0.1;
   }, 0) + meusAvulsos.reduce((s, a) => s + (Number(a.valor)||0), 0);
 
   const itensHtml = meusDeferidos.map(p => {
     const valor = Number(p.ValorProcesso) || 0;
     const taxa = TAXAS_PROCESSO[p.TipoProcesso] || 0;
-    const extra = Math.max(0, valor - taxa) * 0.1;
+    const extra = Math.max(0, valorProcessoParaExtras(p, _orcExtras, _demExtras) - taxa) * 0.1;
     const desc = getProcessoDescExtra(p);
     return `<tr>
       <td>${esc(p.ClienteNome||'—')}</td>
@@ -6636,6 +6659,8 @@ async function renderPagamentosExtras() {
   window._extrasProcessos = processos;
   window._extrasAvulsos = avulsos;
   window._extrasPagosMes = extrasPagosMes;
+  window._extrasOrc = _orcExtras;
+  window._extrasDem = _demExtras;
 
   // Monta lista de meses disponíveis (de processos com data de Deferido + extras avulsos)
   const mesesSet = new Set();
@@ -6672,7 +6697,7 @@ async function renderPagamentosExtras() {
 
     const totalProcessos = meusDeferidos.reduce((s, p) => {
       const taxa = TAXAS_PROCESSO[p.TipoProcesso] || 0;
-      return s + Math.max(0, (Number(p.ValorProcesso)||0) - taxa) * 0.1;
+      return s + Math.max(0, valorProcessoParaExtras(p, _orcExtras, _demExtras) - taxa) * 0.1;
     }, 0);
     const totalAvulsos = meusAvulsos.reduce((s, a) => s + (Number(a.valor)||0), 0);
     const totalExtra = totalProcessos + totalAvulsos;
@@ -6681,7 +6706,9 @@ async function renderPagamentosExtras() {
       ${meusDeferidos.map(p => {
         const valor = Number(p.ValorProcesso) || 0;
         const taxa = TAXAS_PROCESSO[p.TipoProcesso] || 0;
-        const extra = Math.max(0, valor - taxa) * 0.1;
+        const valorExtraBase = valorProcessoParaExtras(p, _orcExtras, _demExtras);
+        const temDescExtra = Math.abs(valorExtraBase - valor) > 0.005;
+        const extra = Math.max(0, valorExtraBase - taxa) * 0.1;
         const desc = getProcessoDescExtra(p);
         const infoPag = infoPagamentoProcessoTxt(p);
         // Situação de pagamento via orçamento vinculado (modelo novo); legado usa PagamentosJSON
@@ -6698,7 +6725,7 @@ async function renderPagamentosExtras() {
           <div style="flex:1;min-width:0">
             <a style="font-size:13px;font-weight:600;cursor:pointer;color:var(--accent)" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.ClienteNome||'—')}</a>
             <div style="font-size:12px;color:#374151;margin-top:2px">${esc(p.TipoProcesso||'—')}${desc ? ` <span style="color:var(--text-muted)">· ${esc(desc)}</span>` : ''}</div>
-            <div style="font-size:11px;color:var(--text-muted)">Valor total: ${fmtMoeda(valor)}${infoPag ? ` · ${esc(infoPag)}` : ''}</div>
+            <div style="font-size:11px;color:var(--text-muted)">Valor total: ${fmtMoeda(valor)}${temDescExtra ? ` · <span title="Valor com desconto aplicado para o cálculo do extra">c/ desconto: ${fmtMoeda(valorExtraBase)}</span>` : ''}${infoPag ? ` · ${esc(infoPag)}` : ''}</div>
             ${badgePagHtml}
             ${p.Restituido ? `<div style="margin-top:4px"><span class="badge" style="background:#9333ea;color:#fff;font-size:11px"><i class="bi bi-arrow-return-left me-1"></i>Restituído</span></div>` : ''}
           </div>
