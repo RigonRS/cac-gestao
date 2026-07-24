@@ -3175,41 +3175,21 @@ async function renderProcessoForm(clienteId = null, routeParams = {}) {
         <i class="bi bi-clipboard-check me-1"></i>Processo vinculado à demanda <strong>${esc(demandaNumero||demandaId)}</strong>
       </div>` : '';
 
-  window._clubesCadastrados = await App.getClubes();
-
-  document.getElementById('page-content').innerHTML = `
-  <form id="form-processo" onsubmit="salvarProcesso(event)">
-    ${hiddenDemanda}
-    ${demandaBadge}
-    <div class="form-section">
-      <div class="form-section-title">Informações Gerais</div>
-      <div class="form-body">
-        <div class="form-grid">
-          ${clienteHtml}
-          ${tipoHtml}
-          ${responsavelHtml}
-          <div>
-            <label>Status</label>
-            <select name="Status" id="status-novo-processo" onchange="onStatusNovoProcessoChange(this.value)">
-              ${STATUS_PROCESSO.map(s => `<option value="${s}" ${s==='Aguardando Documentos'?'selected':''}>${s}</option>`).join('')}
-            </select>
-            <div id="selector-proc-futuro-novo" style="display:none;margin-top:8px;padding:10px;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:8px">
-              <div style="font-size:12px;font-weight:600;color:#7c3aed;margin-bottom:6px"><i class="bi bi-hourglass me-1"></i>Aguardando qual processo ser deferido?</div>
-              <select id="sel-proc-futuro-novo" style="width:100%">
-                <option value="">Selecione o processo...</option>
-              </select>
-            </div>
-          </div>
-          ${dataAberturaHtml}
-        </div>
-      </div>
-    </div>
-
-    <div class="form-section">
+  // Quadro de Pagamento: para processos vindos de demanda/orçamento, o pagamento é
+  // gerenciado no orçamento — então não mostramos o quadro, apenas mantemos o valor (oculto).
+  const pagamentoSectionHtml = fromDemanda
+    ? `<input type="hidden" name="ValorProcesso" value="${window._processoValorDemanda != null ? window._processoValorDemanda.toFixed(2) : ''}" />
+       <div class="form-section">
+         <div class="form-section-title">Pagamento</div>
+         <div class="form-body">
+           <div style="font-size:13px;color:var(--text-muted)"><i class="bi bi-info-circle me-1"></i>O pagamento deste processo é gerenciado no <strong>orçamento vinculado</strong> (Demanda ${esc(demandaNumero||demandaId)}). Consulte a página <strong>Orçamentos</strong> para registrar/acompanhar o pagamento.</div>
+         </div>
+       </div>`
+    : `<div class="form-section">
       <div class="form-section-title">Pagamento</div>
       <div class="form-body">
         <div class="form-grid">
-          <div><label>Valor do Processo (R$)</label><input type="number" name="ValorProcesso" step="0.01" min="0" placeholder="0,00" oninput="calcularParcelas()" ${lockFields?'readonly style="background:var(--bg-secondary)"':''} /></div>
+          <div><label>Valor do Processo (R$)</label><input type="number" name="ValorProcesso" step="0.01" min="0" placeholder="0,00" oninput="calcularParcelas()" /></div>
           <div>
             <label>Tipo de Pagamento</label>
             <div class="checkbox-group">
@@ -3241,7 +3221,39 @@ async function renderProcessoForm(clienteId = null, routeParams = {}) {
           </div>
         </div>
       </div>
+    </div>`;
+
+  window._clubesCadastrados = await App.getClubes();
+
+  document.getElementById('page-content').innerHTML = `
+  <form id="form-processo" onsubmit="salvarProcesso(event)">
+    ${hiddenDemanda}
+    ${demandaBadge}
+    <div class="form-section">
+      <div class="form-section-title">Informações Gerais</div>
+      <div class="form-body">
+        <div class="form-grid">
+          ${clienteHtml}
+          ${tipoHtml}
+          ${responsavelHtml}
+          <div>
+            <label>Status</label>
+            <select name="Status" id="status-novo-processo" onchange="onStatusNovoProcessoChange(this.value)">
+              ${STATUS_PROCESSO.map(s => `<option value="${s}" ${s==='Aguardando Documentos'?'selected':''}>${s}</option>`).join('')}
+            </select>
+            <div id="selector-proc-futuro-novo" style="display:none;margin-top:8px;padding:10px;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:8px">
+              <div style="font-size:12px;font-weight:600;color:#7c3aed;margin-bottom:6px"><i class="bi bi-hourglass me-1"></i>Aguardando qual processo ser deferido?</div>
+              <select id="sel-proc-futuro-novo" style="width:100%">
+                <option value="">Selecione o processo...</option>
+              </select>
+            </div>
+          </div>
+          ${dataAberturaHtml}
+        </div>
+      </div>
     </div>
+
+    ${pagamentoSectionHtml}
 
     <div id="campos-tipo-processo"></div>
 
@@ -6285,9 +6297,38 @@ function toggleParcelasProcesso(pid) {
     : `<i class="bi bi-chevron-up"></i> Ocultar`;
 }
 
+// Parcelas/valores em aberto de um orçamento (para a página de Pagamentos)
+function parcelasPendentesOrcamento(o) {
+  const pg = o.pagamento;
+  const hoje = new Date().toISOString().split('T')[0];
+  if (!pg || !pg.modalidade) {
+    return { itens: [{ label: 'Pagamento não definido', valor: Number(o.total)||0, data: null, vencida: false }], total: Number(o.total)||0, vencido: 0 };
+  }
+  if (pg.modalidade === 'parcelado' && Array.isArray(pg.parcelas)) {
+    const itens = pg.parcelas
+      .map((pc, i) => ({ pc, i }))
+      .filter(x => !x.pc.pago)
+      .map(x => ({
+        label: `Parcela ${x.i+1}/${pg.parcelas.length}`,
+        valor: Number(x.pc.valor)||0,
+        data:  x.pc.dataVencimento || null,
+        vencida: !!(x.pc.dataVencimento && x.pc.dataVencimento < hoje),
+      }));
+    const total   = itens.reduce((s, x) => s + x.valor, 0);
+    const vencido = itens.filter(x => x.vencida).reduce((s, x) => s + x.valor, 0);
+    return { itens, total, vencido };
+  }
+  return { itens: [], total: 0, vencido: 0 };
+}
+
 async function renderPagamentos() {
   document.getElementById('page-title').textContent = 'Pagamentos Pendentes';
-  const [clientes, processos] = await Promise.all([App.getClientes(), App.getProcessos()]);
+  const [clientes, processos, orcRaw] = await Promise.all([
+    App.getClientes(),
+    App.getProcessos(),
+    App.graph._readFile('orcamentos').catch(() => []),
+  ]);
+  const orcamentos = Array.isArray(orcRaw) ? orcRaw : [];
 
   const pendentes = processos.filter(p =>
     p.ValorProcesso && getItensPendentesProcesso(p).length > 0 && p.Status !== 'Desistência Cliente'
@@ -6306,27 +6347,22 @@ async function renderPagamentos() {
 
   const grupos = Object.values(porCliente).sort((a, b) => (a.nome||'').localeCompare(b.nome||''));
 
-  const el = document.getElementById('page-content');
-  if (grupos.length === 0) {
-    el.innerHTML = `<div class="empty-state"><i class="bi bi-check-circle" style="font-size:48px;color:var(--success)"></i><p>Nenhum pagamento pendente. Tudo em dia!</p></div>`;
-    return;
-  }
+  // Orçamentos com valores em aberto (modelo por orçamento)
+  const orcEmAberto = orcamentos
+    .filter(o => o.status !== 'Rejeitado' && statusPagamentoOrcamento(o) !== 'pago')
+    .map(o => ({ orc: o, pend: parcelasPendentesOrcamento(o), status: statusPagamentoOrcamento(o) }))
+    .sort((a, b) => (b.orc.data||'').localeCompare(a.orc.data||''));
 
   const totalPendente = pendentes.reduce((s, p) => s + getItensPendentesProcesso(p).reduce((ss, i) => ss + i.valor, 0), 0);
   const totalVencido  = pendentes.reduce((s, p) => s + getItensPendentesProcesso(p).filter(i => i.vencido).reduce((ss, i) => ss + i.valor, 0), 0);
+  const orcTotalAberto  = orcEmAberto.reduce((s, x) => s + x.pend.total, 0);
+  const orcTotalVencido = orcEmAberto.reduce((s, x) => s + x.pend.vencido, 0);
 
-  el.innerHTML = `
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
-      <div class="card" style="padding:16px">
-        <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">Total Pendente</div>
-        <div style="font-size:22px;font-weight:700;color:var(--danger)">${fmtMoeda(totalPendente)}</div>
-      </div>
-      <div class="card" style="padding:16px">
-        <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">Total Vencido</div>
-        <div style="font-size:22px;font-weight:700;color:#dc2626">${fmtMoeda(totalVencido)}</div>
-      </div>
-    </div>
-    <div class="card">
+  const el = document.getElementById('page-content');
+
+  const secaoProcessos = grupos.length === 0
+    ? `<div class="empty-state" style="padding:30px"><i class="bi bi-check-circle" style="color:var(--success)"></i><p>Nenhum pagamento de processo pendente.</p></div>`
+    : `<div class="card">
       <div class="card-header">
         <h3><i class="bi bi-cash-coin me-2"></i>Clientes com Pagamentos em Aberto</h3>
         <span style="font-size:12px;color:var(--text-muted)">${grupos.length} cliente(s)</span>
@@ -6373,6 +6409,62 @@ async function renderPagamentos() {
       </div>
     </div>`;
 
+  const secaoOrcamentos = `<div class="card" style="margin-top:20px">
+    <div class="card-header">
+      <h3><i class="bi bi-cash-stack me-2"></i>Orçamentos com valores em aberto</h3>
+      <span style="font-size:12px;color:var(--text-muted)">${orcEmAberto.length} orçamento(s)</span>
+    </div>
+    <div class="card-body" style="padding:0">
+      ${orcEmAberto.length === 0
+        ? `<div class="empty-state" style="padding:30px"><i class="bi bi-check-circle" style="color:var(--success)"></i><p>Nenhum orçamento com valores em aberto.</p></div>`
+        : orcEmAberto.map(({ orc, pend, status }) => {
+          const lbl = status === 'devedor'      ? { c:'badge-red',    t:'Devedor' }
+                    : status === 'pago_parcial' ? { c:'badge-orange', t:'Pago Parcial' }
+                    :                             { c:'badge-gray',   t:'Em aberto' };
+          return `<div style="padding:14px 20px;border-bottom:1px solid var(--border)">
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                <a style="font-size:14px;font-weight:700;cursor:pointer;color:var(--accent)" onclick="abrirPagamentoOrcamento('${orc.id}')">Orçamento ${esc(orc.numero||'—')}</a>
+                <span style="font-size:13px;color:var(--text-muted)">${esc(orc.clienteNome||'—')}</span>
+                <span class="badge ${lbl.c}" style="font-size:11px">${lbl.t}</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:10px">
+                <strong style="font-size:14px;color:var(--danger)">${fmtMoeda(pend.total)}</strong>
+                <button class="btn btn-ghost btn-sm" onclick="abrirPagamentoOrcamento('${orc.id}')" title="Registrar/ver pagamento"><i class="bi bi-cash-coin" style="color:var(--accent)"></i></button>
+              </div>
+            </div>
+            <div style="padding-left:12px;border-left:3px solid var(--border)">
+              ${pend.itens.map(i => `<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:12px${i.vencida?';color:#dc2626':''}">
+                <span>${esc(i.label)}${i.data ? ` · venc. ${fmtDate(i.data)}` : ''}${i.vencida ? ' <strong>(vencida)</strong>' : (i.data ? ' <span style="color:var(--text-muted)">(a vencer)</span>' : '')}</span>
+                <span style="font-weight:600">${fmtMoeda(i.valor)}</span>
+              </div>`).join('')}
+            </div>
+          </div>`;
+        }).join('')}
+    </div>
+  </div>`;
+
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-bottom:16px">
+      <div class="card" style="padding:16px">
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">Processos — Pendente</div>
+        <div style="font-size:20px;font-weight:700;color:var(--danger)">${fmtMoeda(totalPendente)}</div>
+      </div>
+      <div class="card" style="padding:16px">
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">Processos — Vencido</div>
+        <div style="font-size:20px;font-weight:700;color:#dc2626">${fmtMoeda(totalVencido)}</div>
+      </div>
+      <div class="card" style="padding:16px">
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">Orçamentos — Em aberto</div>
+        <div style="font-size:20px;font-weight:700;color:var(--danger)">${fmtMoeda(orcTotalAberto)}</div>
+      </div>
+      <div class="card" style="padding:16px">
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">Orçamentos — Vencido</div>
+        <div style="font-size:20px;font-weight:700;color:#dc2626">${fmtMoeda(orcTotalVencido)}</div>
+      </div>
+    </div>
+    ${secaoProcessos}
+    ${secaoOrcamentos}`;
 }
 
 // ============================================================
