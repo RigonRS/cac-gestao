@@ -189,6 +189,37 @@ function statusPagamentoOrcamento(orc) {
   return temAtrasada ? 'devedor' : 'pago_parcial';
 }
 
+// Fração paga de um orçamento (0 a 1): à vista/cartão pago = 1; parcelado = parcelas pagas (+ entrada) / total
+function fracaoPagaOrcamento(orc) {
+  const status = statusPagamentoOrcamento(orc);
+  if (status === 'pago') return 1;
+  if (status === 'aberto') return 0;
+  const pg = orc && orc.pagamento;
+  if (pg && pg.modalidade === 'parcelado' && Array.isArray(pg.parcelas) && pg.parcelas.length) {
+    const entrada = pg.temEntrada ? (Number(pg.valorEntrada) || 0) : 0;
+    const somaParcelas = pg.parcelas.reduce((s, x) => s + (Number(x.valor) || 0), 0);
+    const pagoParcelas = pg.parcelas.filter(x => x.pago).reduce((s, x) => s + (Number(x.valor) || 0), 0);
+    const total = somaParcelas + entrada;
+    const pago = pagoParcelas + entrada; // entrada considerada paga
+    return total > 0 ? pago / total : 0;
+  }
+  return 0;
+}
+
+// Recebido/pendente de um processo: usa o orçamento vinculado (modelo novo) ou PagamentosJSON (legado)
+function calcPagamentoCliente(p, orcamentos, demandas) {
+  const valor = Number(p.ValorProcesso) || 0;
+  if (p.demandaId && orcamentos && demandas) {
+    const orc = orcamentoDoProcesso(p, orcamentos, demandas);
+    if (orc) {
+      const frac = fracaoPagaOrcamento(orc);
+      const recebido = Math.round(valor * frac * 100) / 100;
+      return { recebido, pendente: Math.max(0, valor - recebido) };
+    }
+  }
+  return calcPagamento(p);
+}
+
 // Valor a exibir como "total" do orçamento: quando pago à vista com 5% de desconto,
 // mostra o valor efetivamente pago; caso contrário, o total (que já inclui o desconto manual).
 function totalExibicaoOrcamento(o) {
@@ -1145,6 +1176,14 @@ async function desbloquearPortalCliente(clienteId) {
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
+async function toggleNaoAnalisarVencimentos(clienteId, checked) {
+  try {
+    await App.graph.updateItem(CONFIG.listas.clientes, clienteId, { NaoAnalisarVencimentos: checked ? 'sim' : '' });
+    App.invalidateCache('clientes');
+    toast(checked ? 'Vencimentos deste cliente não serão mais analisados.' : 'Vencimentos deste cliente voltarão a ser analisados.', 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
 // ============================================================
 // CLIENTES — FORMULÁRIO (NOVO / EDITAR)
 // ============================================================
@@ -1253,7 +1292,6 @@ async function renderClienteForm(id = null, importParams = {}) {
           <div><label>Validade Avaliação Psicológica</label><input type="date" name="ValidadeAvaliPsi" value="${dateVal('ValidadeAvaliPsi')}" /></div>
           <div><label>Validade Teste de Tiro</label><input type="date" name="ValidadeTesteTiro" value="${dateVal('ValidadeTesteTiro')}" /></div>
         </div>
-        <label class="checkbox-item" style="margin-top:10px"><input type="checkbox" name="NaoAnalisarVencimentos" value="sim" ${c.NaoAnalisarVencimentos === 'sim' ? 'checked' : ''} /> Não analisar vencimentos de Docs</label>
       </div>
     </div>
 
@@ -1407,7 +1445,6 @@ async function salvarCliente(e, id) {
     NaoRenovarCTF:      fd.get('NaoRenovarCTF') || null,
     ValidadeAvaliPsi:   fd.get('ValidadeAvaliPsi') || null,
     ValidadeTesteTiro:  fd.get('ValidadeTesteTiro') || null,
-    NaoAnalisarVencimentos: fd.get('NaoAnalisarVencimentos') ? 'sim' : '',
     CEP1:             fd.get('CEP1'),
     Endereco1:        toTitleCase(fd.get('Endereco1')),
     Numero1:          fd.get('Numero1'),
@@ -1473,7 +1510,7 @@ async function renderClientePerfil(id, tab = 'dados') {
   else if (tab === 'ibama')      tabContent = renderPerfilIBAMA(cliente);
   else if (tab === 'documentos') tabContent = renderPerfilDocumentos(documentos, id, cliente);
   else if (tab === 'processos')  tabContent = renderPerfilProcessos(processos, id);
-  else if (tab === 'pagamentos') tabContent = renderPerfilPagamentos(processos, id);
+  else if (tab === 'pagamentos') { const _od = await _carregarOrcamentosDemandas(); tabContent = renderPerfilPagamentos(processos, id, _od.orcamentos, _od.demandas); }
   else if (tab === 'orcamentos') tabContent = await renderPerfilOrcamentos(id);
 
   const inativo = isClienteInativo(cliente);
@@ -1487,6 +1524,10 @@ async function renderClientePerfil(id, tab = 'dados') {
       <div class="profile-info">
         <h2>${esc(cliente.Title)}${inativo ? ' <span class="badge badge-red" style="vertical-align:middle">Inativo</span>' : ''}</h2>
         <p>CPF: ${esc(cliente.CPF || '—')} &nbsp;·&nbsp; CR: ${esc(cliente.NumeroCR || '—')} &nbsp;·&nbsp; ${cats || '<span class="badge badge-gray">Sem categoria</span>'}</p>
+        <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted);cursor:pointer;margin-top:2px">
+          <input type="checkbox" ${cliente.NaoAnalisarVencimentos === 'sim' ? 'checked' : ''} onchange="toggleNaoAnalisarVencimentos('${id}',this.checked)" />
+          Não analisar vencimentos de Docs
+        </label>
       </div>
       <div class="btn-group" style="margin-left:auto;flex-wrap:wrap">
         <button class="btn btn-outline btn-sm" onclick="imprimirDadosCliente('${id}')"><i class="bi bi-printer"></i> Imprimir Dados</button>
@@ -2086,22 +2127,38 @@ function renderPerfilProcessos(processos, clienteId) {
     </div>`;
 }
 
-function renderPerfilPagamentos(processos, clienteId) {
+function renderPerfilPagamentos(processos, clienteId, orcamentos, demandas) {
   const comValor = processos.filter(p => Number(p.ValorProcesso) > 0);
   let totalPendente = 0, totalRecebido = 0;
-  comValor.forEach(p => { const c = calcPagamento(p); totalRecebido += c.recebido; totalPendente += c.pendente; });
+  comValor.forEach(p => { const c = calcPagamentoCliente(p, orcamentos, demandas); totalRecebido += c.recebido; totalPendente += c.pendente; });
 
   function renderLinha(p) {
     const b = statusBadge(p.Status);
-    const cp = calcPagamento(p);
-    const parcelasInfo = p.TipoPagamento === 'Parcelado' && p.NumeroParcelas
-      ? `<div style="font-size:11px;color:var(--text-muted)">${p.NumeroParcelas}x de ${fmtMoeda(p.ValorParcelas)}${p.DataVencimentoParcelas?' · Venc. '+fmtDate(p.DataVencimentoParcelas.split('T')[0]):''}</div>`
-      : '';
+    const cp = calcPagamentoCliente(p, orcamentos, demandas);
+    let tipoPag = p.TipoPagamento || 'À vista';
+    let formaPag = p.FormaPagamento || '—';
+    let infoLinha = '';
+    if (p.demandaId && orcamentos && demandas) {
+      const orc = orcamentoDoProcesso(p, orcamentos, demandas);
+      const pg = orc && orc.pagamento;
+      if (pg) {
+        tipoPag = pg.modalidade === 'parcelado' ? 'Parcelado' : 'À vista';
+        formaPag = pg.formaPagamento || '—';
+        if (pg.modalidade === 'parcelado' && pg.vezes) infoLinha = `<div style="font-size:11px;color:var(--text-muted)">${pg.vezes}x de ${fmtMoeda(pg.valorParcela)}</div>`;
+      } else {
+        tipoPag = '—'; formaPag = '—';
+      }
+      if (orc) infoLinha = `<div style="font-size:11px;color:var(--text-muted)">Orçamento ${esc(orc.numero||'')}</div>` + infoLinha;
+    } else {
+      infoLinha = p.TipoPagamento === 'Parcelado' && p.NumeroParcelas
+        ? `<div style="font-size:11px;color:var(--text-muted)">${p.NumeroParcelas}x de ${fmtMoeda(p.ValorParcelas)}${p.DataVencimentoParcelas?' · Venc. '+fmtDate(p.DataVencimentoParcelas.split('T')[0]):''}</div>`
+        : '';
+    }
     return `<tr>
       <td><a style="cursor:pointer;color:var(--accent);font-weight:600" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.TipoProcesso||'—')}</a><br/><span style="font-size:11px;color:var(--text-muted)">${esc(p.NumeroProtocolo||'')}</span></td>
-      <td>${fmtMoeda(p.ValorProcesso)}<br/>${parcelasInfo}</td>
-      <td>${esc(p.TipoPagamento||'À vista')}</td>
-      <td>${esc(p.FormaPagamento||'—')}</td>
+      <td>${fmtMoeda(p.ValorProcesso)}<br/>${infoLinha}</td>
+      <td>${esc(tipoPag)}</td>
+      <td>${esc(formaPag)}</td>
       <td style="color:var(--success);font-weight:600">${fmtMoeda(cp.recebido)}</td>
       <td style="color:${cp.pendente>0?'var(--danger)':'var(--success)'};font-weight:600">${fmtMoeda(cp.pendente)}</td>
       <td><span class="badge ${b.cls}">${b.txt}</span></td>
