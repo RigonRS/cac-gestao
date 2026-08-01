@@ -4839,7 +4839,7 @@ async function renderProcessoDetalhe(id) {
           <div class="card-body">
             <div class="info-grid">
               ${(() => {
-                const _guiaTiroEsportivo = processo.TipoProcesso === 'Guia de Tráfego' && dadosEsp.tipoGuia === 'Tiro Esportivo';
+                const _guiaTiroEsportivo = processo.TipoProcesso === 'Guia de Tráfego' && (dadosEsp.tipoGuia === 'Tiro Esportivo' || dadosEsp.tipoGuia === 'Caça-Treinamento Tiro');
                 const _clubeKeys = { nomeClube: 'Nome do Clube', crClube: 'CR do Clube', enderecoClube: 'Endereço do Clube' };
                 return Object.entries(dadosEsp).filter(([,v]) => v).map(([k,v]) => {
                 const LABELS_DADOS = {
