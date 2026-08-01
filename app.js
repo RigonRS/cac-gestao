@@ -3603,7 +3603,6 @@ function buildCamposGuia(armasOpts, clienteId) {
       <div><label>Nome do Clube de Tiro</label><input id="proc-nomeClube" name="proc_nomeClube" /></div>
       <div><label>CR do Clube</label><input id="proc-crClube" name="proc_crClube" /></div>
       <div style="grid-column:span 2"><label>Endereço do Clube</label><input id="proc-enderecoClube" name="proc_enderecoClube" /></div>
-      <div style="grid-column:span 2"><button type="button" class="btn btn-outline btn-sm" onclick="copiarDadosClube()"><i class="bi bi-clipboard me-1"></i>Copiar dados do clube</button></div>
     </div></div>
     ${endOrigemOpts ? `<div style="margin-top:12px"><div class="form-grid">
       <div style="grid-column:span 2"><label>Endereço de Origem da Guia</label>
@@ -3640,16 +3639,6 @@ function onArmaGuiaChange(val) {
   if (!opts.includes(atual)) { sel.value = ''; onTipoGuiaProcesso(''); }
 }
 
-function copiarDadosClube() {
-  const nome = document.getElementById('proc-nomeClube')?.value || '';
-  const cr   = document.getElementById('proc-crClube')?.value || '';
-  const end  = document.getElementById('proc-enderecoClube')?.value || '';
-  const txt = [nome && `Clube: ${nome}`, cr && `CR: ${cr}`, end && `Endereço: ${end}`].filter(Boolean).join('\n');
-  if (!txt) { toast('Preencha os dados do clube primeiro.', 'warning'); return; }
-  navigator.clipboard.writeText(txt)
-    .then(() => toast('Dados do clube copiados!', 'success'))
-    .catch(() => toast('Não foi possível copiar.', 'error'));
-}
 
 function buildCamposAlteracaoEndereco(clienteId) {
   return `<div class="form-section"><div class="form-section-title">Alteração de Endereço</div><div class="form-body">
@@ -4849,15 +4838,21 @@ async function renderProcessoDetalhe(id) {
           <div class="card-header"><h3><i class="bi bi-info-circle me-2"></i>Dados do Processo</h3></div>
           <div class="card-body">
             <div class="info-grid">
-              ${Object.entries(dadosEsp).filter(([,v]) => v).map(([k,v]) => {
+              ${(() => {
+                const _guiaTiroEsportivo = processo.TipoProcesso === 'Guia de Tráfego' && dadosEsp.tipoGuia === 'Tiro Esportivo';
+                const _clubeKeys = { nomeClube: 'Nome do Clube', crClube: 'CR do Clube', enderecoClube: 'Endereço do Clube' };
+                return Object.entries(dadosEsp).filter(([,v]) => v).map(([k,v]) => {
                 const LABELS_DADOS = {
                   armaId: 'Arma', armaIdVendedor: 'Arma do Vendedor', armaIdMesmoTitular: 'Arma',
                   nomeComprador: 'Nome do Comprador', nomeVendedor: 'Nome do Vendedor',
                   compradorSistema: 'Comprador no Sistema', vendedorSistema: 'Vendedor no Sistema',
+                  nomeClube: 'Nome do Clube', crClube: 'CR do Clube', enderecoClube: 'Endereço do Clube', tipoGuia: 'Tipo de Guia',
                 };
                 const label = LABELS_DADOS[k] || esc(k.replace(/([A-Z])/g,' $1').trim());
-                return `<div class="info-item"><label>${label}</label><div class="value">${esc(String(v))}</div></div>`;
-              }).join('')}
+                const copiavel = _guiaTiroEsportivo && _clubeKeys[k];
+                return `<div class="info-item"><label>${label}</label><div class="value" style="display:flex;align-items:center;gap:6px">${esc(String(v))}${copiavel ? `<button class="btn-copy" onclick="copiarCampo(this)" data-val="${esc(String(v))}" title="Copiar ${esc(_clubeKeys[k])}"><i class="bi bi-clipboard"></i></button>` : ''}</div></div>`;
+              }).join('');
+              })()}
             </div>
           </div>
         </div>` : ''}
