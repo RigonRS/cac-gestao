@@ -7791,7 +7791,7 @@ function abrirPopupNotificacoes() {
               ${modoSelecao ? `<input type="checkbox" id="chk-notif-${n.id}" style="margin-top:3px;flex-shrink:0" ${selecionadas.has(String(n.id))?'checked':''} onclick="event.stopPropagation();toggleSelecaoNotificacao('${n.id}',this.checked)" />` : ''}
               <div style="flex:1;min-width:0">
                 <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
-                  <div style="font-weight:700;font-size:13px">${!n.lida?'<span style="color:#2563eb">● </span>':''}${destaque ? '<i class="bi bi-question-circle-fill" style="color:#dc2626;margin-right:4px" title="Processo Restituído / Defesa de Notificação"></i>' : ''}${esc(n.titulo)}</div>
+                  <div style="font-weight:700;font-size:13px">${!n.lida?'<span style="color:#2563eb">● </span>':''}${destaque ? '<i class="bi bi-exclamation-circle-fill" style="color:#dc2626;margin-right:4px" title="Processo Restituído / Defesa de Notificação"></i>' : ''}${esc(n.titulo)}</div>
                   <span style="font-size:11px;color:var(--text-muted);white-space:nowrap">${fmtDate(n.data)}</span>
                 </div>
                 <div style="font-size:12px;color:#374151;margin-top:4px">${esc(n.mensagem)}</div>
