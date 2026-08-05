@@ -130,6 +130,7 @@ function getCurrentUserName() {
   const email = (acc?.username || '').toLowerCase();
   const fullName = (acc?.name || '').toLowerCase();
   if (email.includes('recepcao')) return 'Andrieli';
+  if (email.includes('geison'))   return 'Geison';
   return RESPONSAVEIS.find(r => fullName.includes(r.toLowerCase())) || (acc?.name || '').split(' ')[0];
 }
 function normalizeUserName(nome) {
@@ -148,9 +149,11 @@ async function proximoNumero(colecao, prefixo) {
   const max = nums.length ? Math.max(...nums) : 0;
   return `${prefixo}${String(max + 1).padStart(3, '0')}`;
 }
+// Usuários que recebem extras por processo deferido
+const EXTRAS_USERS = ['Andrieli', 'Priscila', 'Geison'];
 function isExtrasUser() {
   const nome = getCurrentUserName();
-  return ['Matheus', 'Simone', 'Andrieli', 'Priscila'].includes(nome);
+  return ['Matheus', 'Simone', ...EXTRAS_USERS].includes(nome);
 }
 function toTitleCase(s) {
   if (!s) return '';
@@ -266,6 +269,17 @@ function orcamentoDoProcesso(processo, orcamentos, demandas) {
   const demanda = demandas.find(d => String(d.id) === String(processo.demandaId));
   if (!demanda || !demanda.orcamentoId) return null;
   return orcamentos.find(o => String(o.id) === String(demanda.orcamentoId)) || null;
+}
+
+// Razão de desconto do orçamento (desconto manual + 5% à vista) sobre o valor bruto dos serviços
+function ratioDescontoOrcamento(orc) {
+  if (!orc) return 1;
+  const itens = orc.itens || [];
+  const grossSubtotal = itens.reduce((s, i) => s + (Number(i.subtotal != null ? i.subtotal : (i.qtd * i.valor)) || 0), 0);
+  const total = Number(orc.total);
+  const fator5 = (orc.pagamento && orc.pagamento.modalidade === 'avista' && orc.pagamento.desconto5) ? 0.95 : 1;
+  if (grossSubtotal > 0 && Number.isFinite(total)) return (total * fator5) / grossSubtotal;
+  return fator5;
 }
 
 // Valor do processo usado no cálculo dos extras (10%): aplica proporcionalmente
@@ -698,7 +712,7 @@ const STATUS_PROCESSO = [
   'Desistência Cliente',
 ];
 const STATUS_FECHADOS = ['Deferido', 'Indeferido', 'Desistência Cliente'];
-const RESPONSAVEIS = ['Andrieli', 'Matheus', 'Priscila', 'Simone'];
+const RESPONSAVEIS = ['Andrieli', 'Geison', 'Matheus', 'Priscila', 'Simone'];
 const TIPOS_SEM_GRU = ['Defesa de Notificação', 'Mudança de endereço SINARM PF', 'Porte de Arma PF', 'Correção de dados de arma', 'Comunicado de Furto/Extravio'];
 const FORMAS_PAGAMENTO_OPTS = ['Pix', 'Dinheiro', 'Cartão'];
 const BANCOS_PAGAMENTO_OPTS = ['Banco do Brasil', 'Sicredi', 'Cresol'];
@@ -896,6 +910,8 @@ const VALORES_PROCESSO = {
   'Defesa de Notificação':                    1621.00,
   'Correção de dados de arma':                 250.00,
   'Porte de Arma PF':                         2500.00,
+  'CTF Avulso':                                 30.00,
+  'SIMAF Avulso':                              150.00,
 };
 
 const TAXAS_PROCESSO = {
@@ -920,7 +936,15 @@ const TAXAS_PROCESSO = {
   'Defesa de Notificação':                       0,
   'Correção de dados de arma':                   0,
   'Porte de Arma PF':                            0,
+  'CTF Avulso':                                  0,
+  'SIMAF Avulso':                                0,
 };
+
+// Itens exibidos na página Valores dos Processos e na configuração de extras (inclui avulsos)
+const TIPOS_VALORES = [...TIPOS_PROCESSO, 'CTF Avulso', 'SIMAF Avulso'];
+
+// Configuração de extras por tipo (persistida): { [tipo]: { pct: number, users: {Andrieli,Priscila,Geison} } }
+const CONFIG_EXTRAS = {};
 
 const CERTIDOES_CONFIG = [
   { keyword: 'Federal',       label: 'Justiça Federal (TRF4)',   url: 'https://www2.trf4.jus.br/trf4/processos/certidao/index.php' },
@@ -1182,6 +1206,76 @@ async function toggleNaoAnalisarVencimentos(clienteId, checked) {
     App.invalidateCache('clientes');
     toast(checked ? 'Vencimentos deste cliente não serão mais analisados.' : 'Vencimentos deste cliente voltarão a ser analisados.', 'success');
   } catch(e) { toast(e.message, 'error'); }
+}
+
+// Abre o Portal do Cliente já autenticado (usa CPF + data de nascimento, credenciais do próprio cliente)
+function acessarPortalCliente(cpf, nasc) {
+  const cpfLimpo = (cpf || '').trim();
+  const nascISO = nasc ? normISO(nasc) : '';
+  if (!cpfLimpo || !nascISO) { toast('Cliente sem CPF ou data de nascimento cadastrados.', 'warning'); return; }
+  const url = `https://portal.prbelico.com.br/?cpf=${encodeURIComponent(cpfLimpo)}&nasc=${encodeURIComponent(nascISO)}&auto=1`;
+  window.open(url, '_blank');
+}
+
+function abrirDeclaracaoResidencia(clienteId, numEndereco) {
+  document.getElementById('modal-decl-residencia')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modal-decl-residencia';
+  modal.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this) this.remove()">
+      <div style="background:#fff;border-radius:14px;padding:22px;max-width:440px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+        <h3 style="margin:0 0 4px;font-size:16px"><i class="bi bi-file-earmark-text me-2"></i>Declaração de Residência</h3>
+        <p style="font-size:13px;color:var(--text-muted);margin:0 0 14px">${numEndereco}° Endereço — informe os dados do titular do endereço.</p>
+        <div style="margin-bottom:10px">
+          <label style="font-size:12px;font-weight:600">Nome completo do titular</label>
+          <input id="decl-titular-nome" type="text" style="width:100%;margin-top:4px" placeholder="Nome do titular do endereço" />
+        </div>
+        <div style="margin-bottom:16px">
+          <label style="font-size:12px;font-weight:600">CPF do titular</label>
+          <input id="decl-titular-cpf" type="text" maxlength="14" oninput="this.value=fmtCPF(this.value)" style="width:100%;margin-top:4px" placeholder="000.000.000-00" />
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button class="btn btn-outline btn-sm" onclick="document.getElementById('modal-decl-residencia').remove()">Cancelar</button>
+          <button class="btn btn-primary btn-sm" onclick="emitirDeclaracaoResidencia('${clienteId}',${numEndereco})"><i class="bi bi-printer me-1"></i>Emitir</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  setTimeout(() => document.getElementById('decl-titular-nome')?.focus(), 50);
+}
+
+async function emitirDeclaracaoResidencia(clienteId, numEndereco) {
+  const nomeTitular = (document.getElementById('decl-titular-nome')?.value || '').trim();
+  const cpfTitular  = (document.getElementById('decl-titular-cpf')?.value || '').trim();
+  if (!nomeTitular || !cpfTitular) { toast('Preencha o nome e o CPF do titular.', 'warning'); return; }
+  showLoading();
+  try {
+    const c = await App.graph.getItem(CONFIG.listas.clientes, clienteId);
+    const sfx = numEndereco === 2 ? '2' : '1';
+    const logradouro  = c['Endereco' + sfx] || '';
+    const numero      = c['Numero' + sfx] || '';
+    const bairro      = c['Bairro' + sfx] || '';
+    const complemento = c['Complemento' + sfx] || '';
+    const cep         = c['CEP' + sfx] || '';
+    const cidade      = c['Cidade' + sfx] || '';
+    const uf          = c[(sfx === '1' ? 'UF1Endereco' : 'UF2Endereco')] || '';
+    const cidadeUF = [cidade, uf].filter(Boolean).join('-');
+    const hoje = new Date().toISOString().split('T')[0];
+    const compTxt = complemento ? `${esc(complemento)}, ` : '';
+    const html = `
+      <h2>DECLARAÇÃO DO TITULAR DO ENDEREÇO RESIDENCIAL PARA GUARDA DE ACERVO DE PRODUTOS CONTROLADOS</h2>
+      <p>Eu, <strong>${esc(nomeTitular)}</strong>, CPF ${esc(cpfTitular)}, declaro sob as penas da Lei (art. 2º da Lei 7.115/83), que <strong>${esc(c.Title||'')}</strong>, com RG ${esc(c.RG||'')} ${esc(c.OrgaoEmissor||'')} e CPF nº ${esc(c.CPF||'')}, reside em ${esc(logradouro)} ${esc(numero)}, ${esc(bairro)}, ${compTxt}CEP ${esc(cep)}, cidade de ${esc(cidadeUF)}, tal endereço de minha titularidade. Também declaro que tenho conhecimento que o endereço será utilizado para guarda de PCE.</p>
+      <p>Declaro ainda, estar ciente de que a falsidade da presente declaração pode implicar na sanção penal prevista no art. 299 do Código Penal, conforme transcrição abaixo:</p>
+      <p style="font-style:italic">"Art. 299 – Omitir, em documento público ou particular, declaração que nele deveria constar, ou nele inserir ou fazer inserir declaração falsa ou diversa da que devia ser escrita, com o fim de prejudicar direito, criar obrigação ou alterar a verdade sobre o fato juridicamente relevante.</p>
+      <p style="font-style:italic">Pena: reclusão de 1 (um) a 5 (cinco) anos e multa, se o documento é público e reclusão de 1 (um) a 3 (três) anos, se o documento é particular.".</p>
+      <p style="text-align:right;margin-top:40px">${esc(cidadeUF)}, ${dataPorExtenso(hoje)}</p>
+      <div class="assinatura" style="margin-top:70px">
+        <div class="assinatura-linha"></div>
+        <strong>${esc(nomeTitular)}</strong>
+      </div>`;
+    document.getElementById('modal-decl-residencia')?.remove();
+    imprimirDocumento(html, 'Declaração de Residência');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 // ============================================================
@@ -1532,6 +1626,7 @@ async function renderClientePerfil(id, tab = 'dados') {
       <div class="btn-group" style="margin-left:auto;flex-wrap:wrap">
         <button class="btn btn-outline btn-sm" onclick="imprimirDadosCliente('${id}')"><i class="bi bi-printer"></i> Imprimir Dados</button>
         <button class="btn btn-outline btn-sm" onclick="imprimirArmasCliente('${id}')"><i class="bi bi-printer"></i> Imprimir Armas</button>
+        <button class="btn btn-outline btn-sm" onclick="acessarPortalCliente('${esc(cliente.CPF||'')}','${cliente.DataNascimento?normISO(cliente.DataNascimento):''}')" title="Abrir o portal deste cliente"><i class="bi bi-box-arrow-up-right"></i> Acessar Portal</button>
         <button class="btn btn-outline btn-sm" onclick="navigate('clientes/editar',{id:'${id}'})"><i class="bi bi-pencil"></i> Editar</button>
         ${!inativo ? `
         <button class="btn btn-primary btn-sm" onclick="navigate('processos/novo',{clienteId:'${id}'})"><i class="bi bi-plus-lg"></i> Novo Processo</button>
@@ -1605,7 +1700,10 @@ function renderPerfilDados(c) {
       </div></div>
     </div>
     <div class="form-section">
-      <div class="form-section-title">1° Endereço</div>
+      <div class="form-section-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <span>1° Endereço</span>
+        <button class="btn btn-outline btn-sm" onclick="abrirDeclaracaoResidencia('${c.id}',1)"><i class="bi bi-file-earmark-text me-1"></i>Emitir Declaração de Residência</button>
+      </div>
       <div class="form-body"><div class="info-grid">
         ${row('CEP', c.CEP1)} ${row('Logradouro', c.Endereco1)} ${row('Número', c.Numero1)}
         ${row('Complemento', c.Complemento1)} ${row('Bairro', c.Bairro1)}
@@ -1613,7 +1711,10 @@ function renderPerfilDados(c) {
       </div></div>
     </div>
     ${c.Endereco2 ? `<div class="form-section">
-      <div class="form-section-title">2° Endereço</div>
+      <div class="form-section-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <span>2° Endereço</span>
+        <button class="btn btn-outline btn-sm" onclick="abrirDeclaracaoResidencia('${c.id}',2)"><i class="bi bi-file-earmark-text me-1"></i>Emitir Declaração de Residência</button>
+      </div>
       <div class="form-body"><div class="info-grid">
         ${row('CEP', c.CEP2)} ${row('Logradouro', c.Endereco2)} ${row('Número', c.Numero2)}
         ${row('Complemento', c.Complemento2)} ${row('Bairro', c.Bairro2)}
@@ -1680,7 +1781,11 @@ function renderPerfilIBAMA(c) {
           <div class="form-grid">
             <div><label>Data de Validade *</label><input type="date" name="DataValidade" required /></div>
             <div><label>Nome da Propriedade *</label><input name="NomePropriedade" required /></div>
-            <div><label>CAR da Propriedade</label><input name="CARPropriedade" /></div>
+            <div>
+              <label>CAR da Propriedade</label>
+              <input name="CARPropriedade" id="simaf-car-input" onblur="verificarCARSimaf(this.value,'${c.id}')" />
+              <div id="simaf-car-aviso" style="display:none;margin-top:6px;font-size:12px;padding:8px 10px;background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;color:#92400e"></div>
+            </div>
             <div><label>Nome do Proprietário</label><input name="NomeProprietario" /></div>
             <div><label>CPF do Proprietário</label><input name="CPFProprietario" oninput="this.value=fmtCPF(this.value)" maxlength="14" /></div>
             <div><label>Telefone do Proprietário</label><input name="TelefoneProprietario" oninput="this.value=fmtCelular(this.value)" maxlength="15" /></div>
@@ -3060,37 +3165,56 @@ async function renderMeusProcessos(tab = 'aprotocolar') {
   const processos = await App.getProcessos();
   const doUsuario = processos.filter(p => p.Responsavel === currentUser);
 
+  // Processos com GRU já paga saem de "A Protocolar" e passam para "Protocolados"
+  const isAProtocolar = p => STATUS_A_PROTOCOLAR.includes(p.Status) && !p.GruPaga;
+  const isProtocolado = p => STATUS_PROTOCOLADOS.includes(p.Status) || (p.GruPaga && STATUS_A_PROTOCOLAR.includes(p.Status));
+
   let meus;
   if (tab === 'protocolados') {
-    meus = doUsuario.filter(p => STATUS_PROTOCOLADOS.includes(p.Status));
+    meus = doUsuario.filter(isProtocolado);
   } else if (tab === 'futuro') {
     meus = doUsuario.filter(p => p.Status === 'Processo Futuro');
   } else if (tab === 'todos') {
     meus = doUsuario.slice();
   } else {
     tab = 'aprotocolar';
-    meus = doUsuario.filter(p => STATUS_A_PROTOCOLAR.includes(p.Status));
+    meus = doUsuario.filter(isAProtocolar);
     meus.sort((a, b) => prioridadeProcesso(a) - prioridadeProcesso(b) || (a.DataAbertura||'').localeCompare(b.DataAbertura||''));
   }
 
   const contagens = {
-    aprotocolar:  doUsuario.filter(p => STATUS_A_PROTOCOLAR.includes(p.Status)).length,
-    protocolados: doUsuario.filter(p => STATUS_PROTOCOLADOS.includes(p.Status)).length,
+    aprotocolar:  doUsuario.filter(isAProtocolar).length,
+    protocolados: doUsuario.filter(isProtocolado).length,
     futuro:       doUsuario.filter(p => p.Status === 'Processo Futuro').length,
     todos:        doUsuario.length,
   };
 
-  function buildProcessoItemHtml(p) {
+  function simbolosPrioridade(p) {
+    const prio = prioridadeProcesso(p); // 1 (máx) .. 17 .. 99
+    let n;
+    if (prio <= 2) n = 5;
+    else if (prio <= 5) n = 4;
+    else if (prio <= 9) n = 3;
+    else if (prio <= 13) n = 2;
+    else n = 1;
+    return `<span title="Prioridade" style="color:#dc2626;font-size:12px;letter-spacing:1px;white-space:nowrap">${'<i class="bi bi-fire"></i>'.repeat(n)}</span>`;
+  }
+
+  function buildProcessoItemHtml(p, mostrarPrioridade) {
     const checklist = JSON.parse(p.ChecklistJSON || '[]');
     const pendentes = checklist.filter(i => !i.concluido);
     const total = checklist.length;
     const b = statusBadge(p.Status);
+    const destaque = mostrarPrioridade && (p.TipoProcesso === 'Defesa de Notificação' || p.Restituido);
     return `
-      <div style="padding:12px 16px;border-bottom:1px solid var(--border)">
+      <div style="padding:12px 16px;border-bottom:1px solid var(--border)${destaque ? ';background:#FF7A7A' : ''}">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-          <div>
-            <a style="font-weight:600;cursor:pointer;color:var(--accent);font-size:14px" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.TipoProcesso||'—')}</a>
-            ${infoArmaLocalProcesso(p) ? `<div style="font-size:12px;color:var(--text-muted);margin-top:2px">${esc(infoArmaLocalProcesso(p))}</div>` : ''}
+          <div style="display:flex;align-items:center;gap:8px">
+            ${mostrarPrioridade ? simbolosPrioridade(p) : ''}
+            <div>
+              <a style="font-weight:600;cursor:pointer;color:var(--accent);font-size:14px" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.TipoProcesso||'—')}</a>
+              ${infoArmaLocalProcesso(p) ? `<div style="font-size:12px;color:var(--text-muted);margin-top:2px">${esc(infoArmaLocalProcesso(p))}</div>` : ''}
+            </div>
           </div>
           <div style="display:flex;align-items:center;gap:8px">
             ${total > 0 ? `<span style="font-size:12px;color:var(--text-muted)">${total - pendentes.length}/${total} itens</span>` : ''}
@@ -3106,7 +3230,7 @@ async function renderMeusProcessos(tab = 'aprotocolar') {
       </div>`;
   }
 
-  function buildClienteCardHtml(nome, clienteId, listaProcessos) {
+  function buildClienteCardHtml(nome, clienteId, listaProcessos, mostrarPrioridade) {
     return `
       <div class="card" style="margin-bottom:16px">
         <div class="card-header" style="cursor:pointer" onclick="navigate('clientes/perfil',{id:'${clienteId}'})">
@@ -3114,7 +3238,7 @@ async function renderMeusProcessos(tab = 'aprotocolar') {
           <span style="font-size:12px;color:var(--text-muted)">${listaProcessos.length} processo(s)</span>
         </div>
         <div class="card-body" style="padding:0">
-          ${listaProcessos.map(buildProcessoItemHtml).join('')}
+          ${listaProcessos.map(p => buildProcessoItemHtml(p, mostrarPrioridade)).join('')}
         </div>
       </div>`;
   }
@@ -3142,7 +3266,7 @@ async function renderMeusProcessos(tab = 'aprotocolar') {
         clusters.push({ clienteId: String(p.ClienteId), nome: p.ClienteNome, processos: [p] });
       }
     });
-    corpoHtml = clusters.map(c => buildClienteCardHtml(c.nome, c.clienteId, c.processos)).join('');
+    corpoHtml = clusters.map(c => buildClienteCardHtml(c.nome, c.clienteId, c.processos, true)).join('');
   } else {
     const porCliente = {};
     meus.forEach(p => {
@@ -3288,10 +3412,23 @@ async function renderProcessoForm(clienteId = null, routeParams = {}) {
        <input type="hidden" name="demandaNumero" value="${esc(demandaNumero||'')}" />`
     : '';
 
+  // Observação salva no orçamento para este serviço (item da demanda)
+  let obsOrcamento = '';
+  if (fromDemanda && tipoProcesso) {
+    try {
+      const demRaw = await App.graph._readFile('demandas').catch(() => []);
+      const dem = (Array.isArray(demRaw) ? demRaw : []).find(d => String(d.id) === String(demandaId));
+      const item = dem && (dem.itens || []).find(i => i.tipo === tipoProcesso && i.obs);
+      if (item) obsOrcamento = item.obs;
+    } catch(e) {}
+  }
+  window._obsOrcamentoNovo = obsOrcamento;
+
   // Badge informando a demanda de origem
   const demandaBadge = fromDemanda
-    ? `<div style="margin-bottom:12px;padding:8px 12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;font-size:13px;color:#1d4ed8">
-        <i class="bi bi-clipboard-check me-1"></i>Processo vinculado à demanda <strong>${esc(demandaNumero||demandaId)}</strong>
+    ? `<div style="margin-bottom:12px;padding:8px 12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;font-size:13px;color:#1d4ed8;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span><i class="bi bi-clipboard-check me-1"></i>Processo vinculado à demanda <strong>${esc(demandaNumero||demandaId)}</strong></span>
+        ${obsOrcamento ? `<button type="button" class="btn btn-ghost btn-sm" style="padding:2px 8px;color:#1d4ed8" onclick="verObsOrcamentoNovo()" title="Ver observação do orçamento"><i class="bi bi-eye me-1"></i>Observação do orçamento</button>` : ''}
       </div>` : '';
 
   // Quadro de Pagamento: para processos vindos de demanda/orçamento, o pagamento é
@@ -3623,6 +3760,24 @@ function onTipoGuiaProcesso(tipo) {
   const secaoChecklist = document.getElementById('secao-checklist');
   if (items.length) { secaoChecklist.style.display=''; checklistEl.innerHTML = renderChecklistForm(items); }
   else { secaoChecklist.style.display='none'; }
+}
+
+function verObsOrcamentoNovo() {
+  const texto = window._obsOrcamentoNovo || '';
+  document.getElementById('modal-obs-orc-novo')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modal-obs-orc-novo';
+  modal.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this) this.remove()">
+      <div style="background:#fff;border-radius:14px;padding:22px;max-width:460px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <h3 style="margin:0;font-size:16px"><i class="bi bi-chat-left-text me-2"></i>Observação do Orçamento</h3>
+          <button onclick="document.getElementById('modal-obs-orc-novo').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:#666;line-height:1">×</button>
+        </div>
+        <div style="font-size:14px;color:#374151;white-space:pre-wrap;line-height:1.6">${esc(texto) || '<span style="color:var(--text-muted)">Sem observação.</span>'}</div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
 }
 
 // Filtra as opções de Tipo de Guia conforme o acervo (atividade) da arma selecionada
@@ -4803,7 +4958,7 @@ async function renderProcessoDetalhe(id) {
           ${processo.Responsavel ? `<div style="font-size:12px;color:var(--text-muted);margin-bottom:4px"><i class="bi bi-person-check me-1"></i>Responsável: <strong style="color:#1f2937">${esc(processo.Responsavel)}</strong></div>` : ''}
           ${(processo.demandaNumero || _demandaVinculada) ? `<div style="font-size:12px;color:var(--text-muted);margin-bottom:4px"><i class="bi bi-clipboard-check me-1"></i>Demanda: <strong style="color:#1f2937">${esc(processo.demandaNumero || _demandaVinculada?.numero || '—')}</strong>${_orcVinculado ? ` <span style="color:var(--text-muted)">· Orçamento ${esc(_orcVinculado.numero||'')}</span>` : ''}</div>` : ''}
           <div style="color:var(--text-muted);font-size:13px">
-            <strong>${esc(processo.ClienteNome||'—')}</strong>
+            <a style="cursor:pointer;color:var(--accent);font-weight:700" onclick="navigate('clientes/perfil',{id:'${processo.ClienteId}'})" title="Abrir perfil do cliente">${esc(processo.ClienteNome||'—')}</a>
             &nbsp;·&nbsp; Protocolo: ${esc(processo.NumeroProtocolo||'—')}
             &nbsp;·&nbsp; Abertura: ${fmtDate(processo.DataAbertura?processo.DataAbertura.split('T')[0]:'')}
             ${processo.DataPrazo ? `&nbsp;·&nbsp; Prazo: ${fmtDate(processo.DataPrazo.split('T')[0])}` : ''}
@@ -6839,13 +6994,13 @@ function imprimirExtras(responsavel) {
 
   const totalExtra = meusDeferidos.reduce((s, p) => {
     const taxa = TAXAS_PROCESSO[p.TipoProcesso] || 0;
-    return s + Math.max(0, valorProcessoParaExtras(p, _orcExtras, _demExtras) - taxa) * 0.1;
+    return s + Math.max(0, valorProcessoParaExtras(p, _orcExtras, _demExtras) - taxa) * fracaoExtraProcesso(p.TipoProcesso, responsavel);
   }, 0) + meusAvulsos.reduce((s, a) => s + (Number(a.valor)||0), 0);
 
   const itensHtml = meusDeferidos.map(p => {
     const valor = Number(p.ValorProcesso) || 0;
     const taxa = TAXAS_PROCESSO[p.TipoProcesso] || 0;
-    const extra = Math.max(0, valorProcessoParaExtras(p, _orcExtras, _demExtras) - taxa) * 0.1;
+    const extra = Math.max(0, valorProcessoParaExtras(p, _orcExtras, _demExtras) - taxa) * fracaoExtraProcesso(p.TipoProcesso, responsavel);
     const desc = getProcessoDescExtra(p);
     return `<tr>
       <td>${esc(p.ClienteNome||'—')}</td>
@@ -6931,7 +7086,7 @@ async function renderPagamentosExtras() {
 
     const totalProcessos = meusDeferidos.reduce((s, p) => {
       const taxa = TAXAS_PROCESSO[p.TipoProcesso] || 0;
-      return s + Math.max(0, valorProcessoParaExtras(p, _orcExtras, _demExtras) - taxa) * 0.1;
+      return s + Math.max(0, valorProcessoParaExtras(p, _orcExtras, _demExtras) - taxa) * fracaoExtraProcesso(p.TipoProcesso, responsavel);
     }, 0);
     const totalAvulsos = meusAvulsos.reduce((s, a) => s + (Number(a.valor)||0), 0);
     const totalExtra = totalProcessos + totalAvulsos;
@@ -6942,7 +7097,7 @@ async function renderPagamentosExtras() {
         const taxa = TAXAS_PROCESSO[p.TipoProcesso] || 0;
         const valorExtraBase = valorProcessoParaExtras(p, _orcExtras, _demExtras);
         const temDescExtra = Math.abs(valorExtraBase - valor) > 0.005;
-        const extra = Math.max(0, valorExtraBase - taxa) * 0.1;
+        const extra = Math.max(0, valorExtraBase - taxa) * fracaoExtraProcesso(p.TipoProcesso, responsavel);
         const desc = getProcessoDescExtra(p);
         const infoPag = infoPagamentoProcessoTxt(p);
         // Situação de pagamento via orçamento vinculado (modelo novo); legado usa PagamentosJSON
@@ -7010,12 +7165,17 @@ async function renderPagamentosExtras() {
         ${renderPainelExtra(nome)}
       </div>`;
 
-  // Priscila e Andrieli (não-admin) veem apenas o próprio quadro; admins veem os dois
+  // Andrieli, Priscila e Geison (não-admin) veem apenas o próprio quadro; admins veem todos
+  const CORES_EXTRA = {
+    Andrieli: ['#fef3c7', '#d97706'],
+    Priscila: ['#ede9fe', '#7c3aed'],
+    Geison:   ['#dbeafe', '#2563eb'],
+  };
   const usuarioAtual = getCurrentUserName();
-  const soMeu = !isAdminUser() && (usuarioAtual === 'Andrieli' || usuarioAtual === 'Priscila');
-  const cards = soMeu
-    ? (usuarioAtual === 'Andrieli' ? cardExtra('Andrieli', '#fef3c7', '#d97706') : cardExtra('Priscila', '#ede9fe', '#7c3aed'))
-    : cardExtra('Andrieli', '#fef3c7', '#d97706') + cardExtra('Priscila', '#ede9fe', '#7c3aed');
+  const soMeu = !isAdminUser() && EXTRAS_USERS.includes(usuarioAtual);
+  const usuariosMostrar = soMeu ? [usuarioAtual] : EXTRAS_USERS;
+  const cards = usuariosMostrar.map(u => cardExtra(u, CORES_EXTRA[u][0], CORES_EXTRA[u][1])).join('');
+  const colTemplate = usuariosMostrar.length === 1 ? '1fr' : 'repeat(auto-fit,minmax(320px,1fr))';
 
   const el = document.getElementById('page-content');
   el.innerHTML = `
@@ -7023,7 +7183,7 @@ async function renderPagamentosExtras() {
       <label style="font-size:13px;font-weight:600">Filtrar por mês:</label>
       <select style="padding:6px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px" onchange="window._extrasFilterMes=this.value;renderPagamentosExtras()">${selectOpts}</select>
     </div>
-    <div style="display:grid;grid-template-columns:${soMeu ? '1fr' : '1fr 1fr'};gap:20px">
+    <div style="display:grid;grid-template-columns:${colTemplate};gap:20px">
       ${cards}
     </div>`;
 }
@@ -7199,8 +7359,8 @@ async function renderValoresProcessos() {
         <table>
           <thead><tr><th>Tipo de Processo</th><th>Valor Atual</th><th>Novo Valor</th><th>Valor das Taxas</th></tr></thead>
           <tbody>
-            ${TIPOS_PROCESSO.map(tipo => {
-              const atual = valoresPadrao[tipo];
+            ${TIPOS_VALORES.map(tipo => {
+              const atual = valoresPadrao[tipo] != null ? valoresPadrao[tipo] : VALORES_PROCESSO[tipo];
               const taxaAtual = taxasPadrao[tipo] != null ? taxasPadrao[tipo] : TAXAS_PROCESSO[tipo];
               return `<tr>
                 <td style="font-weight:600">${esc(tipo)}</td>
@@ -7268,14 +7428,41 @@ async function salvarValoresProcessos() {
 // ============================================================
 // CONFIGURAÇÕES (restrito a Matheus e Simone)
 // ============================================================
-async function renderConfiguracoes() {
+async function renderConfiguracoes(view) {
   document.getElementById('page-title').textContent = 'Configurações';
   if (!isAdminUser()) {
     document.getElementById('page-content').innerHTML = `<div class="empty-state"><i class="bi bi-lock" style="font-size:48px"></i><p>Acesso restrito.</p></div>`;
     return;
   }
+  view = view || 'menu';
+  window._configView = view;
+  if (view === 'whatsapp') return renderConfigWhatsApp();
+  if (view === 'extras')   return renderConfigExtras();
+
   const el = document.getElementById('page-content');
   el.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px">
+      <div class="card" style="cursor:pointer" onclick="renderConfiguracoes('whatsapp')">
+        <div class="card-body" style="text-align:center;padding:28px 16px">
+          <i class="bi bi-whatsapp" style="font-size:36px;color:#25D366"></i>
+          <h3 style="margin:12px 0 6px;font-size:16px">Mensagens de WhatsApp</h3>
+          <p style="font-size:13px;color:var(--text-muted);margin:0">Editar as mensagens automáticas enviadas aos clientes.</p>
+        </div>
+      </div>
+      <div class="card" style="cursor:pointer" onclick="renderConfiguracoes('extras')">
+        <div class="card-body" style="text-align:center;padding:28px 16px">
+          <i class="bi bi-percent" style="font-size:36px;color:#f59e0b"></i>
+          <h3 style="margin:12px 0 6px;font-size:16px">Valor de Extras</h3>
+          <p style="font-size:13px;color:var(--text-muted);margin:0">Configurar percentual de extra por tipo de processo e por usuário.</p>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderConfigWhatsApp() {
+  const el = document.getElementById('page-content');
+  el.innerHTML = `
+    <button class="btn btn-ghost btn-sm" style="margin-bottom:12px" onclick="renderConfiguracoes('menu')"><i class="bi bi-arrow-left me-1"></i>Voltar</button>
     <div class="card">
       <div class="card-header">
         <h3><i class="bi bi-whatsapp me-2" style="color:#25D366"></i>Mensagens Automáticas de WhatsApp</h3>
@@ -7294,6 +7481,90 @@ async function renderConfiguracoes() {
           </div>`).join('')}
       </div>
     </div>`;
+}
+
+function renderConfigExtras() {
+  const el = document.getElementById('page-content');
+  const cols = ['Geison', 'Andrieli', 'Priscila'];
+  const idFromTipo = t => t.replace(/[^a-zA-Z0-9]/g, '_');
+  el.innerHTML = `
+    <button class="btn btn-ghost btn-sm" style="margin-bottom:12px" onclick="renderConfiguracoes('menu')"><i class="bi bi-arrow-left me-1"></i>Voltar</button>
+    <div class="card">
+      <div class="card-header">
+        <h3><i class="bi bi-percent me-2" style="color:#f59e0b"></i>Valor de Extras por Tipo de Processo</h3>
+        <button class="btn btn-primary" onclick="salvarConfigExtras()"><i class="bi bi-floppy me-1"></i>Salvar Alterações</button>
+      </div>
+      <div class="card-body" style="padding:0">
+        <p style="font-size:12px;color:var(--text-muted);padding:12px 16px 0;margin:0">Marque os usuários que recebem extra por cada tipo e informe a porcentagem. O Valor Extra é calculado sobre o Valor Líquido (Valor atual − Taxas).</p>
+        <div class="table-wrapper"><table>
+          <thead><tr>
+            <th>Tipo de Processo</th>
+            <th style="text-align:right">Valor atual</th>
+            <th style="text-align:right">Taxas</th>
+            <th style="text-align:right">Líquido</th>
+            ${cols.map(u => `<th style="text-align:center">${u}</th>`).join('')}
+            <th style="text-align:center">% Extra</th>
+            <th style="text-align:right">Valor Extra</th>
+          </tr></thead>
+          <tbody>
+            ${TIPOS_VALORES.map(tipo => {
+              const valorAtual = Number(VALORES_PROCESSO[tipo]) || 0;
+              const taxa = Number(TAXAS_PROCESSO[tipo]) || 0;
+              const liquido = Math.max(0, valorAtual - taxa);
+              const cfg = CONFIG_EXTRAS[tipo] || { pct: 10, users: { Geison: true, Andrieli: true, Priscila: true } };
+              const tid = idFromTipo(tipo);
+              const valorExtra = liquido * (Number(cfg.pct) || 0) / 100;
+              return `<tr data-tid="${tid}" data-tipo="${esc(tipo)}" data-liquido="${liquido}">
+                <td style="font-weight:600">${esc(tipo)}</td>
+                <td style="text-align:right">${fmtMoeda(valorAtual)}</td>
+                <td style="text-align:right">${fmtMoeda(taxa)}</td>
+                <td style="text-align:right;font-weight:600">${fmtMoeda(liquido)}</td>
+                ${cols.map(u => `<td style="text-align:center"><input type="checkbox" class="cfgext-user" data-user="${u}" ${cfg.users && cfg.users[u] !== false ? 'checked' : ''} /></td>`).join('')}
+                <td style="text-align:center"><input type="number" step="0.1" min="0" class="cfgext-pct" value="${cfg.pct != null ? cfg.pct : 10}" oninput="recalcExtraConfig('${tid}')" style="width:70px;padding:4px 6px;border:1px solid var(--border);border-radius:4px;font-size:13px;text-align:right" />%</td>
+                <td style="text-align:right;font-weight:600" id="cfgext-valor-${tid}">${fmtMoeda(valorExtra)}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table></div>
+      </div>
+    </div>`;
+}
+
+function recalcExtraConfig(tid) {
+  const row = document.querySelector(`tr[data-tid="${tid}"]`);
+  if (!row) return;
+  const liquido = Number(row.dataset.liquido) || 0;
+  const pct = Number(row.querySelector('.cfgext-pct')?.value) || 0;
+  const cell = document.getElementById(`cfgext-valor-${tid}`);
+  if (cell) cell.textContent = fmtMoeda(liquido * pct / 100);
+}
+
+async function salvarConfigExtras() {
+  showLoading();
+  try {
+    const cfg = {};
+    document.querySelectorAll('tr[data-tid]').forEach(row => {
+      const tipo = row.dataset.tipo;
+      const pct = Number(row.querySelector('.cfgext-pct')?.value) || 0;
+      const users = {};
+      row.querySelectorAll('.cfgext-user').forEach(chk => { users[chk.dataset.user] = chk.checked; });
+      cfg[tipo] = { pct, users };
+    });
+    await App.graph._writeFile('config_extras', cfg);
+    Object.keys(CONFIG_EXTRAS).forEach(k => delete CONFIG_EXTRAS[k]);
+    Object.assign(CONFIG_EXTRAS, cfg);
+    toast('Configuração de extras salva!', 'success');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+// Fração de extra (0 a 1) para um processo/usuário, conforme configuração (padrão 10%)
+function fracaoExtraProcesso(tipo, usuario) {
+  const cfg = CONFIG_EXTRAS[tipo];
+  if (cfg) {
+    if (cfg.users && cfg.users[usuario] === false) return 0;
+    return (Number(cfg.pct) || 0) / 100;
+  }
+  return 0.10;
 }
 
 function restaurarMensagemPadrao(chave) {
@@ -8192,6 +8463,51 @@ async function toggleNaoRenovarCTF(clienteId, checked) {
 function toggleSIMAFForm(clienteId) {
   const el = document.getElementById('simaf-form-wrap');
   if (el) el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+// Verifica se o CAR digitado já existe em SIMAF de outro cliente
+async function verificarCARSimaf(car, clienteId) {
+  const aviso = document.getElementById('simaf-car-aviso');
+  if (!aviso) return;
+  const carLimpo = (car || '').trim();
+  if (!carLimpo) { aviso.style.display = 'none'; window._simafCARMatch = null; return; }
+  try {
+    const clientes = await App.getClientes();
+    let match = null;
+    for (const cli of clientes) {
+      if (String(cli.id) === String(clienteId)) continue;
+      let lista = [];
+      try { lista = JSON.parse(cli.SIMAFs || '[]'); } catch(e) {}
+      const s = lista.find(x => (x.CARPropriedade || '').trim() && (x.CARPropriedade || '').trim().toUpperCase() === carLimpo.toUpperCase());
+      if (s) { match = { cliente: cli.Title || '', simaf: s }; break; }
+    }
+    if (match) {
+      window._simafCARMatch = match.simaf;
+      aviso.style.display = '';
+      aviso.innerHTML = `<i class="bi bi-exclamation-triangle-fill me-1"></i>Já existe um SIMAF com este CAR cadastrado para <strong>${esc(match.cliente)}</strong>. Deseja preencher os dados automaticamente?
+        <div style="margin-top:6px"><button type="button" class="btn btn-outline btn-sm" onclick="preencherSimafDeCAR()"><i class="bi bi-magic me-1"></i>Preencher automaticamente</button></div>`;
+    } else {
+      aviso.style.display = 'none';
+      window._simafCARMatch = null;
+    }
+  } catch(e) { aviso.style.display = 'none'; }
+}
+
+function preencherSimafDeCAR() {
+  const s = window._simafCARMatch;
+  if (!s) return;
+  const form = document.getElementById('form-simaf');
+  if (!form) return;
+  const set = (name, val) => { const el = form.querySelector(`[name="${name}"]`); if (el && val) el.value = val; };
+  set('NomePropriedade', s.NomePropriedade);
+  set('NomeProprietario', s.NomeProprietario);
+  set('CPFProprietario', s.CPFProprietario);
+  set('TelefoneProprietario', s.TelefoneProprietario);
+  set('CidadeSimaf', s.CidadeSimaf);
+  set('UFSimaf', s.UFSimaf);
+  const aviso = document.getElementById('simaf-car-aviso');
+  if (aviso) aviso.style.display = 'none';
+  toast('Dados preenchidos a partir do SIMAF existente.', 'success');
 }
 
 async function salvarSIMAF(e, clienteId) {
@@ -9620,11 +9936,13 @@ async function renderControleDemandas() {
   document.getElementById('page-title').textContent = 'Controle de Demandas';
   showLoading();
   try {
-    const [demandasRaw, processos] = await Promise.all([
+    const [demandasRaw, processos, orcRaw] = await Promise.all([
       App.graph._readFile('demandas').catch(() => []),
       App.getProcessos(),
+      App.graph._readFile('orcamentos').catch(() => []),
     ]);
     const demandas = Array.isArray(demandasRaw) ? demandasRaw : [];
+    const orcamentos = Array.isArray(orcRaw) ? orcRaw : [];
     window._controleDemandasProcessos = processos;
 
     // Painel por operador
@@ -9667,12 +9985,21 @@ async function renderControleDemandas() {
           ? `<span class="badge badge-blue">Aberta</span>`
           : `<span class="badge badge-green">Concluída</span>`;
 
+      // Orçamento de origem para aplicar o desconto proporcional aos valores dos itens
+      const orcDemanda = orcamentos.find(o => String(o.id) === String(d.orcamentoId));
+      const ratioDesc = ratioDescontoOrcamento(orcDemanda);
+
       // Progresso: conta processos vinculados
       const progItems = (d.itens||[]).map((item, itemIdx) => {
         const criados = processos.filter(p => p.demandaId && String(p.demandaId) === String(d.id) && p.TipoProcesso === item.tipo).length;
         const pct = item.qtd > 0 ? Math.min(100, Math.round(criados/item.qtd*100)) : 100;
         const obsBtn = `<button class="btn btn-ghost btn-sm" style="padding:0 2px" onclick="editarObsItemDemanda('${d.id}',${itemIdx})" title="${item.obs ? 'Editar observação: ' + esc(item.obs) : 'Adicionar observação'}"><i class="bi ${item.obs ? 'bi-chat-left-text-fill' : 'bi-chat-left-text'}" style="color:${item.obs ? 'var(--accent)' : 'var(--text-muted)'}"></i></button>`;
-        return `<div style="font-size:12px;margin-bottom:2px;display:flex;align-items:center;gap:2px">${item.qtd>1?item.qtd+'× ':''}${esc(item.tipo)} <span style="color:${criados>=item.qtd?'var(--success)':'var(--text-muted)'}">(${criados}/${item.qtd})</span> <span style="color:var(--text-muted)">· ${fmtMoeda(item.valor||0)}</span>${obsBtn}</div>`;
+        const valorComDesc = Math.round((Number(item.valor)||0) * ratioDesc * 100) / 100;
+        const temDesc = Math.abs(valorComDesc - (Number(item.valor)||0)) > 0.005;
+        const valorHtml = temDesc
+          ? `<span style="text-decoration:line-through;color:var(--text-muted)">${fmtMoeda(item.valor||0)}</span> ${fmtMoeda(valorComDesc)}`
+          : fmtMoeda(item.valor||0);
+        return `<div style="font-size:12px;margin-bottom:2px;display:flex;align-items:center;gap:2px">${item.qtd>1?item.qtd+'× ':''}${esc(item.tipo)} <span style="color:${criados>=item.qtd?'var(--success)':'var(--text-muted)'}">(${criados}/${item.qtd})</span> <span style="color:var(--text-muted)">· ${valorHtml}</span>${obsBtn}</div>`;
       }).join('');
 
       const delegarOpts = d.status !== 'Concluída'
@@ -9687,7 +10014,7 @@ async function renderControleDemandas() {
         <td>${esc(d.clienteNome||'—')}</td>
         <td style="white-space:nowrap;font-size:12px">${fmtDate(d.dataCriacao)}</td>
         <td style="font-size:12px">${progItems}</td>
-        <td style="white-space:nowrap;font-weight:600">${fmtMoeda(d.total)}</td>
+        <td style="white-space:nowrap;font-weight:600">${orcDemanda ? fmtTotalOrc(orcDemanda) : fmtMoeda(d.total)}</td>
         <td>${statusBadge}</td>
         <td>${d.operador ? `<span class="badge badge-blue">${esc(d.operador)}</span>` : '<span style="color:var(--text-muted)">—</span>'}</td>
         <td style="white-space:nowrap;font-size:12px">${d.dataDelegacao ? fmtDate(d.dataDelegacao) : '<span style="color:var(--text-muted)">—</span>'}</td>
@@ -10120,6 +10447,12 @@ async function iniciarApp() {
   try {
     const mp = await App.graph._readFile('mensagens_whatsapp');
     if (mp && !Array.isArray(mp)) Object.assign(MENSAGENS_WHATSAPP, mp);
+  } catch(e) {}
+
+  // Carrega configuração de extras
+  try {
+    const ce = await App.graph._readFile('config_extras');
+    if (ce && !Array.isArray(ce)) Object.assign(CONFIG_EXTRAS, ce);
   } catch(e) {}
 
   // Verifica e cria listas se necessário
