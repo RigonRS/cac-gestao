@@ -1780,12 +1780,12 @@ function renderPerfilIBAMA(c) {
         <form id="form-simaf" onsubmit="salvarSIMAF(event,'${c.id}')">
           <div class="form-grid">
             <div><label>Data de Validade *</label><input type="date" name="DataValidade" required /></div>
-            <div><label>Nome da Propriedade *</label><input name="NomePropriedade" required /></div>
             <div>
-              <label>CAR da Propriedade</label>
-              <input name="CARPropriedade" id="simaf-car-input" onblur="verificarCARSimaf(this.value,'${c.id}')" />
+              <label>CAR da Propriedade *</label>
+              <input name="CARPropriedade" id="simaf-car-input" required onblur="verificarCARSimaf(this.value,'${c.id}')" />
               <div id="simaf-car-aviso" style="display:none;margin-top:6px;font-size:12px;padding:8px 10px;background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;color:#92400e"></div>
             </div>
+            <div><label>Nome da Propriedade *</label><input name="NomePropriedade" required /></div>
             <div><label>Nome do Proprietário</label><input name="NomeProprietario" /></div>
             <div><label>CPF do Proprietário</label><input name="CPFProprietario" oninput="this.value=fmtCPF(this.value)" maxlength="14" /></div>
             <div><label>Telefone do Proprietário</label><input name="TelefoneProprietario" oninput="this.value=fmtCelular(this.value)" maxlength="15" /></div>
@@ -3197,7 +3197,7 @@ async function renderMeusProcessos(tab = 'aprotocolar') {
     else if (prio <= 9) n = 3;
     else if (prio <= 13) n = 2;
     else n = 1;
-    return `<span title="Prioridade" style="color:#dc2626;font-size:12px;letter-spacing:1px;white-space:nowrap">${'<i class="bi bi-fire"></i>'.repeat(n)}</span>`;
+    return `<span title="Prioridade" style="color:#dc2626;font-size:12px;letter-spacing:1px;white-space:nowrap">${'<i class="bi bi-exclamation-circle-fill"></i>'.repeat(n)}</span>`;
   }
 
   function buildProcessoItemHtml(p, mostrarPrioridade) {
@@ -3207,7 +3207,7 @@ async function renderMeusProcessos(tab = 'aprotocolar') {
     const b = statusBadge(p.Status);
     const destaque = mostrarPrioridade && (p.TipoProcesso === 'Defesa de Notificação' || p.Restituido);
     return `
-      <div style="padding:12px 16px;border-bottom:1px solid var(--border)${destaque ? ';background:#FF7A7A' : ''}">
+      <div style="padding:12px 16px;border-bottom:1px solid var(--border)${destaque ? ';background:#FFB2B2' : ''}">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
           <div style="display:flex;align-items:center;gap:8px">
             ${mostrarPrioridade ? simbolosPrioridade(p) : ''}
@@ -7495,33 +7495,40 @@ function renderConfigExtras() {
         <button class="btn btn-primary" onclick="salvarConfigExtras()"><i class="bi bi-floppy me-1"></i>Salvar Alterações</button>
       </div>
       <div class="card-body" style="padding:0">
-        <p style="font-size:12px;color:var(--text-muted);padding:12px 16px 0;margin:0">Marque os usuários que recebem extra por cada tipo e informe a porcentagem. O Valor Extra é calculado sobre o Valor Líquido (Valor atual − Taxas).</p>
+        <p style="font-size:12px;color:var(--text-muted);padding:12px 16px 0;margin:0">Informe a porcentagem de extra de cada usuário por tipo de processo. O Valor Extra é calculado sobre o Valor Líquido (Valor atual − Taxas). Use 0% para quem não recebe.</p>
         <div class="table-wrapper"><table>
           <thead><tr>
             <th>Tipo de Processo</th>
             <th style="text-align:right">Valor atual</th>
             <th style="text-align:right">Taxas</th>
             <th style="text-align:right">Líquido</th>
-            ${cols.map(u => `<th style="text-align:center">${u}</th>`).join('')}
-            <th style="text-align:center">% Extra</th>
-            <th style="text-align:right">Valor Extra</th>
+            ${cols.map(u => `<th style="text-align:center">${u}<br><span style="font-size:10px;font-weight:400;color:var(--text-muted)">% · Extra</span></th>`).join('')}
           </tr></thead>
           <tbody>
             ${TIPOS_VALORES.map(tipo => {
               const valorAtual = Number(VALORES_PROCESSO[tipo]) || 0;
               const taxa = Number(TAXAS_PROCESSO[tipo]) || 0;
               const liquido = Math.max(0, valorAtual - taxa);
-              const cfg = CONFIG_EXTRAS[tipo] || { pct: 10, users: { Geison: true, Andrieli: true, Priscila: true } };
+              const cfg = CONFIG_EXTRAS[tipo] || {};
               const tid = idFromTipo(tipo);
-              const valorExtra = liquido * (Number(cfg.pct) || 0) / 100;
+              const pctDe = u => {
+                if (cfg.pcts && cfg.pcts[u] != null) return cfg.pcts[u];
+                if (cfg.pct != null) return (cfg.users && cfg.users[u] === false) ? 0 : cfg.pct;
+                return 10;
+              };
               return `<tr data-tid="${tid}" data-tipo="${esc(tipo)}" data-liquido="${liquido}">
                 <td style="font-weight:600">${esc(tipo)}</td>
                 <td style="text-align:right">${fmtMoeda(valorAtual)}</td>
                 <td style="text-align:right">${fmtMoeda(taxa)}</td>
                 <td style="text-align:right;font-weight:600">${fmtMoeda(liquido)}</td>
-                ${cols.map(u => `<td style="text-align:center"><input type="checkbox" class="cfgext-user" data-user="${u}" ${cfg.users && cfg.users[u] !== false ? 'checked' : ''} /></td>`).join('')}
-                <td style="text-align:center"><input type="number" step="0.1" min="0" class="cfgext-pct" value="${cfg.pct != null ? cfg.pct : 10}" oninput="recalcExtraConfig('${tid}')" style="width:70px;padding:4px 6px;border:1px solid var(--border);border-radius:4px;font-size:13px;text-align:right" />%</td>
-                <td style="text-align:right;font-weight:600" id="cfgext-valor-${tid}">${fmtMoeda(valorExtra)}</td>
+                ${cols.map(u => {
+                  const pctU = pctDe(u);
+                  const extraU = liquido * (Number(pctU) || 0) / 100;
+                  return `<td style="text-align:center;white-space:nowrap">
+                    <input type="number" step="0.1" min="0" class="cfgext-pct" data-user="${u}" value="${pctU}" oninput="recalcExtraConfig('${tid}')" style="width:56px;padding:4px 6px;border:1px solid var(--border);border-radius:4px;font-size:13px;text-align:right" />%
+                    <div style="font-size:11px;color:var(--success);font-weight:600;margin-top:2px" id="cfgext-valor-${tid}-${u}">${fmtMoeda(extraU)}</div>
+                  </td>`;
+                }).join('')}
               </tr>`;
             }).join('')}
           </tbody>
@@ -7534,9 +7541,12 @@ function recalcExtraConfig(tid) {
   const row = document.querySelector(`tr[data-tid="${tid}"]`);
   if (!row) return;
   const liquido = Number(row.dataset.liquido) || 0;
-  const pct = Number(row.querySelector('.cfgext-pct')?.value) || 0;
-  const cell = document.getElementById(`cfgext-valor-${tid}`);
-  if (cell) cell.textContent = fmtMoeda(liquido * pct / 100);
+  row.querySelectorAll('.cfgext-pct').forEach(inp => {
+    const u = inp.dataset.user;
+    const pct = Number(inp.value) || 0;
+    const span = document.getElementById(`cfgext-valor-${tid}-${u}`);
+    if (span) span.textContent = fmtMoeda(liquido * pct / 100);
+  });
 }
 
 async function salvarConfigExtras() {
@@ -7545,10 +7555,9 @@ async function salvarConfigExtras() {
     const cfg = {};
     document.querySelectorAll('tr[data-tid]').forEach(row => {
       const tipo = row.dataset.tipo;
-      const pct = Number(row.querySelector('.cfgext-pct')?.value) || 0;
-      const users = {};
-      row.querySelectorAll('.cfgext-user').forEach(chk => { users[chk.dataset.user] = chk.checked; });
-      cfg[tipo] = { pct, users };
+      const pcts = {};
+      row.querySelectorAll('.cfgext-pct').forEach(inp => { pcts[inp.dataset.user] = Number(inp.value) || 0; });
+      cfg[tipo] = { pcts };
     });
     await App.graph._writeFile('config_extras', cfg);
     Object.keys(CONFIG_EXTRAS).forEach(k => delete CONFIG_EXTRAS[k]);
@@ -7561,8 +7570,11 @@ async function salvarConfigExtras() {
 function fracaoExtraProcesso(tipo, usuario) {
   const cfg = CONFIG_EXTRAS[tipo];
   if (cfg) {
-    if (cfg.users && cfg.users[usuario] === false) return 0;
-    return (Number(cfg.pct) || 0) / 100;
+    if (cfg.pcts && cfg.pcts[usuario] != null) return (Number(cfg.pcts[usuario]) || 0) / 100;
+    if (cfg.pct != null) {
+      if (cfg.users && cfg.users[usuario] === false) return 0;
+      return (Number(cfg.pct) || 0) / 100;
+    }
   }
   return 0.10;
 }
@@ -7772,17 +7784,20 @@ function abrirPopupNotificacoes() {
         </div>
         ${lista.length === 0
           ? `<div class="empty-state" style="padding:24px"><i class="bi bi-bell-slash"></i><p>Nenhuma notificação.</p></div>`
-          : lista.map(n => `
-            <div style="padding:12px;border-bottom:1px solid var(--border);cursor:pointer;background:${n.lida?'transparent':'#eff6ff'};display:flex;gap:10px;align-items:flex-start" onclick="${modoSelecao ? `toggleSelecaoNotificacao('${n.id}',!document.getElementById('chk-notif-${n.id}').checked)` : `abrirNotificacao('${n.id}')`}">
+          : lista.map(n => {
+            const destaque = n.tipo === 'restituido' || n.tipo === 'defesa_notificacao';
+            return `
+            <div style="padding:12px;cursor:pointer;background:${n.lida?'transparent':'#eff6ff'};display:flex;gap:10px;align-items:flex-start;${destaque ? 'border:2px solid #dc2626;border-radius:8px;margin-bottom:8px' : 'border-bottom:1px solid var(--border)'}" onclick="${modoSelecao ? `toggleSelecaoNotificacao('${n.id}',!document.getElementById('chk-notif-${n.id}').checked)` : `abrirNotificacao('${n.id}')`}">
               ${modoSelecao ? `<input type="checkbox" id="chk-notif-${n.id}" style="margin-top:3px;flex-shrink:0" ${selecionadas.has(String(n.id))?'checked':''} onclick="event.stopPropagation();toggleSelecaoNotificacao('${n.id}',this.checked)" />` : ''}
               <div style="flex:1;min-width:0">
                 <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
-                  <div style="font-weight:700;font-size:13px">${!n.lida?'<span style="color:#2563eb">● </span>':''}${esc(n.titulo)}</div>
+                  <div style="font-weight:700;font-size:13px">${!n.lida?'<span style="color:#2563eb">● </span>':''}${destaque ? '<i class="bi bi-question-circle-fill" style="color:#dc2626;margin-right:4px" title="Processo Restituído / Defesa de Notificação"></i>' : ''}${esc(n.titulo)}</div>
                   <span style="font-size:11px;color:var(--text-muted);white-space:nowrap">${fmtDate(n.data)}</span>
                 </div>
                 <div style="font-size:12px;color:#374151;margin-top:4px">${esc(n.mensagem)}</div>
               </div>
-            </div>`).join('')}
+            </div>`;
+          }).join('')}
       </div>
     </div>`;
   document.body.appendChild(modal);
