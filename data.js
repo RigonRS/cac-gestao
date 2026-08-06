@@ -57,6 +57,21 @@ const CHECKLIST_CR_INCLUSAO_RENOVCRAF = [
   'Certidão da Justiça Militar','Certidão da Justiça Eleitoral'
 ];
 
+const CHECKLIST_RENOVACAO_CRAF = [
+  'Certidão Negativa Justiça Federal',
+  'Certidão Negativa Justiça Estadual',
+  'Certidão Negativa Justiça Eleitoral',
+  'Certidão Negativa Justiça Militar',
+  'Comprovante de Ocupação',
+  'Comprovante de Residência 1° Endereço',
+  'Comprovante de Residência 2° Endereço',
+  'Teste de Tiro',
+  'Avaliação Psicológica',
+  'Anexo C',
+  'Declaração de Filiação',
+  'Habitualidade'
+];
+
 const CHECKLIST_TRANSFERENCIA = [
   'Documento de Identificação do Vendedor','CR do Vendedor','CRAF',
   'Comprovante de Residência do Vendedor',
@@ -119,7 +134,7 @@ const CHECKLISTS = {
     'Caça-Treinamento Tiro': ['Documento de Identificação'],
     'Tiro Esportivo':        ['Documento de Identificação']
   },
-  'Alteração de Endereço':  ['Comprovante de Residência'],
+  'Alteração de Endereço':  ['Comprovante de Residência', 'Declaração de Residência'],
   'Inclusão de Atividade':  CHECKLIST_CR_INCLUSAO_RENOVCRAF,
   'Exclusão de Atividade':  ['Documento de Identificação'],
   'Mudança de Acervo': [
@@ -129,7 +144,7 @@ const CHECKLISTS = {
     'Comprovante de Residência','Anexo C','DSA','CTF + SIMAF',
     'Declaração de Habitualidade','Requerimento','Procuração','GRU R$50,00 REF 20324 (Estado do RS)'
   ],
-  'Renovação de CRAF':    CHECKLIST_CR_INCLUSAO_RENOVCRAF,
+  'Renovação de CRAF':    CHECKLIST_RENOVACAO_CRAF,
   'Segunda via de CRAF':  ['Documento de Identificação'],
   'Transferência de Arma SIGMA x SINARM':  CHECKLIST_TRANSFERENCIA_SIGMA_SINARM,
   'Transferência de Arma SINARM x SINARM': CHECKLIST_TRANSFERENCIA_SINARM_SINARM,
@@ -137,6 +152,10 @@ const CHECKLISTS = {
   'Transferência de Arma SINARM x SIGMA':  CHECKLIST_TRANSFERENCIA,
   'Cancelamento de CR': ['Documento de identificação']
 };
+
+// Snapshot dos checklists originais definidos no código (para "Restaurar padrão"
+// no editor de checklists, mesmo após os overrides personalizados serem aplicados).
+const CHECKLISTS_DEFAULT = JSON.parse(JSON.stringify(CHECKLISTS));
 
 function getChecklist(tipoProcesso, subTipo = null) {
   const base = CHECKLISTS[tipoProcesso];

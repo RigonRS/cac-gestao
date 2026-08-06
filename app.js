@@ -1217,7 +1217,9 @@ function acessarPortalCliente(cpf, nasc) {
   window.open(url, '_blank');
 }
 
-function abrirDeclaracaoResidencia(clienteId, numEndereco) {
+// Abre o modal de Declaração de Residência. `emitirCall` é a chamada JS executada
+// ao clicar em "Emitir" (varia se for pelo perfil do cliente ou pelo processo).
+function _abrirModalDeclaracao(subtitulo, emitirCall) {
   document.getElementById('modal-decl-residencia')?.remove();
   const modal = document.createElement('div');
   modal.id = 'modal-decl-residencia';
@@ -1225,7 +1227,7 @@ function abrirDeclaracaoResidencia(clienteId, numEndereco) {
     <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this) this.remove()">
       <div style="background:#fff;border-radius:14px;padding:22px;max-width:440px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.25)">
         <h3 style="margin:0 0 4px;font-size:16px"><i class="bi bi-file-earmark-text me-2"></i>Declaração de Residência</h3>
-        <p style="font-size:13px;color:var(--text-muted);margin:0 0 14px">${numEndereco}° Endereço — informe os dados do titular do endereço.</p>
+        <p style="font-size:13px;color:var(--text-muted);margin:0 0 14px">${subtitulo}</p>
         <div style="margin-bottom:10px">
           <label style="font-size:12px;font-weight:600">Nome completo do titular</label>
           <input id="decl-titular-nome" type="text" style="width:100%;margin-top:4px" placeholder="Nome do titular do endereço" />
@@ -1236,7 +1238,7 @@ function abrirDeclaracaoResidencia(clienteId, numEndereco) {
         </div>
         <div style="display:flex;gap:8px;justify-content:flex-end">
           <button class="btn btn-outline btn-sm" onclick="document.getElementById('modal-decl-residencia').remove()">Cancelar</button>
-          <button class="btn btn-primary btn-sm" onclick="emitirDeclaracaoResidencia('${clienteId}',${numEndereco})"><i class="bi bi-printer me-1"></i>Emitir</button>
+          <button class="btn btn-primary btn-sm" onclick="${emitirCall}"><i class="bi bi-printer me-1"></i>Emitir</button>
         </div>
       </div>
     </div>`;
@@ -1244,35 +1246,82 @@ function abrirDeclaracaoResidencia(clienteId, numEndereco) {
   setTimeout(() => document.getElementById('decl-titular-nome')?.focus(), 50);
 }
 
-async function emitirDeclaracaoResidencia(clienteId, numEndereco) {
+// Monta o HTML da declaração. `end` = { logradouro, numero, bairro, complemento, cep, cidade, uf }.
+function _htmlDeclaracaoResidencia(nomeTitular, cpfTitular, c, end) {
+  const cidadeUF = [end.cidade, end.uf].filter(Boolean).join('-');
+  const hoje = new Date().toISOString().split('T')[0];
+  const compTxt = end.complemento ? `${esc(end.complemento)}, ` : '';
+  return `
+    <h2>DECLARAÇÃO DO TITULAR DO ENDEREÇO RESIDENCIAL PARA GUARDA DE ACERVO DE PRODUTOS CONTROLADOS</h2>
+    <p>Eu, <strong>${esc(nomeTitular)}</strong>, CPF ${esc(cpfTitular)}, declaro sob as penas da Lei (art. 2º da Lei 7.115/83), que <strong>${esc(c.Title||'')}</strong>, com RG ${esc(c.RG||'')} ${esc(c.OrgaoEmissor||'')} e CPF nº ${esc(c.CPF||'')}, reside em ${esc(end.logradouro)} ${esc(end.numero)}, ${esc(end.bairro)}, ${compTxt}CEP ${esc(end.cep)}, cidade de ${esc(cidadeUF)}, tal endereço de minha titularidade. Também declaro que tenho conhecimento que o endereço será utilizado para guarda de PCE.</p>
+    <p>Declaro ainda, estar ciente de que a falsidade da presente declaração pode implicar na sanção penal prevista no art. 299 do Código Penal, conforme transcrição abaixo:</p>
+    <p style="font-style:italic">"Art. 299 – Omitir, em documento público ou particular, declaração que nele deveria constar, ou nele inserir ou fazer inserir declaração falsa ou diversa da que devia ser escrita, com o fim de prejudicar direito, criar obrigação ou alterar a verdade sobre o fato juridicamente relevante.</p>
+    <p style="font-style:italic">Pena: reclusão de 1 (um) a 5 (cinco) anos e multa, se o documento é público e reclusão de 1 (um) a 3 (três) anos, se o documento é particular.".</p>
+    <p style="text-align:right;margin-top:40px">${esc(cidadeUF)}, ${dataPorExtenso(hoje)}</p>
+    <div class="assinatura" style="margin-top:70px">
+      <div class="assinatura-linha"></div>
+      <strong>${esc(nomeTitular)}</strong>
+    </div>`;
+}
+
+function _lerTitularDeclaracao() {
   const nomeTitular = (document.getElementById('decl-titular-nome')?.value || '').trim();
   const cpfTitular  = (document.getElementById('decl-titular-cpf')?.value || '').trim();
-  if (!nomeTitular || !cpfTitular) { toast('Preencha o nome e o CPF do titular.', 'warning'); return; }
+  if (!nomeTitular || !cpfTitular) { toast('Preencha o nome e o CPF do titular.', 'warning'); return null; }
+  return { nomeTitular, cpfTitular };
+}
+
+// ---- Declaração a partir do PERFIL do cliente (endereço cadastrado) ----
+function abrirDeclaracaoResidencia(clienteId, numEndereco) {
+  _abrirModalDeclaracao(`${numEndereco}° Endereço — informe os dados do titular do endereço.`, `emitirDeclaracaoResidencia('${clienteId}',${numEndereco})`);
+}
+
+async function emitirDeclaracaoResidencia(clienteId, numEndereco) {
+  const titular = _lerTitularDeclaracao();
+  if (!titular) return;
   showLoading();
   try {
     const c = await App.graph.getItem(CONFIG.listas.clientes, clienteId);
     const sfx = numEndereco === 2 ? '2' : '1';
-    const logradouro  = c['Endereco' + sfx] || '';
-    const numero      = c['Numero' + sfx] || '';
-    const bairro      = c['Bairro' + sfx] || '';
-    const complemento = c['Complemento' + sfx] || '';
-    const cep         = c['CEP' + sfx] || '';
-    const cidade      = c['Cidade' + sfx] || '';
-    const uf          = c[(sfx === '1' ? 'UF1Endereco' : 'UF2Endereco')] || '';
-    const cidadeUF = [cidade, uf].filter(Boolean).join('-');
-    const hoje = new Date().toISOString().split('T')[0];
-    const compTxt = complemento ? `${esc(complemento)}, ` : '';
-    const html = `
-      <h2>DECLARAÇÃO DO TITULAR DO ENDEREÇO RESIDENCIAL PARA GUARDA DE ACERVO DE PRODUTOS CONTROLADOS</h2>
-      <p>Eu, <strong>${esc(nomeTitular)}</strong>, CPF ${esc(cpfTitular)}, declaro sob as penas da Lei (art. 2º da Lei 7.115/83), que <strong>${esc(c.Title||'')}</strong>, com RG ${esc(c.RG||'')} ${esc(c.OrgaoEmissor||'')} e CPF nº ${esc(c.CPF||'')}, reside em ${esc(logradouro)} ${esc(numero)}, ${esc(bairro)}, ${compTxt}CEP ${esc(cep)}, cidade de ${esc(cidadeUF)}, tal endereço de minha titularidade. Também declaro que tenho conhecimento que o endereço será utilizado para guarda de PCE.</p>
-      <p>Declaro ainda, estar ciente de que a falsidade da presente declaração pode implicar na sanção penal prevista no art. 299 do Código Penal, conforme transcrição abaixo:</p>
-      <p style="font-style:italic">"Art. 299 – Omitir, em documento público ou particular, declaração que nele deveria constar, ou nele inserir ou fazer inserir declaração falsa ou diversa da que devia ser escrita, com o fim de prejudicar direito, criar obrigação ou alterar a verdade sobre o fato juridicamente relevante.</p>
-      <p style="font-style:italic">Pena: reclusão de 1 (um) a 5 (cinco) anos e multa, se o documento é público e reclusão de 1 (um) a 3 (três) anos, se o documento é particular.".</p>
-      <p style="text-align:right;margin-top:40px">${esc(cidadeUF)}, ${dataPorExtenso(hoje)}</p>
-      <div class="assinatura" style="margin-top:70px">
-        <div class="assinatura-linha"></div>
-        <strong>${esc(nomeTitular)}</strong>
-      </div>`;
+    const end = {
+      logradouro:  c['Endereco' + sfx] || '',
+      numero:      c['Numero' + sfx] || '',
+      bairro:      c['Bairro' + sfx] || '',
+      complemento: c['Complemento' + sfx] || '',
+      cep:         c['CEP' + sfx] || '',
+      cidade:      c['Cidade' + sfx] || '',
+      uf:          c[(sfx === '1' ? 'UF1Endereco' : 'UF2Endereco')] || ''
+    };
+    const html = _htmlDeclaracaoResidencia(titular.nomeTitular, titular.cpfTitular, c, end);
+    document.getElementById('modal-decl-residencia')?.remove();
+    imprimirDocumento(html, 'Declaração de Residência');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+// ---- Declaração a partir do PROCESSO de Alteração de Endereço (endereço do processo) ----
+function abrirDeclaracaoResidenciaProcesso(processoId) {
+  _abrirModalDeclaracao('Endereço informado no processo — informe os dados do titular do endereço.', `emitirDeclaracaoResidenciaProcesso('${processoId}')`);
+}
+
+async function emitirDeclaracaoResidenciaProcesso(processoId) {
+  const titular = _lerTitularDeclaracao();
+  if (!titular) return;
+  showLoading();
+  try {
+    const p = await App.graph.getItem(CONFIG.listas.processos, processoId);
+    const c = await App.graph.getItem(CONFIG.listas.clientes, p.ClienteId);
+    const dados = JSON.parse(p.DadosEspecificosJSON || '{}');
+    const end = {
+      logradouro:  dados.endLogradouro  || '',
+      numero:      dados.endNumero       || '',
+      bairro:      dados.endBairro       || '',
+      complemento: dados.endComplemento  || '',
+      cep:         dados.endCEP          || '',
+      cidade:      dados.endCidade       || '',
+      uf:          (dados.endUF || '').toUpperCase()
+    };
+    if (!end.logradouro && !end.cidade) { toast('Este processo não tem endereço preenchido.', 'warning'); hideLoading(); return; }
+    const html = _htmlDeclaracaoResidencia(titular.nomeTitular, titular.cpfTitular, c, end);
     document.getElementById('modal-decl-residencia')?.remove();
     imprimirDocumento(html, 'Declaração de Residência');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
@@ -5026,8 +5075,10 @@ async function renderProcessoDetalhe(id) {
             </div>
             ${checklist.map((item, i) => {
               const certCfg = CERTIDOES_CONFIG.find(c => item.nome.includes(c.keyword));
-              const temFiliacao    = item.nome.includes('Declaração de Filiação');
-              const temHabitualidade = item.nome.includes('Declaração de Habitualidade');
+              const _nomeLower     = item.nome.toLowerCase();
+              const temFiliacao    = _nomeLower.includes('filiação') || _nomeLower.includes('filiacao');
+              const temHabitualidade = _nomeLower.includes('habitualidade');
+              const temDeclResidencia = item.nome === 'Declaração de Residência' && processo.TipoProcesso === 'Alteração de Endereço';
               const temCTF         = item.nome.includes('CTF');
               const temGRU88       = item.nome.includes('GRU R$88') && !['Transferência de Arma SINARM x SINARM','Transferência de Arma SIGMA x SINARM'].includes(processo.TipoProcesso);
               const temGRU50       = item.nome.includes('GRU R$50');
@@ -5047,6 +5098,7 @@ async function renderProcessoDetalhe(id) {
                   <span>${esc(item.nome)}</span>
                   ${certCfg      ? `<button onclick="abrirCertidao('${certCfg.keyword}')" ${btnStyle} title="Abrir site e copiar dados"><i class="bi bi-box-arrow-up-right"></i> Emitir</button>` : ''}
                   ${temReqSINARM ? `<button onclick="window.open('https://servicos.dpf.gov.br/sinarm-internet/faces/publico/incluirReqRegistroArmaFogo/consultarRequerimentoRegistro.seam','_blank')" ${btnStyle} title="Abrir site do SINARM"><i class="bi bi-box-arrow-up-right"></i> Acessar</button>` : ''}
+                  ${temDeclResidencia ? `<button onclick="abrirDeclaracaoResidenciaProcesso('${id}')" ${btnStyle} title="Emitir Declaração de Residência com o endereço do processo"><i class="bi bi-file-earmark-text"></i> Emitir Declaração</button>` : ''}
                   ${temFiliacao  ? `<button onclick="solicitarDeclaracao('filiacao')" ${btnStyle} title="Solicitar via WhatsApp do Clube"><i class="bi bi-whatsapp"></i> Solicitar</button>` : ''}
                   ${temHabitualidade ? `<button onclick="solicitarDeclaracao('habitualidade')" ${btnStyle} title="Solicitar via WhatsApp do Clube"><i class="bi bi-whatsapp"></i> Solicitar</button>` : ''}
                   ${temCTF       ? `<button onclick="window.open('https://servicos.ibama.gov.br/ctf/sistema.php','_blank')" ${btnStyle} title="Abrir site do IBAMA"><i class="bi bi-box-arrow-up-right"></i> Abrir site</button>` : ''}
@@ -7436,8 +7488,10 @@ async function renderConfiguracoes(view) {
   }
   view = view || 'menu';
   window._configView = view;
-  if (view === 'whatsapp') return renderConfigWhatsApp();
-  if (view === 'extras')   return renderConfigExtras();
+  if (view !== 'checklists') window._chkEdit = null;
+  if (view === 'whatsapp')   return renderConfigWhatsApp();
+  if (view === 'extras')     return renderConfigExtras();
+  if (view === 'checklists') { window._chkEdit = null; return renderConfigChecklists(); }
 
   const el = document.getElementById('page-content');
   el.innerHTML = `
@@ -7454,6 +7508,13 @@ async function renderConfiguracoes(view) {
           <i class="bi bi-percent" style="font-size:36px;color:#f59e0b"></i>
           <h3 style="margin:12px 0 6px;font-size:16px">Valor de Extras</h3>
           <p style="font-size:13px;color:var(--text-muted);margin:0">Configurar percentual de extra por tipo de processo e por usuário.</p>
+        </div>
+      </div>
+      <div class="card" style="cursor:pointer" onclick="renderConfiguracoes('checklists')">
+        <div class="card-body" style="text-align:center;padding:28px 16px">
+          <i class="bi bi-list-check" style="font-size:36px;color:#2563eb"></i>
+          <h3 style="margin:12px 0 6px;font-size:16px">Editar Checklists</h3>
+          <p style="font-size:13px;color:var(--text-muted);margin:0">Organizar a ordem, adicionar e remover itens dos checklists dos processos.</p>
         </div>
       </div>
     </div>`;
@@ -7577,6 +7638,168 @@ function fracaoExtraProcesso(tipo, usuario) {
     }
   }
   return 0.10;
+}
+
+// ============================================================
+// CONFIGURAÇÕES — EDITOR DE CHECKLISTS
+// ============================================================
+
+// Ordem das listas editáveis: segue TIPOS_PROCESSO e acrescenta o que sobrar.
+function _chkTiposEditaveis() {
+  const chaves = Object.keys(CHECKLISTS);
+  const ordenadas = [];
+  TIPOS_PROCESSO.forEach(t => { if (chaves.includes(t)) ordenadas.push(t); });
+  chaves.forEach(t => { if (!ordenadas.includes(t)) ordenadas.push(t); });
+  return ordenadas;
+}
+
+// Cópia editável do estado atual dos checklists (arrays soltos ou subtipos p/ Guia de Tráfego).
+function _chkInitEdit() {
+  const edit = {};
+  _chkTiposEditaveis().forEach(tipo => {
+    const base = CHECKLISTS[tipo];
+    if (base && !Array.isArray(base) && typeof base === 'object') {
+      const sub = {};
+      Object.keys(base).forEach(k => { sub[k] = [...(base[k] || [])]; });
+      edit[tipo] = sub;
+    } else {
+      edit[tipo] = [...(Array.isArray(base) ? base : [])];
+    }
+  });
+  return edit;
+}
+
+// Lista achatada de { tipo, sub, label, itens } a partir de window._chkEdit.
+function _chkListasPlanas() {
+  const edit = window._chkEdit;
+  const listas = [];
+  _chkTiposEditaveis().forEach(tipo => {
+    const v = edit[tipo];
+    if (v && !Array.isArray(v)) {
+      Object.keys(v).forEach(sub => listas.push({ tipo, sub, label: `${tipo} — ${sub}`, itens: v[sub] }));
+    } else {
+      listas.push({ tipo, sub: null, label: tipo, itens: v });
+    }
+  });
+  return listas;
+}
+
+// Conjunto de todos os itens já existentes em qualquer checklist (padrão + edição atual).
+function _chkPool() {
+  const nomes = new Set();
+  const add = arr => (arr || []).forEach(n => nomes.add(n));
+  const walk = obj => Object.values(obj || {}).forEach(v => Array.isArray(v) ? add(v) : (v && typeof v === 'object' ? walk(v) : null));
+  walk(CHECKLISTS_DEFAULT);
+  walk(window._chkEdit || {});
+  return [...nomes].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+}
+
+function renderConfigChecklists() {
+  if (!window._chkEdit) window._chkEdit = _chkInitEdit();
+  const listas = _chkListasPlanas();
+  window._chkListasRef = listas;
+  const poolOpts = _chkPool().map(n => `<option value="${esc(n)}"></option>`).join('');
+  const el = document.getElementById('page-content');
+  el.innerHTML = `
+    <button class="btn btn-ghost btn-sm" style="margin-bottom:12px" onclick="renderConfiguracoes('menu')"><i class="bi bi-arrow-left me-1"></i>Voltar</button>
+    <div class="card">
+      <div class="card-header">
+        <h3><i class="bi bi-list-check me-2" style="color:#2563eb"></i>Editar Checklists dos Processos</h3>
+        <button class="btn btn-primary" onclick="salvarConfigChecklists()"><i class="bi bi-floppy me-1"></i>Salvar Alterações</button>
+      </div>
+      <div class="card-body">
+        <p style="font-size:12px;color:var(--text-muted);margin:0 0 16px">Use as setas para reordenar, o × para remover e o campo abaixo de cada lista para adicionar itens (escolha um já existente na lista suspensa ou digite um novo). As alterações valem para os processos criados a partir do salvamento.</p>
+        <datalist id="chk-pool">${poolOpts}</datalist>
+        <div style="display:grid;gap:14px">
+          ${listas.map((L, li) => `
+            <div class="form-section" style="margin:0">
+              <div class="form-section-title" style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+                <span>${esc(L.label)}</span>
+                <button class="btn btn-ghost btn-sm" style="font-size:11px;white-space:nowrap" onclick="chkRestaurar(${li})" title="Restaurar este checklist ao padrão do sistema"><i class="bi bi-arrow-counterclockwise me-1"></i>Restaurar padrão</button>
+              </div>
+              <div class="form-body">
+                ${L.itens.length ? L.itens.map((nome, idx) => `
+                  <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)">
+                    <span style="min-width:24px;color:var(--text-muted);font-weight:600">${idx + 1}.</span>
+                    <span style="flex:1">${esc(nome)}</span>
+                    <button class="btn btn-ghost btn-xs" ${idx === 0 ? 'disabled' : ''} onclick="chkMover(${li},${idx},-1)" title="Subir"><i class="bi bi-arrow-up"></i></button>
+                    <button class="btn btn-ghost btn-xs" ${idx === L.itens.length - 1 ? 'disabled' : ''} onclick="chkMover(${li},${idx},1)" title="Descer"><i class="bi bi-arrow-down"></i></button>
+                    <button class="btn btn-ghost btn-xs" onclick="chkRemover(${li},${idx})" title="Remover" style="color:#dc2626"><i class="bi bi-x-lg"></i></button>
+                  </div>`).join('') : `<div style="font-size:12px;color:var(--text-muted);padding:6px 0">Nenhum item.</div>`}
+                <div style="display:flex;gap:8px;margin-top:10px">
+                  <input list="chk-pool" id="chk-add-${li}" placeholder="Adicionar item..." style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();chkAdicionar(${li});}" />
+                  <button class="btn btn-outline btn-sm" style="white-space:nowrap" onclick="chkAdicionar(${li})"><i class="bi bi-plus-lg me-1"></i>Adicionar</button>
+                </div>
+              </div>
+            </div>`).join('')}
+        </div>
+      </div>
+    </div>`;
+}
+
+function _chkItens(li) {
+  const L = window._chkListasRef && window._chkListasRef[li];
+  if (!L) return null;
+  const v = window._chkEdit[L.tipo];
+  return L.sub ? v[L.sub] : v;
+}
+
+function chkMover(li, idx, dir) {
+  const itens = _chkItens(li);
+  if (!itens) return;
+  const j = idx + dir;
+  if (j < 0 || j >= itens.length) return;
+  [itens[idx], itens[j]] = [itens[j], itens[idx]];
+  renderConfigChecklists();
+}
+
+function chkRemover(li, idx) {
+  const itens = _chkItens(li);
+  if (!itens) return;
+  itens.splice(idx, 1);
+  renderConfigChecklists();
+}
+
+function chkAdicionar(li) {
+  const inp = document.getElementById(`chk-add-${li}`);
+  const nome = (inp?.value || '').trim();
+  if (!nome) return;
+  const itens = _chkItens(li);
+  if (!itens) return;
+  if (itens.some(n => n.toLowerCase() === nome.toLowerCase())) { toast('Este item já está na lista.', 'warning'); return; }
+  itens.push(nome);
+  renderConfigChecklists();
+}
+
+function chkRestaurar(li) {
+  const L = window._chkListasRef && window._chkListasRef[li];
+  if (!L) return;
+  const def = CHECKLISTS_DEFAULT[L.tipo];
+  if (L.sub) {
+    if (!window._chkEdit[L.tipo] || Array.isArray(window._chkEdit[L.tipo])) window._chkEdit[L.tipo] = {};
+    window._chkEdit[L.tipo][L.sub] = [...((def && def[L.sub]) || [])];
+  } else {
+    window._chkEdit[L.tipo] = [...(Array.isArray(def) ? def : [])];
+  }
+  renderConfigChecklists();
+}
+
+async function salvarConfigChecklists() {
+  showLoading();
+  try {
+    const cfg = JSON.parse(JSON.stringify(window._chkEdit));
+    await App.graph._writeFile('checklists_config', cfg);
+    aplicarOverrideChecklists(cfg);
+    window._chkEdit = null;
+    toast('Checklists salvos com sucesso!', 'success');
+    renderConfiguracoes('menu');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+// Aplica os checklists personalizados sobre o objeto CHECKLISTS em memória.
+function aplicarOverrideChecklists(cfg) {
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return;
+  Object.keys(cfg).forEach(tipo => { CHECKLISTS[tipo] = cfg[tipo]; });
 }
 
 function restaurarMensagemPadrao(chave) {
@@ -10468,6 +10691,12 @@ async function iniciarApp() {
   try {
     const ce = await App.graph._readFile('config_extras');
     if (ce && !Array.isArray(ce)) Object.assign(CONFIG_EXTRAS, ce);
+  } catch(e) {}
+
+  // Carrega checklists personalizados
+  try {
+    const cc = await App.graph._readFile('checklists_config');
+    if (cc && !Array.isArray(cc)) aplicarOverrideChecklists(cc);
   } catch(e) {}
 
   // Verifica e cria listas se necessário
