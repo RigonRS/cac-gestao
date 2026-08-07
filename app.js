@@ -3771,7 +3771,7 @@ function buildCamposGuia(armasOpts, clienteId) {
       <div><label>Tipo de Guia</label>
         <select name="proc_tipoGuia" onchange="onTipoGuiaProcesso(this.value)">
           <option value="">Selecione...</option>
-          <option>Caça</option><option>Caça-Treinamento Tiro</option><option>Tiro Esportivo</option>
+          <option>Caça</option><option>Caça-Treinamento Tiro</option><option>Tiro Esportivo</option><option>Mudança de Local de Acervo</option>
         </select>
       </div>
     </div>
@@ -3790,19 +3790,64 @@ function buildCamposGuia(armasOpts, clienteId) {
       <div><label>CR do Clube</label><input id="proc-crClube" name="proc_crClube" /></div>
       <div style="grid-column:span 2"><label>Endereço do Clube</label><input id="proc-enderecoClube" name="proc_enderecoClube" /></div>
     </div></div>
-    ${endOrigemOpts ? `<div style="margin-top:12px"><div class="form-grid">
+    ${endOrigemOpts ? `<div id="proc-guia-origem" style="margin-top:12px"><div class="form-grid">
       <div style="grid-column:span 2"><label>Endereço de Origem da Guia</label>
         <select name="proc_endOrigemGuia">
           ${endOrigemOpts}
         </select>
       </div>
     </div></div>` : ''}
+    <div id="proc-guia-mudanca" style="display:none;margin-top:12px"><div class="form-grid">
+      <div style="grid-column:span 2"><label>Endereço de Origem</label>
+        <select id="sel-mudanca-origem" onchange="onEndMudancaSel('origem', this.value)">
+          <option value="">Selecione...</option>
+          ${buildEndClienteOpts()}
+          <option value="__manual__">Digitar manualmente...</option>
+        </select>
+        <input name="proc_endMudancaOrigem" id="proc-endMudancaOrigem" placeholder="Endereço de origem" style="margin-top:6px" readonly />
+      </div>
+      <div style="grid-column:span 2"><label>Endereço de Destino</label>
+        <select id="sel-mudanca-destino" onchange="onEndMudancaSel('destino', this.value)">
+          <option value="">Selecione...</option>
+          ${buildEndClienteOpts()}
+          <option value="__manual__">Digitar manualmente...</option>
+        </select>
+        <input name="proc_endMudancaDestino" id="proc-endMudancaDestino" placeholder="Endereço de destino" style="margin-top:6px" readonly />
+      </div>
+    </div></div>
   </div></div>`;
 }
 
+// Opções de endereço do cliente (1° e 2°) para os seletores de Mudança de Local de Acervo.
+function buildEndClienteOpts() {
+  const cli = _processoClienteObj;
+  if (!cli) return '';
+  const end1 = [cli.Endereco1, cli.Numero1, cli.Bairro1, cli.Cidade1, cli.UF1Endereco].filter(Boolean).join(', ');
+  const end2 = [cli.Endereco2, cli.Numero2, cli.Bairro2, cli.Cidade2, cli.UF2Endereco].filter(Boolean).join(', ');
+  let opts = '';
+  if (end1) opts += `<option value="${esc(end1)}">1° Endereço — ${esc(end1)}</option>`;
+  if (end2) opts += `<option value="${esc(end2)}">2° Endereço — ${esc(end2)}</option>`;
+  return opts;
+}
+
+// Preenche o campo de texto conforme o endereço escolhido (1°/2° ou manual).
+function onEndMudancaSel(qual, val) {
+  const inp = document.getElementById(qual === 'origem' ? 'proc-endMudancaOrigem' : 'proc-endMudancaDestino');
+  if (!inp) return;
+  if (val === '__manual__') { inp.value = ''; inp.readOnly = false; inp.focus(); }
+  else if (val === '') { inp.value = ''; inp.readOnly = true; }
+  else { inp.value = val; inp.readOnly = true; }
+}
+
 function onTipoGuiaProcesso(tipo) {
+  const isMudanca = tipo === 'Mudança de Local de Acervo';
   document.getElementById('proc-guia-caca').style.display  = tipo === 'Caça' ? '' : 'none';
   document.getElementById('proc-guia-clube').style.display = (tipo === 'Caça-Treinamento Tiro' || tipo === 'Tiro Esportivo') ? '' : 'none';
+  const mud = document.getElementById('proc-guia-mudanca');
+  if (mud) mud.style.display = isMudanca ? '' : 'none';
+  // O endereço de origem padrão da guia não se aplica à Mudança de Local de Acervo
+  const origem = document.getElementById('proc-guia-origem');
+  if (origem) origem.style.display = isMudanca ? 'none' : '';
   // Atualiza checklist
   const items = buildChecklistItems('Guia de Tráfego', tipo);
   const checklistEl = document.getElementById('checklist-preview');
@@ -3835,9 +3880,9 @@ function onArmaGuiaChange(val) {
   const sel = document.querySelector('[name="proc_tipoGuia"]');
   if (!sel) return;
   let opts;
-  if (atividade === 'Caçador')      opts = ['Caça', 'Caça-Treinamento Tiro'];
-  else if (atividade === 'Atirador') opts = ['Tiro Esportivo'];
-  else                               opts = ['Caça', 'Caça-Treinamento Tiro', 'Tiro Esportivo'];
+  if (atividade === 'Caçador')      opts = ['Caça', 'Caça-Treinamento Tiro', 'Mudança de Local de Acervo'];
+  else if (atividade === 'Atirador') opts = ['Tiro Esportivo', 'Mudança de Local de Acervo'];
+  else                               opts = ['Caça', 'Caça-Treinamento Tiro', 'Tiro Esportivo', 'Mudança de Local de Acervo'];
   const atual = sel.value;
   sel.innerHTML = '<option value="">Selecione...</option>' + opts.map(o => `<option ${o === atual ? 'selected' : ''}>${o}</option>`).join('');
   if (!opts.includes(atual)) { sel.value = ''; onTipoGuiaProcesso(''); }
@@ -5051,6 +5096,7 @@ async function renderProcessoDetalhe(id) {
                   nomeComprador: 'Nome do Comprador', nomeVendedor: 'Nome do Vendedor',
                   compradorSistema: 'Comprador no Sistema', vendedorSistema: 'Vendedor no Sistema',
                   nomeClube: 'Nome do Clube', crClube: 'CR do Clube', enderecoClube: 'Endereço do Clube', tipoGuia: 'Tipo de Guia',
+                  endMudancaOrigem: 'Endereço de Origem', endMudancaDestino: 'Endereço de Destino',
                 };
                 const label = LABELS_DADOS[k] || esc(k.replace(/([A-Z])/g,' $1').trim());
                 const copiavel = _guiaTiroEsportivo && _clubeKeys[k];
@@ -9269,7 +9315,7 @@ async function renderOrcamentoForm(clienteId = null, orcId = null) {
           </div>
           <div style="min-width:160px">
             <label>Data do Orçamento</label>
-            <input type="date" id="orc-data" style="margin-top:4px" value="${esc((orcExistente?.data || new Date().toISOString().split('T')[0]))}" title="Define a prioridade dos processos quando criados a partir da demanda gerada por este orçamento" />
+            <input type="date" id="orc-data-orcamento" style="margin-top:4px" value="${esc((orcExistente?.data || new Date().toISOString().split('T')[0]))}" title="Define a prioridade dos processos quando criados a partir da demanda gerada por este orçamento" />
           </div>
         </div>
         <div id="orc-endereco-panel" style="display:none;margin-bottom:16px"></div>
@@ -9643,7 +9689,7 @@ async function salvarOrcamento() {
   const parts = (sel?.value || '').split('|');
   const clienteId   = parts[0] || '';
   const clienteNome = parts[1] || '';
-  const dataOrc = document.getElementById('orc-data')?.value || new Date().toISOString().split('T')[0];
+  const dataOrc = document.getElementById('orc-data-orcamento')?.value || new Date().toISOString().split('T')[0];
 
   const linhas = [];
   let total = 0;
@@ -9678,6 +9724,15 @@ async function salvarOrcamento() {
       // Modo edição
       const idx = lista.findIndex(o => String(o.id) === String(orcId));
       if (idx >= 0) {
+        // Se estava Aprovado sem demanda vinculada, editar volta para Pendente
+        // (assim o admin pode reaprovar e gerar uma nova demanda com os valores corrigidos).
+        let statusPatch = {};
+        if (lista[idx].status === 'Aprovado') {
+          const demRaw = await App.graph._readFile('demandas').catch(() => []);
+          const temDem = (Array.isArray(demRaw) ? demRaw : []).some(d => String(d.orcamentoId) === String(orcId));
+          if (temDem) throw new Error('Este orçamento tem demanda vinculada. Exclua a demanda em Controle de Demandas antes de editar.');
+          statusPatch = { status: 'Pendente', dataAprovacao: null, aprovadoPor: null };
+        }
         lista[idx] = {
           ...lista[idx],
           clienteId,
@@ -9687,6 +9742,7 @@ async function salvarOrcamento() {
           desconto: desconto || undefined,
           total:   totalFinal,
           pagamento: pagamento || lista[idx].pagamento || undefined,
+          ...statusPatch,
         };
         await App.graph._writeFile('orcamentos', lista);
         if (desconto > 0) await aplicarDescontoProcessosOrcamento(orcId, linhas, total, totalFinal);
@@ -9796,7 +9852,9 @@ async function renderPerfilOrcamentos(clienteId) {
               } else if (admin && isRejeitado) {
                 acoes = `<button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${clienteId}')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>`;
               } else if (admin && isAprovado && !temDemanda) {
-                acoes = `<button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${clienteId}')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>`;
+                acoes = `
+                <button class="btn btn-ghost btn-sm" onclick="editarOrcamento('${o.id}','${clienteId}')" title="Editar (volta para Pendente)"><i class="bi bi-pencil" style="color:var(--accent)"></i></button>
+                <button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${clienteId}')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>`;
               } else if (admin && isAprovado && temDemanda) {
                 acoes = `<span style="font-size:11px;color:var(--text-muted)" title="Exclua a demanda vinculada em Controle de Demandas para poder excluir este orçamento">Demanda ativa</span>`;
               }
@@ -9947,7 +10005,8 @@ async function renderOrcamentos() {
       } else if (modo === 'aprovado') {
         acoesBtns = orcamentosComDemanda.has(String(o.id))
           ? `<span style="font-size:11px;color:var(--text-muted)" title="Exclua a demanda vinculada em Controle de Demandas para poder excluir este orçamento">Demanda ativa</span>`
-          : `<button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${esc(String(o.clienteId))}','global')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>`;
+          : `<button class="btn btn-ghost btn-sm" onclick="editarOrcamento('${o.id}','${esc(String(o.clienteId))}')" title="Editar (volta para Pendente)"><i class="bi bi-pencil" style="color:var(--accent)"></i></button>
+             <button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${esc(String(o.clienteId))}','global')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>`;
       }
       return `<tr>
         <td style="white-space:nowrap;font-weight:600">${esc(o.numero||'—')}</td>
