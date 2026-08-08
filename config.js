@@ -37,6 +37,10 @@ const CONFIG = {
   // Ex: "https://minhaempresa.sharepoint.com/sites/escritorio"
   sharePointSiteUrl: 'https://simonebpegoraro-my.sharepoint.com/personal/matheus_simonebpegoraro_onmicrosoft_com',
 
+  // --- CENTRAL DE WHATSAPP (gateway na VPS) ---
+  // URL do gateway de WhatsApp (deixe vazio '' enquanto não estiver no ar).
+  waGatewayUrl: 'https://wa.prbelico.com.br',
+
   // --- CONFIGURAÇÕES DO ESCRITÓRIO ---
   nomeEscritorio: 'Escritório CAC',
 

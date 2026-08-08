@@ -399,6 +399,7 @@ async function renderPage() {
       case 'minhas-demandas':      await renderMinhasDemandas(); break;
       case 'controle-demandas':    await renderControleDemandas(); break;
       case 'anotacoes':            await renderAnotacoes(); break;
+      case 'whatsapp':             await renderWhatsApp(); break;
       case 'processos/novo':       await renderProcessoForm(params.clienteId, params); break;
       case 'processos/editar':     await renderProcessoEditar(params.id); break;
       case 'processos/detalhe':    await renderProcessoDetalhe(params.id); break;
@@ -7848,6 +7849,217 @@ function aplicarOverrideChecklists(cfg) {
   Object.keys(cfg).forEach(tipo => { CHECKLISTS[tipo] = cfg[tipo]; });
 }
 
+// ============================================================
+// ATENDIMENTO WHATSAPP (central conectada ao gateway na VPS)
+// ============================================================
+function waChaveTel(v) { const d = String(v || '').replace(/\D/g, ''); return d.length >= 8 ? d.slice(-8) : ''; }
+function waChaveDeJid(jid) { return waChaveTel(String(jid || '').split('@')[0]); }
+
+async function waIdToken() {
+  const r = await App.msal.acquireTokenSilent({ scopes: ['openid', 'profile'], account: App.account });
+  return r.idToken;
+}
+
+async function waApi(path, opts = {}) {
+  const token = await waIdToken();
+  const res = await fetch(CONFIG.waGatewayUrl + path, {
+    ...opts,
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token, ...(opts.headers || {}) },
+  });
+  if (!res.ok) { let m; try { m = (await res.json()).error; } catch (e) {} throw new Error(m || ('HTTP ' + res.status)); }
+  return res.json();
+}
+
+function waNorm(m) {
+  return {
+    id: m.id, jid: m.jid,
+    fromMe: m.fromMe !== undefined ? !!m.fromMe : !!m.from_me,
+    body: m.body || '', type: m.type || 'text',
+    mediaName: m.mediaName || m.media_name || null,
+    savedPath: m.savedPath || m.saved_path || null,
+    ts: m.ts, author: m.author || null,
+  };
+}
+
+function waNomeChat(c) {
+  const cli = window._wa.clientesIdx[waChaveDeJid(c.jid)];
+  return cli ? cli.Title : (c.name || String(c.jid || '').split('@')[0]);
+}
+
+async function renderWhatsApp() {
+  document.getElementById('page-title').textContent = 'Atendimento WhatsApp';
+  const el = document.getElementById('page-content');
+  if (!CONFIG.waGatewayUrl) {
+    el.innerHTML = `<div class="empty-state"><i class="bi bi-whatsapp" style="font-size:48px;color:#25D366"></i><p>A central de WhatsApp ainda não está configurada.</p></div>`;
+    return;
+  }
+  if (typeof io === 'undefined') {
+    el.innerHTML = `<div class="empty-state"><i class="bi bi-exclamation-triangle"></i><p>Biblioteca de tempo real não carregou. Verifique a conexão com a internet.</p></div>`;
+    return;
+  }
+  window._wa = window._wa || {};
+  window._wa.chats = []; window._wa.jidAtivo = null; window._wa.msgs = [];
+  window._wa.estado = { conectado: false, qr: null, numero: null };
+  try {
+    const cs = await App.getClientes();
+    const idx = {};
+    cs.forEach(c => { const k = waChaveTel(c.Celular); if (k) idx[k] = c; });
+    window._wa.clientesIdx = idx;
+  } catch (e) { window._wa.clientesIdx = {}; }
+
+  el.innerHTML = `
+    <div style="display:flex;height:72vh;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--card-bg,#fff)">
+      <div style="width:320px;border-right:1px solid var(--border);display:flex;flex-direction:column;min-width:0">
+        <div id="wa-status" style="padding:10px 12px;border-bottom:1px solid var(--border);font-size:12px"></div>
+        <div style="padding:8px"><input id="wa-busca" placeholder="Buscar conversa..." oninput="waRenderLista()" style="width:100%" /></div>
+        <div id="wa-lista" style="flex:1;overflow-y:auto"></div>
+      </div>
+      <div style="flex:1;display:flex;flex-direction:column;min-width:0">
+        <div id="wa-thread-header" style="padding:12px;border-bottom:1px solid var(--border);font-size:14px;color:var(--text-muted)">Selecione uma conversa</div>
+        <div id="wa-thread" style="flex:1;overflow-y:auto;padding:14px;background:#f5f6f8;display:flex;flex-direction:column;gap:6px"></div>
+        <div id="wa-composer" style="padding:10px;border-top:1px solid var(--border);display:none;gap:8px">
+          <input id="wa-input" placeholder="Digite uma mensagem..." style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();waEnviar();}" />
+          <button class="btn btn-primary" onclick="waEnviar()"><i class="bi bi-send"></i></button>
+        </div>
+      </div>
+    </div>`;
+
+  waRenderStatus();
+  if (window._wa.socket) { try { window._wa.socket.disconnect(); } catch (e) {} window._wa.socket = null; }
+  waConectar();
+  await waCarregarChats();
+}
+
+function waConectar() {
+  waIdToken().then(token => {
+    const socket = io(CONFIG.waGatewayUrl, { auth: { token }, transports: ['websocket', 'polling'] });
+    window._wa.socket = socket;
+    socket.on('status', e => { window._wa.estado = e; waRenderStatus(); });
+    socket.on('message', m => waOnMessage(m));
+    socket.on('connect_error', err => {
+      const el = document.getElementById('wa-status');
+      if (el) el.innerHTML = `<span style="color:var(--danger)"><i class="bi bi-x-circle me-1"></i>Erro de conexão: ${esc(err.message)}</span>`;
+    });
+  }).catch(e => {
+    const el = document.getElementById('wa-status');
+    if (el) el.innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`;
+  });
+}
+
+async function waCarregarChats() {
+  try { const r = await waApi('/chats'); window._wa.chats = r.chats || []; waRenderLista(); } catch (e) {}
+  try { const s = await waApi('/status'); window._wa.estado.conectado = s.conectado; window._wa.estado.numero = s.numero; waRenderStatus(); } catch (e) {}
+  if (!window._wa.estado.conectado && isAdminUser()) {
+    try { const q = await waApi('/qr'); if (q.qr) { window._wa.estado.qr = q.qr; waRenderStatus(); } } catch (e) {}
+  }
+}
+
+function waRenderStatus() {
+  const el = document.getElementById('wa-status');
+  if (!el) return;
+  const e = window._wa.estado;
+  if (e.conectado) {
+    el.innerHTML = `<span style="color:var(--success)"><i class="bi bi-check-circle-fill me-1"></i>Conectado${e.numero ? (' · ' + esc(e.numero)) : ''}</span>`;
+  } else if (e.qr && isAdminUser()) {
+    el.innerHTML = `<div style="text-align:center"><div style="font-size:11px;margin-bottom:6px;color:var(--text-muted)">Escaneie no WhatsApp do número dedicado:</div><img src="${e.qr}" style="width:190px;height:190px" /></div>`;
+  } else {
+    el.innerHTML = `<span style="color:var(--danger)"><i class="bi bi-x-circle me-1"></i>Desconectado${isAdminUser() ? ' — aguardando QR...' : ' — avise um administrador para reconectar.'}</span>`;
+  }
+}
+
+function waRenderLista() {
+  const lista = document.getElementById('wa-lista');
+  if (!lista) return;
+  const termo = (document.getElementById('wa-busca')?.value || '').toLowerCase();
+  const rows = window._wa.chats
+    .filter(c => { const nome = waNomeChat(c).toLowerCase(); return !termo || nome.includes(termo) || String(c.jid).includes(termo); })
+    .map(c => {
+      const ativo = c.jid === window._wa.jidAtivo;
+      return `<div onclick="waAbrir('${esc(c.jid)}')" style="padding:10px 12px;border-bottom:1px solid var(--border);cursor:pointer;background:${ativo ? '#e8f0fe' : 'transparent'}">
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+          <strong style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(waNomeChat(c))}</strong>
+          ${c.unread ? `<span class="badge badge-green" style="font-size:10px">${c.unread}</span>` : ''}
+        </div>
+        <div style="font-size:12px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.last_message || '')}</div>
+      </div>`;
+    }).join('');
+  lista.innerHTML = rows || '<div style="padding:16px;color:var(--text-muted);font-size:13px">Nenhuma conversa ainda.</div>';
+}
+
+async function waAbrir(jid) {
+  window._wa.jidAtivo = jid;
+  waRenderLista();
+  const cli = window._wa.clientesIdx[waChaveDeJid(jid)] || null;
+  const numero = String(jid).split('@')[0];
+  const header = document.getElementById('wa-thread-header');
+  header.style.color = 'var(--text)';
+  header.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+    <span style="font-weight:600">${esc(cli ? cli.Title : numero)} <span style="font-weight:400;color:var(--text-muted);font-size:12px">${esc(numero)}</span></span>
+    ${cli ? `<button class="btn btn-ghost btn-sm" onclick="navigate('clientes/perfil',{id:'${esc(String(cli.id))}'})"><i class="bi bi-person-lines-fill me-1"></i>Ver cliente</button>` : ''}
+  </div>`;
+  document.getElementById('wa-composer').style.display = 'flex';
+  document.getElementById('wa-thread').innerHTML = '<div style="color:var(--text-muted);font-size:13px">Carregando...</div>';
+  try {
+    const r = await waApi('/messages?jid=' + encodeURIComponent(jid));
+    window._wa.msgs = (r.messages || []).map(waNorm);
+    waRenderThread();
+  } catch (e) { document.getElementById('wa-thread').innerHTML = `<div style="color:var(--danger);font-size:13px">${esc(e.message)}</div>`; }
+  const c = window._wa.chats.find(x => x.jid === jid);
+  if (c) { c.unread = 0; waRenderLista(); }
+}
+
+function waBolha(m) {
+  const me = m.fromMe;
+  const hora = new Date(m.ts * 1000).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  let conteudo;
+  if (m.type === 'text' || m.type === 'other') {
+    conteudo = esc(m.body) || '<span style="opacity:.6">(sem texto)</span>';
+  } else {
+    const icone = m.type === 'image' ? 'bi-image' : m.type === 'audio' ? 'bi-mic' : m.type === 'video' ? 'bi-camera-video' : m.type === 'sticker' ? 'bi-sticky' : 'bi-file-earmark';
+    conteudo = `<i class="bi ${icone} me-1"></i>${esc(m.mediaName || m.type)}${m.body ? ('<br>' + esc(m.body)) : ''}${m.savedPath ? '<br><span style="font-size:10px;opacity:.75"><i class="bi bi-cloud-check me-1"></i>salvo na pasta do cliente</span>' : ''}`;
+  }
+  return `<div style="align-self:${me ? 'flex-end' : 'flex-start'};max-width:75%;background:${me ? '#d1f4cc' : '#fff'};border:1px solid var(--border);border-radius:10px;padding:6px 10px;font-size:13px;word-break:break-word">
+    ${conteudo}
+    <div style="font-size:10px;color:var(--text-muted);text-align:right;margin-top:2px">${me && m.author && m.author !== 'sistema' ? esc(m.author) + ' · ' : ''}${hora}</div>
+  </div>`;
+}
+
+function waRenderThread() {
+  const t = document.getElementById('wa-thread');
+  if (!t) return;
+  t.innerHTML = window._wa.msgs.map(waBolha).join('') || '<div style="color:var(--text-muted);font-size:13px">Nenhuma mensagem.</div>';
+  t.scrollTop = t.scrollHeight;
+}
+
+function waOnMessage(raw) {
+  const m = waNorm(raw);
+  let c = window._wa.chats.find(x => x.jid === m.jid);
+  const resumo = (m.type === 'text' || m.type === 'other') ? m.body : `[${m.type}] ${m.body || m.mediaName || ''}`.trim();
+  if (c) {
+    c.last_message = resumo; c.last_ts = m.ts;
+    if (!m.fromMe && m.jid !== window._wa.jidAtivo) c.unread = (c.unread || 0) + 1;
+  } else {
+    window._wa.chats.push({ jid: m.jid, name: null, last_message: resumo, last_ts: m.ts, unread: m.fromMe ? 0 : 1 });
+  }
+  window._wa.chats.sort((a, b) => (b.last_ts || 0) - (a.last_ts || 0));
+  waRenderLista();
+  if (m.jid === window._wa.jidAtivo && !window._wa.msgs.some(x => x.id === m.id)) {
+    window._wa.msgs.push(m);
+    waRenderThread();
+    if (!m.fromMe) { const cc = window._wa.chats.find(x => x.jid === m.jid); if (cc) cc.unread = 0; waApi('/messages?jid=' + encodeURIComponent(m.jid)).catch(() => {}); }
+  }
+}
+
+async function waEnviar() {
+  const input = document.getElementById('wa-input');
+  const txt = (input?.value || '').trim();
+  if (!txt || !window._wa.jidAtivo) return;
+  input.value = '';
+  try {
+    await waApi('/send', { method: 'POST', body: JSON.stringify({ jid: window._wa.jidAtivo, text: txt }) });
+  } catch (e) { toast(e.message, 'error'); input.value = txt; }
+}
+
 function restaurarMensagemPadrao(chave) {
   const cfg = MENSAGENS_WHATSAPP_CONFIG.find(m => m.chave === chave);
   if (!cfg) return;
@@ -10728,6 +10940,11 @@ async function iniciarApp() {
   if (isExtrasUser()) {
     const navExt = document.getElementById('nav-pagamentos-extras');
     if (navExt) navExt.style.display = '';
+  }
+  // Central de WhatsApp: disponível para admins e atendentes (se o gateway estiver configurado)
+  if (isExtrasUser() && CONFIG.waGatewayUrl) {
+    const navWa = document.getElementById('nav-whatsapp');
+    if (navWa) navWa.style.display = '';
   }
 
   // Carrega valores e taxas de processos personalizados
