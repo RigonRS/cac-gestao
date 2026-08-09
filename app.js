@@ -7855,6 +7855,20 @@ function aplicarOverrideChecklists(cfg) {
 function waChaveTel(v) { const d = String(v || '').replace(/\D/g, ''); return d.length >= 8 ? d.slice(-8) : ''; }
 function waChaveDeJid(jid) { return waChaveTel(String(jid || '').split('@')[0]); }
 
+// Formata o número do jid num telefone legível: (DD) 9XXXX-XXXX
+function waFmtNumero(jid) {
+  const raw = String(jid || '');
+  if (raw.includes('@lid')) return 'contato'; // identificador de privacidade (sem número)
+  const d = raw.split('@')[0].replace(/\D/g, '');
+  if (d.startsWith('55') && (d.length === 12 || d.length === 13)) {
+    const ddd = d.slice(2, 4);
+    const resto = d.slice(4);
+    if (resto.length === 9) return `(${ddd}) ${resto.slice(0, 5)}-${resto.slice(5)}`;
+    if (resto.length === 8) return `(${ddd}) ${resto.slice(0, 4)}-${resto.slice(4)}`;
+  }
+  return d ? '+' + d : raw;
+}
+
 async function waIdToken() {
   const r = await App.msal.acquireTokenSilent({ scopes: ['openid', 'profile'], account: App.account });
   return r.idToken;
@@ -7883,7 +7897,7 @@ function waNorm(m) {
 
 function waNomeChat(c) {
   const cli = window._wa.clientesIdx[waChaveDeJid(c.jid)];
-  return cli ? cli.Title : (c.name || String(c.jid || '').split('@')[0]);
+  return cli ? cli.Title : waFmtNumero(c.jid);
 }
 
 async function renderWhatsApp() {
@@ -7990,11 +8004,11 @@ async function waAbrir(jid) {
   window._wa.jidAtivo = jid;
   waRenderLista();
   const cli = window._wa.clientesIdx[waChaveDeJid(jid)] || null;
-  const numero = String(jid).split('@')[0];
+  const numero = waFmtNumero(jid);
   const header = document.getElementById('wa-thread-header');
   header.style.color = 'var(--text)';
   header.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-    <span style="font-weight:600">${esc(cli ? cli.Title : numero)} <span style="font-weight:400;color:var(--text-muted);font-size:12px">${esc(numero)}</span></span>
+    <span style="font-weight:600">${esc(cli ? cli.Title : numero)}${cli ? ` <span style="font-weight:400;color:var(--text-muted);font-size:12px">${esc(numero)}</span>` : ''}</span>
     ${cli ? `<button class="btn btn-ghost btn-sm" onclick="navigate('clientes/perfil',{id:'${esc(String(cli.id))}'})"><i class="bi bi-person-lines-fill me-1"></i>Ver cliente</button>` : ''}
   </div>`;
   document.getElementById('wa-composer').style.display = 'flex';
