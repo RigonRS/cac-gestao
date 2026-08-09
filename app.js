@@ -7887,7 +7887,7 @@ async function waApi(path, opts = {}) {
 
 function waNorm(m) {
   return {
-    id: m.id, jid: m.jid, phone: m.phone || null,
+    id: m.id, jid: m.jid, phone: m.phone || null, name: m.nomeContato || m.name || null,
     fromMe: m.fromMe !== undefined ? !!m.fromMe : !!m.from_me,
     body: m.body || '', type: m.type || 'text',
     mediaName: m.mediaName || m.media_name || null,
@@ -7898,7 +7898,12 @@ function waNorm(m) {
 }
 
 function waClienteDe(c) { return window._wa.clientesIdx[waChaveDeChat(c)] || null; }
-function waNomeChat(c) { const cli = waClienteDe(c); return cli ? cli.Title : waFmtNumero(c.jid, c.phone); }
+function waNomeChat(c) {
+  const cli = waClienteDe(c);
+  if (cli) return cli.Title;
+  if (c.name) return c.name; // nome do WhatsApp (pushName)
+  return waFmtNumero(c.jid, c.phone);
+}
 
 // ---- Foto de perfil (avatar) ----
 function waAvatarUrl(jid) {
@@ -8043,14 +8048,14 @@ function waRenderHeader() {
   const jid = window._wa.jidAtivo;
   const chat = window._wa.chats.find(x => x.jid === jid) || { jid };
   const cli = waClienteDe(chat);
-  const nome = cli ? cli.Title : waFmtNumero(jid, chat.phone);
+  const nome = waNomeChat(chat);
   const numero = waFmtNumero(jid, chat.phone);
   header.style.display = 'flex';
   header.innerHTML = `
     ${waAvatarHtml(nome, jid, 40)}
     <div style="flex:1;min-width:0">
       <div style="font-weight:600;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(nome)}</div>
-      <div style="font-size:12px;color:#667781">${esc(cli ? numero : '')}</div>
+      <div style="font-size:12px;color:#667781">${esc((cli || chat.name) ? numero : '')}</div>
     </div>
     ${cli ? `<button class="btn btn-ghost btn-sm" onclick="navigate('clientes/perfil',{id:'${esc(String(cli.id))}'})"><i class="bi bi-person-lines-fill me-1"></i>Ver cliente</button>` : ''}`;
 }
@@ -8103,8 +8108,8 @@ function waOnMessage(raw) {
   const m = waNorm(raw);
   let c = window._wa.chats.find(x => x.jid === m.jid);
   const resumo = (m.type === 'text' || m.type === 'other') ? m.body : `[${m.type}] ${m.body || m.mediaName || ''}`.trim();
-  if (c) { c.last_message = resumo; c.last_ts = m.ts; if (m.phone && !c.phone) c.phone = m.phone; if (!m.fromMe && m.jid !== window._wa.jidAtivo) c.unread = (c.unread || 0) + 1; }
-  else { window._wa.chats.push({ jid: m.jid, name: null, phone: m.phone, last_message: resumo, last_ts: m.ts, unread: m.fromMe ? 0 : 1 }); }
+  if (c) { c.last_message = resumo; c.last_ts = m.ts; if (m.phone && !c.phone) c.phone = m.phone; if (m.name && !c.name) c.name = m.name; if (!m.fromMe && m.jid !== window._wa.jidAtivo) c.unread = (c.unread || 0) + 1; }
+  else { window._wa.chats.push({ jid: m.jid, name: m.name || null, phone: m.phone, last_message: resumo, last_ts: m.ts, unread: m.fromMe ? 0 : 1 }); }
   window._wa.chats.sort((a, b) => (b.last_ts || 0) - (a.last_ts || 0));
   waRenderLista();
   if (m.jid === window._wa.jidAtivo && !window._wa.msgs.some(x => x.id === m.id)) {
