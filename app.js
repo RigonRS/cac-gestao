@@ -8048,7 +8048,7 @@ async function renderWhatsApp() {
             <button onclick="waSetFiltroEspecial('debitos')"><i class="bi bi-cash-coin me-2"></i>Débitos Pendentes</button>
           </div>
         </div>
-        <div class="wa-search"><input id="wa-busca" placeholder="Buscar conversa..." oninput="waRenderLista()" /></div>
+        <div class="wa-search"><input id="wa-busca" placeholder="Buscar conversa ou mensagem..." oninput="waOnBusca()" /></div>
         <div class="wa-list" id="wa-lista"></div>
       </div>
       <div class="wa-main" style="position:relative">
@@ -8310,9 +8310,41 @@ function waRenderLista() {
     ? `<div style="padding:8px 12px;border-bottom:1px solid #f0f0f0"><button class="btn btn-outline btn-sm" style="width:100%" onclick="waMarcarTodasLidas()"><i class="bi bi-check2-all me-1"></i>Marcar todas como lidas</button></div>`
     : '';
   const contatosHtml = termoRaw ? waContatosBuscaHtml(termoRaw, termo) : '';
+  const msgsHtml = termoRaw.length >= 2 ? waMensagensBuscaHtml(termoRaw) : '';
   let corpo = rows;
-  if (!corpo && !contatosHtml) corpo = `<div style="padding:16px;color:#667781;font-size:13px">${aba === 'nlidas' ? 'Nenhuma conversa não lida.' : (termoRaw ? 'Nenhuma conversa encontrada.' : 'Nenhuma conversa ainda.')}</div>`;
-  lista.innerHTML = btnLer + corpo + contatosHtml;
+  if (!corpo && !contatosHtml && !msgsHtml) corpo = `<div style="padding:16px;color:#667781;font-size:13px">${aba === 'nlidas' ? 'Nenhuma conversa não lida.' : (termoRaw ? 'Nenhuma conversa encontrada.' : 'Nenhuma conversa ainda.')}</div>`;
+  lista.innerHTML = btnLer + corpo + contatosHtml + msgsHtml;
+}
+
+// Busca no conteúdo das mensagens (chama o servidor, com pequeno atraso)
+let _waBuscaTimer = null;
+function waOnBusca() {
+  waRenderLista();
+  const termo = (document.getElementById('wa-busca')?.value || '').trim();
+  if (_waBuscaTimer) clearTimeout(_waBuscaTimer);
+  if (termo.length < 2) { window._wa.buscaMsgs = null; return; }
+  _waBuscaTimer = setTimeout(() => waBuscarMensagens(termo), 350);
+}
+async function waBuscarMensagens(termo) {
+  try {
+    const r = await waApi('/search?q=' + encodeURIComponent(termo));
+    window._wa.buscaMsgs = { termo, resultados: r.resultados || [] };
+    if ((document.getElementById('wa-busca')?.value || '').trim() === termo) waRenderLista();
+  } catch (e) {}
+}
+function waMensagensBuscaHtml(termoRaw) {
+  const bm = window._wa.buscaMsgs;
+  if (!bm || bm.termo !== termoRaw || !bm.resultados.length) return '';
+  const rows = bm.resultados.map(r => {
+    const chat = window._wa.chats.find(x => x.jid === r.jid) || { jid: r.jid };
+    const nome = waNomeChat(chat);
+    const trecho = String(r.body || '').slice(0, 70);
+    return `<div class="wa-item" onclick="waAbrir('${esc(r.jid)}')">
+      ${waAvatarHtml(nome, r.jid, 44)}
+      <div style="flex:1;min-width:0"><div class="nome">${esc(nome)}</div><div class="prev">${esc(trecho)}</div></div>
+    </div>`;
+  }).join('');
+  return `<div style="padding:10px 12px 4px;font-size:11px;font-weight:700;color:#667781;text-transform:uppercase;letter-spacing:.5px">Mensagens</div>${rows}`;
 }
 
 async function waMarcarTodasLidas() {
