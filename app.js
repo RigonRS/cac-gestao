@@ -7928,7 +7928,7 @@ function waAvatarHtml(nome, jid, size) {
 }
 
 async function renderWhatsApp() {
-  document.getElementById('page-title').textContent = 'Atendimento WhatsApp';
+  document.getElementById('page-title').textContent = 'WhatsApp';
   const el = document.getElementById('page-content');
   if (!CONFIG.waGatewayUrl) { el.innerHTML = `<div class="empty-state"><i class="bi bi-whatsapp" style="font-size:48px;color:#25D366"></i><p>A central de WhatsApp ainda não está configurada.</p></div>`; return; }
   if (typeof io === 'undefined') { el.innerHTML = `<div class="empty-state"><i class="bi bi-exclamation-triangle"></i><p>Biblioteca de tempo real não carregou.</p></div>`; return; }
@@ -7945,7 +7945,7 @@ async function renderWhatsApp() {
 
   el.innerHTML = `
     <style>
-      .wa-shell{display:flex;height:74vh;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:#fff}
+      .wa-shell{display:flex;height:calc(100vh - 110px);border:1px solid var(--border);border-radius:12px;overflow:hidden;background:#fff}
       .wa-side{width:340px;border-right:1px solid var(--border);display:flex;flex-direction:column;min-width:0;background:#fff}
       .wa-status{padding:8px 12px;border-bottom:1px solid var(--border);font-size:12px;display:flex;align-items:center;gap:8px}
       .wa-status .info{flex:1;min-width:0}
@@ -8102,7 +8102,19 @@ function waRenderLista() {
         </div>
       </div>`;
     }).join('');
-  lista.innerHTML = rows || `<div style="padding:16px;color:#667781;font-size:13px">${aba === 'nlidas' ? 'Nenhuma conversa não lida.' : 'Nenhuma conversa ainda.'}</div>`;
+  const btnLer = (aba === 'nlidas' && totalNaoLidas > 0)
+    ? `<div style="padding:8px 12px;border-bottom:1px solid #f0f0f0"><button class="btn btn-outline btn-sm" style="width:100%" onclick="waMarcarTodasLidas()"><i class="bi bi-check2-all me-1"></i>Marcar todas como lidas</button></div>`
+    : '';
+  lista.innerHTML = btnLer + (rows || `<div style="padding:16px;color:#667781;font-size:13px">${aba === 'nlidas' ? 'Nenhuma conversa não lida.' : 'Nenhuma conversa ainda.'}</div>`);
+}
+
+async function waMarcarTodasLidas() {
+  try {
+    await waApi('/read-all', { method: 'POST', body: JSON.stringify({}) });
+    window._wa.chats.forEach(c => c.unread = 0);
+    waRenderLista();
+    toast('Todas as conversas foram marcadas como lidas.', 'success');
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 function waRenderHeader() {
@@ -8164,6 +8176,11 @@ async function waAbrirPerfil() {
           ${cli ? `<div style="margin-bottom:16px"><button class="btn btn-primary btn-sm" style="width:100%" onclick="document.getElementById('wa-modal-perfil').remove();navigate('clientes/perfil',{id:'${esc(String(cli.id))}'})"><i class="bi bi-person-lines-fill me-1"></i>Abrir cadastro de ${esc(cli.Title)}</button></div>` : `<div style="font-size:12px;color:#667781;margin-bottom:16px"><i class="bi bi-info-circle me-1"></i>Este número não está vinculado a nenhum cliente cadastrado.</div>`}
           <div style="font-weight:600;font-size:13px;margin-bottom:8px;color:#111"><i class="bi bi-folder2-open me-1"></i>Processos em aberto</div>
           <div id="wa-perfil-processos" style="margin-bottom:18px;font-size:13px;color:#667781">${cli ? 'Carregando...' : 'Sem cliente vinculado.'}</div>
+          ${cli ? `
+          <div style="font-weight:600;font-size:13px;margin-bottom:8px;color:#111"><i class="bi bi-calculator me-1"></i>Orçamentos em aberto</div>
+          <div id="wa-perfil-orcamentos" style="margin-bottom:18px;font-size:13px;color:#667781">Carregando...</div>
+          <div style="font-weight:600;font-size:13px;margin-bottom:8px;color:#111"><i class="bi bi-cash-coin me-1"></i>Valores pendentes de pagamento</div>
+          <div id="wa-perfil-pagamentos" style="margin-bottom:18px;font-size:13px;color:#667781">Carregando...</div>` : ''}
           <div style="font-weight:600;font-size:13px;margin-bottom:8px;color:#111"><i class="bi bi-images me-1"></i>Mídias enviadas</div>
           ${midiasHtml}
         </div>
@@ -8171,14 +8188,20 @@ async function waAbrirPerfil() {
     </div>`;
   document.body.appendChild(modal);
 
-  // Carrega os processos em aberto do cliente vinculado
+  // Carrega processos, orçamentos e pendências de pagamento do cliente vinculado
   if (cli) {
     try {
-      const todos = await App.getProcessos();
+      const [todos, orcRaw] = await Promise.all([
+        App.getProcessos(),
+        App.graph._readFile('orcamentos').catch(() => []),
+      ]);
+      const orcs = (Array.isArray(orcRaw) ? orcRaw : []).filter(o => String(o.clienteId) === String(cli.id));
+
+      // Processos em aberto
       const abertos = todos.filter(p => String(p.ClienteId) === String(cli.id) && !STATUS_FECHADOS.includes(p.Status));
-      const cont = document.getElementById('wa-perfil-processos');
-      if (cont) {
-        cont.innerHTML = abertos.length
+      const contP = document.getElementById('wa-perfil-processos');
+      if (contP) {
+        contP.innerHTML = abertos.length
           ? abertos.map(p => {
               const b = statusBadge(p.Status);
               return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #f0f0f0;cursor:pointer" onclick="document.getElementById('wa-modal-perfil').remove();navigate('processos/detalhe',{id:'${p.id}'})">
@@ -8188,9 +8211,46 @@ async function waAbrirPerfil() {
             }).join('')
           : '<div style="color:#667781">Nenhum processo em aberto.</div>';
       }
+
+      // Orçamentos em aberto (aguardando aprovação = status Pendente)
+      const orcAbertos = orcs.filter(o => o.status === 'Pendente');
+      const contO = document.getElementById('wa-perfil-orcamentos');
+      if (contO) {
+        contO.innerHTML = orcAbertos.length
+          ? orcAbertos.map(o => {
+              const dataFmt = o.data ? new Date(o.data + 'T00:00:00').toLocaleDateString('pt-BR') : '';
+              return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #f0f0f0;cursor:pointer" onclick="document.getElementById('wa-modal-perfil').remove();navigate('clientes/perfil',{id:'${esc(String(cli.id))}',tab:'orcamentos'})">
+                <span style="color:#111">Orçamento ${esc(o.numero || '')}${dataFmt ? ` · ${dataFmt}` : ''}</span>
+                <span style="font-weight:600;flex-shrink:0">${fmtMoeda(Number(o.total) || 0)}</span>
+              </div>`;
+            }).join('')
+          : '<div style="color:#667781">Nenhum orçamento em aberto.</div>';
+      }
+
+      // Valores pendentes de pagamento: processos avulsos + orçamentos não quitados
+      const procPend = todos.filter(p => String(p.ClienteId) === String(cli.id) && !p.demandaId && p.ValorProcesso && getItensPendentesProcesso(p).length > 0 && p.Status !== 'Desistência Cliente');
+      const totalProc = procPend.reduce((s, p) => s + getItensPendentesProcesso(p).reduce((ss, i) => ss + i.valor, 0), 0);
+      const orcPag = orcs.filter(o => o.status !== 'Rejeitado' && statusPagamentoOrcamento(o) !== 'pago');
+      const detOrc = orcPag.map(o => ({ o, pend: parcelasPendentesOrcamento(o) })).filter(x => x.pend.total > 0);
+      const totalOrc = detOrc.reduce((s, x) => s + x.pend.total, 0);
+      const totalPend = totalProc + totalOrc;
+      const contPag = document.getElementById('wa-perfil-pagamentos');
+      if (contPag) {
+        if (totalPend <= 0) {
+          contPag.innerHTML = '<div style="color:var(--success)"><i class="bi bi-check-circle me-1"></i>Nenhum valor pendente.</div>';
+        } else {
+          const linhas = [
+            ...detOrc.map(x => `<div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid #f0f0f0"><span style="color:#111">Orçamento ${esc(x.o.numero || '')}${x.pend.vencido > 0 ? ' <span style="color:var(--danger);font-size:11px">(vencido)</span>' : ''}</span><span style="font-weight:600;flex-shrink:0">${fmtMoeda(x.pend.total)}</span></div>`),
+            ...procPend.map(p => { const v = getItensPendentesProcesso(p).reduce((ss, i) => ss + i.valor, 0); return `<div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid #f0f0f0"><span style="color:#111">${esc(p.TipoProcesso || 'Processo')}</span><span style="font-weight:600;flex-shrink:0">${fmtMoeda(v)}</span></div>`; }),
+          ].join('');
+          contPag.innerHTML = `${linhas}<div style="display:flex;justify-content:space-between;gap:8px;padding:8px 0 0;font-weight:700"><span>Total pendente</span><span style="color:var(--danger)">${fmtMoeda(totalPend)}</span></div>`;
+        }
+      }
     } catch (e) {
-      const cont = document.getElementById('wa-perfil-processos');
-      if (cont) cont.innerHTML = '<div style="color:var(--danger)">Erro ao carregar processos.</div>';
+      ['wa-perfil-processos', 'wa-perfil-orcamentos', 'wa-perfil-pagamentos'].forEach(id => {
+        const c = document.getElementById(id);
+        if (c && c.textContent === 'Carregando...') c.innerHTML = '<div style="color:var(--danger)">Erro ao carregar.</div>';
+      });
     }
   }
 }
@@ -11205,7 +11265,8 @@ async function iniciarApp() {
     if (navExt) navExt.style.display = '';
   }
   // Central de WhatsApp: disponível para admins e atendentes (se o gateway estiver configurado)
-  if (isExtrasUser() && CONFIG.waGatewayUrl) {
+  // Página WhatsApp: por enquanto visível apenas para administradores (ainda em finalização)
+  if (isAdminUser() && CONFIG.waGatewayUrl) {
     const navWa = document.getElementById('nav-whatsapp');
     if (navWa) navWa.style.display = '';
   }
