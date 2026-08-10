@@ -7865,11 +7865,13 @@ function waFmtDigits(v) {
   return d ? '+' + d : '';
 }
 function waFmtNumero(jid, phone) {
-  if (phone) { const p = waFmtDigits(String(phone)); if (p) return p; }
   const raw = String(jid || '');
+  if (raw.endsWith('@g.us')) return 'Grupo';
+  if (phone) { const p = waFmtDigits(String(phone)); if (p) return p; }
   if (raw.includes('@lid')) return 'Contato';
   return waFmtDigits(raw.split('@')[0]) || raw;
 }
+function waEhGrupo(c) { return String((c && c.jid) || '').endsWith('@g.us'); }
 
 async function waIdToken() {
   const r = await App.msal.acquireTokenSilent({ scopes: ['openid', 'profile'], account: App.account });
@@ -7897,7 +7899,7 @@ function waNorm(m) {
   };
 }
 
-function waClienteDe(c) { return window._wa.clientesIdx[waChaveDeChat(c)] || null; }
+function waClienteDe(c) { if (waEhGrupo(c)) return null; return window._wa.clientesIdx[waChaveDeChat(c)] || null; }
 function waNomeChat(c) {
   const cli = waClienteDe(c);
   if (cli) return cli.Title;
@@ -8237,8 +8239,11 @@ function waBolha(m) {
   } else {
     corpo = waFmtTexto(m.body) || '<span style="opacity:.6">(sem texto)</span>';
   }
+  // Em grupo, mostra em cima da bolha quem enviou (igual ao WhatsApp)
+  const ehGrupo = String(m.jid || '').endsWith('@g.us');
+  const remetente = (!me && ehGrupo && m.author) ? `<div style="font-size:12px;font-weight:600;color:#1f7aec;margin-bottom:2px">${esc(m.author)}</div>` : '';
   const rodape = `<div class="hora">${me && m.author && m.author !== 'sistema' ? esc(m.author) + ' · ' : ''}${hora}${m.savedPath ? ' <i class="bi bi-cloud-check" title="salvo na pasta do cliente"></i>' : ''}</div>`;
-  return `<div class="wa-bubble ${me ? 'me' : 'them'}">${corpo}${rodape}</div>`;
+  return `<div class="wa-bubble ${me ? 'me' : 'them'}">${remetente}${corpo}${rodape}</div>`;
 }
 
 function waRenderThread() {
