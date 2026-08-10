@@ -7903,11 +7903,11 @@ function waClienteDe(c) { if (waEhGrupo(c)) return null; return window._wa.clien
 function waNomeChat(c) {
   const cli = waClienteDe(c);
   if (cli) return cli.Title;
-  if (c.name) return c.name; // nome do WhatsApp (pushName)
   if (!waEhGrupo(c)) {
     const nomeCont = window._wa.contatosIdx && window._wa.contatosIdx[waChaveDeChat(c)];
-    if (nomeCont) return nomeCont; // nome salvo na agenda do WhatsApp
+    if (nomeCont) return nomeCont; // nome salvo na agenda (preferido ao pushName, como no WhatsApp)
   }
+  if (c.name) return c.name; // nome do WhatsApp (pushName)
   return waFmtNumero(c.jid, c.phone);
 }
 
