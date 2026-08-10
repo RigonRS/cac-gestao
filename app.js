@@ -7899,18 +7899,31 @@ function waNorm(m) {
   };
 }
 
+function waVinculoDe(chave) {
+  const raw = window._wa.vinculos && window._wa.vinculos[chave];
+  if (!raw) return null;
+  return typeof raw === 'string' ? { tipo: 'cliente', id: raw } : raw; // legado: string = cliente
+}
 function waClienteDe(c) {
   if (waEhGrupo(c)) return null;
   const chave = waChaveDeChat(c);
   const direto = window._wa.clientesIdx[chave];
   if (direto) return direto;
-  const vinc = window._wa.vinculos && window._wa.vinculos[chave];
-  if (vinc) { const cli = (window._wa.clientes || []).find(x => String(x.id) === String(vinc)); if (cli) return cli; }
+  const v = waVinculoDe(chave);
+  if (v && v.tipo === 'cliente') return (window._wa.clientes || []).find(x => String(x.id) === String(v.id)) || null;
+  return null;
+}
+function waClubeDe(c) {
+  if (waEhGrupo(c)) return null;
+  const v = waVinculoDe(waChaveDeChat(c));
+  if (v && v.tipo === 'clube') return (window._wa.clubes || []).find(x => String(x.id) === String(v.id)) || null;
   return null;
 }
 function waNomeChat(c) {
   const cli = waClienteDe(c);
   if (cli) return cli.Title;
+  const clube = waClubeDe(c);
+  if (clube) return clube.Title;
   if (!waEhGrupo(c)) {
     const nomeCont = window._wa.contatosIdx && window._wa.contatosIdx[waChaveDeChat(c)];
     if (nomeCont) return nomeCont; // nome salvo na agenda (preferido ao pushName, como no WhatsApp)
@@ -7981,12 +7994,21 @@ async function renderWhatsApp() {
       window._wa.clientes = cs;
     } catch (e) { window._wa.clientesIdx = {}; window._wa.clientes = []; }
   }
-  // Vínculos manuais (número -> cliente) definidos pelo operador
+  // Vínculos manuais (número -> cliente/clube) definidos pelo operador
   if (!window._wa.vinculos) {
     try {
       const v = await App.graph._readFile('whatsapp_vinculos').catch(() => ({}));
       window._wa.vinculos = (v && !Array.isArray(v) && typeof v === 'object') ? v : {};
     } catch (e) { window._wa.vinculos = {}; }
+  }
+  // Clubes de tiro cadastrados (para vincular manualmente)
+  if (!window._wa.clubes) {
+    try { window._wa.clubes = await App.getClubes(); } catch (e) { window._wa.clubes = []; }
+  }
+  // Respostas rápidas próprias do WhatsApp (editáveis)
+  if (!window._wa.rapidas) {
+    try { const r = await App.graph._readFile('whatsapp_respostas_rapidas').catch(() => []); window._wa.rapidas = Array.isArray(r) ? r : []; }
+    catch (e) { window._wa.rapidas = []; }
   }
   // Baixa a lista de contatos salvos (agenda do WhatsApp) — usada para nomes e nova conversa
   if (!window._wa.contatosIdx) {
@@ -8095,6 +8117,13 @@ async function renderWhatsApp() {
   if (window._wa.socket) { try { window._wa.socket.disconnect(); } catch (e) {} window._wa.socket = null; }
   waConectar();
   waCarregarChats();  // atualiza em segundo plano (sem travar a tela)
+  // Ação pendente: abrir uma conversa já com a mensagem pronta (ex.: enviar orçamento)
+  if (window._waAbrirPendente) {
+    const p = window._waAbrirPendente; window._waAbrirPendente = null;
+    waIniciarConversa(p.phone, '');
+    const inp = document.getElementById('wa-input');
+    if (inp) { inp.value = p.texto || ''; inp.focus(); }
+  }
   if (!window._waDocClick) {
     window._waDocClick = true;
     document.addEventListener('click', (e) => {
@@ -8400,12 +8429,21 @@ function waRenderHeader() {
         <div style="font-size:12px;color:#667781">${esc((cli || chat.name) ? numero : '')}</div>
       </div>
     </div>
-    ${cli ? `<button class="btn btn-ghost btn-sm" onclick="navigate('clientes/perfil',{id:'${esc(String(cli.id))}'})"><i class="bi bi-person-lines-fill me-1"></i>Ver cliente</button>` : (waEhGrupo(chat) ? '' : `<button class="btn btn-outline btn-sm" onclick="waAbrirVincular()"><i class="bi bi-link-45deg me-1"></i>Vincular cliente</button>`)}`;
+    ${(() => {
+      if (cli) return `<button class="btn btn-ghost btn-sm" onclick="navigate('clientes/perfil',{id:'${esc(String(cli.id))}'})"><i class="bi bi-person-lines-fill me-1"></i>Ver cliente</button>`;
+      const clube = waClubeDe(chat);
+      if (clube) return `<button class="btn btn-ghost btn-sm" onclick="navigate('clubes/editar',{id:'${esc(String(clube.id))}'})"><i class="bi bi-building me-1"></i>Ver clube</button>`;
+      if (waEhGrupo(chat)) return '';
+      return `<button class="btn btn-outline btn-sm" onclick="waAbrirVincular('cliente')"><i class="bi bi-person-plus me-1"></i>Cliente</button>
+        <button class="btn btn-outline btn-sm" onclick="waAbrirVincular('clube')"><i class="bi bi-building-add me-1"></i>Clube</button>`;
+    })()}`;
 }
 
-// ---- Vincular manualmente um número a um cliente ----
-function waAbrirVincular() {
+// ---- Vincular manualmente um número a um cliente ou clube ----
+function waAbrirVincular(tipo) {
   if (!window._wa.jidAtivo) return;
+  window._waVincTipo = (tipo === 'clube') ? 'clube' : 'cliente';
+  const titulo = window._waVincTipo === 'clube' ? 'Vincular a um clube de tiro' : 'Vincular a um cliente';
   document.getElementById('wa-modal-vincular')?.remove();
   const modal = document.createElement('div');
   modal.id = 'wa-modal-vincular';
@@ -8413,8 +8451,8 @@ function waAbrirVincular() {
     <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this) this.remove()">
       <div style="background:#fff;border-radius:14px;max-width:420px;width:100%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.25)">
         <div style="padding:16px 18px 10px;border-bottom:1px solid var(--border)">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><h3 style="margin:0;font-size:16px"><i class="bi bi-link-45deg me-2"></i>Vincular a um cliente</h3><button onclick="document.getElementById('wa-modal-vincular').remove()" style="background:none;border:none;font-size:22px;color:#666;cursor:pointer;line-height:1">×</button></div>
-          <input id="wa-vincular-busca" placeholder="Buscar cliente..." oninput="waRenderVincularLista()" style="width:100%;border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-size:13px;box-sizing:border-box" />
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><h3 style="margin:0;font-size:16px"><i class="bi bi-link-45deg me-2"></i>${esc(titulo)}</h3><button onclick="document.getElementById('wa-modal-vincular').remove()" style="background:none;border:none;font-size:22px;color:#666;cursor:pointer;line-height:1">×</button></div>
+          <input id="wa-vincular-busca" placeholder="Buscar ${window._waVincTipo === 'clube' ? 'clube' : 'cliente'}..." oninput="waRenderVincularLista()" style="width:100%;border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-size:13px;box-sizing:border-box" />
         </div>
         <div id="wa-vincular-lista" style="overflow-y:auto;flex:1"></div>
       </div>
@@ -8424,19 +8462,22 @@ function waAbrirVincular() {
 }
 function waRenderVincularLista() {
   const cont = document.getElementById('wa-vincular-lista'); if (!cont) return;
+  const tipo = window._waVincTipo || 'cliente';
   const termo = (document.getElementById('wa-vincular-busca')?.value || '').toLowerCase();
   const dig = termo.replace(/\D/g, '');
-  const rows = (window._wa.clientes || [])
-    .filter(c => !termo || (c.Title || '').toLowerCase().includes(termo) || (dig.length >= 3 && String(c.Celular || '').replace(/\D/g, '').includes(dig)))
-    .slice(0, 60)
-    .map(c => `<div class="wa-item" onclick="waVincularCliente('${esc(String(c.id))}')">
+  const fonte = tipo === 'clube' ? (window._wa.clubes || []) : (window._wa.clientes || []);
+  const rows = fonte
+    .filter(c => !termo || (c.Title || '').toLowerCase().includes(termo) || (dig.length >= 3 && String(c.Celular || c.Telefone || '').replace(/\D/g, '').includes(dig)))
+    .slice(0, 80)
+    .map(c => `<div class="wa-item" onclick="waVincular('${esc(String(c.id))}')">
       ${waAvatarHtml(c.Title, '', 40)}
-      <div style="flex:1;min-width:0"><div class="nome">${esc(c.Title)}</div><div class="prev">${esc(waFmtDigits(c.Celular) || '')}</div></div>
+      <div style="flex:1;min-width:0"><div class="nome">${esc(c.Title)}</div><div class="prev">${esc(waFmtDigits(c.Celular || c.Telefone) || '')}</div></div>
     </div>`).join('');
-  cont.innerHTML = rows || '<div style="padding:16px;color:#667781;font-size:13px">Nenhum cliente encontrado.</div>';
+  cont.innerHTML = rows || `<div style="padding:16px;color:#667781;font-size:13px">Nenhum ${tipo === 'clube' ? 'clube' : 'cliente'} encontrado.</div>`;
 }
-async function waVincularCliente(clienteId) {
+async function waVincular(id) {
   const jid = window._wa.jidAtivo; if (!jid) return;
+  const tipo = window._waVincTipo || 'cliente';
   const chat = window._wa.chats.find(x => x.jid === jid) || { jid };
   const chave = waChaveDeChat(chat);
   if (!chave) { toast('Não foi possível identificar o número deste contato.', 'error'); return; }
@@ -8444,9 +8485,9 @@ async function waVincularCliente(clienteId) {
   try {
     showLoading();
     window._wa.vinculos = window._wa.vinculos || {};
-    window._wa.vinculos[chave] = String(clienteId);
+    window._wa.vinculos[chave] = { tipo, id: String(id) };
     await App.graph._writeFile('whatsapp_vinculos', window._wa.vinculos);
-    toast('Número vinculado ao cliente.', 'success');
+    toast(tipo === 'clube' ? 'Número vinculado ao clube.' : 'Número vinculado ao cliente.', 'success');
     document.getElementById('wa-modal-perfil')?.remove();
     waRenderHeader(); waRenderLista();
   } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
@@ -8457,6 +8498,7 @@ async function waAbrirPerfil() {
   const jid = window._wa.jidAtivo; if (!jid) return;
   const chat = window._wa.chats.find(x => x.jid === jid) || { jid };
   const cli = waClienteDe(chat);
+  const clube = cli ? null : waClubeDe(chat);
   const nome = waNomeChat(chat);
   const numero = waFmtNumero(jid, chat.phone);
   const base = CONFIG.waGatewayUrl;
@@ -8489,7 +8531,11 @@ async function waAbrirPerfil() {
           <div style="font-size:13px;color:#667781;margin-top:2px"><i class="bi bi-telephone me-1"></i>${esc(numero)}</div>
         </div>
         <div style="padding:18px 20px">
-          ${cli ? `<div style="margin-bottom:16px"><button class="btn btn-primary btn-sm" style="width:100%" onclick="document.getElementById('wa-modal-perfil').remove();navigate('clientes/perfil',{id:'${esc(String(cli.id))}'})"><i class="bi bi-person-lines-fill me-1"></i>Abrir cadastro de ${esc(cli.Title)}</button></div>` : `<div style="font-size:12px;color:#667781;margin-bottom:10px"><i class="bi bi-info-circle me-1"></i>Este número não está vinculado a nenhum cliente cadastrado.</div><button class="btn btn-outline btn-sm" style="width:100%;margin-bottom:16px" onclick="waAbrirVincular()"><i class="bi bi-link-45deg me-1"></i>Vincular a um cliente</button>`}
+          ${cli
+            ? `<div style="margin-bottom:16px"><button class="btn btn-primary btn-sm" style="width:100%" onclick="document.getElementById('wa-modal-perfil').remove();navigate('clientes/perfil',{id:'${esc(String(cli.id))}'})"><i class="bi bi-person-lines-fill me-1"></i>Abrir cadastro de ${esc(cli.Title)}</button></div>`
+            : clube
+              ? `<div style="margin-bottom:16px"><button class="btn btn-primary btn-sm" style="width:100%" onclick="document.getElementById('wa-modal-perfil').remove();navigate('clubes/editar',{id:'${esc(String(clube.id))}'})"><i class="bi bi-building me-1"></i>Abrir clube ${esc(clube.Title)}</button></div>`
+              : `<div style="font-size:12px;color:#667781;margin-bottom:10px"><i class="bi bi-info-circle me-1"></i>Este número não está vinculado a nenhum cliente ou clube.</div><div style="display:flex;gap:8px;margin-bottom:16px"><button class="btn btn-outline btn-sm" style="flex:1" onclick="waAbrirVincular('cliente')"><i class="bi bi-person-plus me-1"></i>Cliente</button><button class="btn btn-outline btn-sm" style="flex:1" onclick="waAbrirVincular('clube')"><i class="bi bi-building-add me-1"></i>Clube</button></div>`}
           <div style="font-weight:600;font-size:13px;margin-bottom:8px;color:#111"><i class="bi bi-folder2-open me-1"></i>Processos em aberto</div>
           <div id="wa-perfil-processos" style="margin-bottom:18px;font-size:13px;color:#667781">${cli ? 'Carregando...' : 'Sem cliente vinculado.'}</div>
           ${cli ? `
@@ -8780,25 +8826,81 @@ function waToggleEmojis() { const el = document.getElementById('wa-emojis'); if 
 function waFecharEmojis() { const el = document.getElementById('wa-emojis'); if (el) el.style.display = 'none'; }
 function waInserirEmoji(e) { const inp = document.getElementById('wa-input'); if (inp) { inp.value += e; inp.focus(); } }
 
-// ---- Mensagens rápidas (respostas prontas) ----
+// ---- Respostas rápidas próprias do WhatsApp (com adicionar/editar/excluir) ----
 function waMontarRapidas() {
   const el = document.getElementById('wa-rapidas'); if (!el) return;
-  el.innerHTML = MENSAGENS_WHATSAPP_CONFIG.map(m => {
-    const txt = (MENSAGENS_WHATSAPP[m.chave] || '').replace(/\*/g, '');
-    return `<div class="wa-rapida-item" onclick="waInserirRapida('${m.chave}')"><div class="lbl">${esc(m.label)}</div><div class="txt">${esc(txt.slice(0, 90))}</div></div>`;
-  }).join('');
+  const lista = window._wa.rapidas || [];
+  const itens = lista.map(r => `
+    <div class="wa-rapida-item" style="display:flex;align-items:center;gap:8px">
+      <div style="flex:1;min-width:0" onclick="waInserirRapida('${esc(String(r.id))}')">
+        <div class="txt" style="white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc((r.texto || '').replace(/\*/g, ''))}</div>
+      </div>
+      <button class="wa-iconbtn" style="font-size:14px" title="Editar" onclick="event.stopPropagation();waEditarRapida('${esc(String(r.id))}')"><i class="bi bi-pencil"></i></button>
+      <button class="wa-iconbtn" style="font-size:14px;color:var(--danger)" title="Excluir" onclick="event.stopPropagation();waExcluirRapida('${esc(String(r.id))}')"><i class="bi bi-trash"></i></button>
+    </div>`).join('');
+  el.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px 8px">
+      <span style="font-size:11px;font-weight:700;color:#667781;text-transform:uppercase;letter-spacing:.5px">Respostas rápidas</span>
+      <button class="btn btn-outline btn-sm" onclick="waNovaRapida()"><i class="bi bi-plus-lg me-1"></i>Nova</button>
+    </div>
+    ${itens || '<div style="padding:10px;color:#667781;font-size:12px">Nenhuma resposta rápida ainda. Clique em "Nova".</div>'}`;
 }
 function waToggleRapidas() { const el = document.getElementById('wa-rapidas'); if (el) el.style.display = el.style.display === 'block' ? 'none' : 'block'; waFecharEmojis(); }
 function waFecharRapidas() { const el = document.getElementById('wa-rapidas'); if (el) el.style.display = 'none'; }
-function waInserirRapida(chave) {
+function waInserirRapida(id) {
+  const r = (window._wa.rapidas || []).find(x => String(x.id) === String(id)); if (!r) return;
   const chat = window._wa.chats.find(x => x.jid === window._wa.jidAtivo) || {};
   const cli = waClienteDe(chat);
   const nome = cli ? String(cli.Title || '').split(' ')[0] : '';
-  let texto = MENSAGENS_WHATSAPP[chave] || '';
-  texto = texto.replace(/\{(\w+)\}/g, (mm, k) => ((k === 'nome' || k === 'cliente') && nome ? nome : mm));
+  const texto = (r.texto || '').replace(/\{(\w+)\}/g, (mm, k) => ((k === 'nome' || k === 'cliente') && nome ? nome : mm));
   const inp = document.getElementById('wa-input');
   if (inp) { inp.value = texto; inp.focus(); }
   waFecharRapidas();
+}
+function waNovaRapida() { waModalRapida(null); }
+function waEditarRapida(id) { waModalRapida(id); }
+function waModalRapida(id) {
+  const r = id ? (window._wa.rapidas || []).find(x => String(x.id) === String(id)) : null;
+  document.getElementById('wa-modal-rapida')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'wa-modal-rapida';
+  modal.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this) this.remove()">
+      <div style="background:#fff;border-radius:14px;padding:22px;max-width:500px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><h3 style="margin:0;font-size:16px"><i class="bi bi-lightning-charge me-2"></i>${id ? 'Editar' : 'Nova'} resposta rápida</h3><button onclick="document.getElementById('wa-modal-rapida').remove()" style="background:none;border:none;font-size:22px;color:#666;cursor:pointer;line-height:1">×</button></div>
+        <textarea id="wa-rapida-txt" rows="6" placeholder="Digite a mensagem... (use {nome} para o primeiro nome do cliente)" style="width:100%;box-sizing:border-box;font-size:13px;resize:vertical;border:1px solid var(--border);border-radius:8px;padding:10px">${esc(r?.texto || '')}</textarea>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
+          <button class="btn btn-outline btn-sm" onclick="document.getElementById('wa-modal-rapida').remove()">Cancelar</button>
+          <button class="btn btn-primary btn-sm" onclick="waSalvarRapida('${id || ''}')"><i class="bi bi-floppy me-1"></i>Salvar</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  setTimeout(() => document.getElementById('wa-rapida-txt')?.focus(), 50);
+}
+async function waSalvarRapida(id) {
+  const txt = (document.getElementById('wa-rapida-txt')?.value || '').trim();
+  if (!txt) { toast('Digite a mensagem.', 'warning'); return; }
+  window._wa.rapidas = window._wa.rapidas || [];
+  if (id) { const r = window._wa.rapidas.find(x => String(x.id) === String(id)); if (r) r.texto = txt; }
+  else { window._wa.rapidas.push({ id: `${Date.now()}${Math.random().toString(36).slice(2, 6)}`, texto: txt }); }
+  try {
+    showLoading();
+    await App.graph._writeFile('whatsapp_respostas_rapidas', window._wa.rapidas);
+    document.getElementById('wa-modal-rapida')?.remove();
+    waMontarRapidas();
+    toast('Resposta rápida salva.', 'success');
+  } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+async function waExcluirRapida(id) {
+  if (!confirm('Excluir esta resposta rápida?')) return;
+  window._wa.rapidas = (window._wa.rapidas || []).filter(x => String(x.id) !== String(id));
+  try {
+    showLoading();
+    await App.graph._writeFile('whatsapp_respostas_rapidas', window._wa.rapidas);
+    waMontarRapidas();
+    toast('Resposta rápida excluída.', 'success');
+  } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 function restaurarMensagemPadrao(chave) {
@@ -10331,9 +10433,12 @@ async function renderOrcamentoForm(clienteId = null, orcId = null) {
           <button id="orc-salvar-btn" class="btn btn-primary" onclick="salvarOrcamento()" style="pointer-events:none;opacity:0.45">
             <i class="bi bi-floppy"></i> Salvar Orçamento
           </button>
-          <a id="orc-wa-btn" class="btn btn-whatsapp" href="#" target="_blank" style="pointer-events:none;opacity:0.45">
+          <button id="orc-vermsg-btn" class="btn btn-outline" onclick="verMensagemOrcamento()" style="pointer-events:none;opacity:0.45">
+            <i class="bi bi-eye"></i> Ver mensagem
+          </button>
+          <button id="orc-wa-btn" class="btn btn-whatsapp" onclick="enviarOrcamentoNoWhats()" style="pointer-events:none;opacity:0.45">
             <i class="bi bi-whatsapp"></i> Enviar Orçamento ao Cliente
-          </a>
+          </button>
         </div>
       </div>
     </div>`;
@@ -10503,10 +10608,48 @@ function atualizarOrcamento() {
       (desconto > 0 ? `\nDesconto: − ${desconto.toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}` : '') +
       `\n\nTotal: ${totalComDesc.toLocaleString('pt-BR', { style:'currency', currency:'BRL' })}` +
       `\nFormas de pagamento: à vista com 5% de desconto (${(totalComDesc*0.95).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}) ou cartão de crédito em até 10x com acréscimo dos juros da máquina.`;
-    if (waBtn) { waBtn.href = `https://wa.me/55${celularLimpo}?text=${encodeURIComponent(msg)}`; waBtn.style.pointerEvents = ''; waBtn.style.opacity = '1'; }
+    window._orcWa = { celular: celularLimpo, msg };
+    [waBtn, document.getElementById('orc-vermsg-btn')].forEach(b => { if (b) { b.style.pointerEvents = ''; b.style.opacity = '1'; } });
   } else {
-    if (waBtn) { waBtn.href = '#'; waBtn.style.pointerEvents = 'none'; waBtn.style.opacity = '0.45'; }
+    window._orcWa = null;
+    [waBtn, document.getElementById('orc-vermsg-btn')].forEach(b => { if (b) { b.style.pointerEvents = 'none'; b.style.opacity = '0.45'; } });
   }
+}
+
+// Abre o orçamento na central de WhatsApp do sistema (ou wa.me como alternativa)
+function enviarOrcamentoNoWhats() {
+  const w = window._orcWa; if (!w || !w.celular) return;
+  if (CONFIG.waGatewayUrl && (isAdminUser() || isExtrasUser())) {
+    window._waAbrirPendente = { phone: w.celular, texto: w.msg };
+    navigate('whatsapp');
+  } else {
+    window.open(`https://wa.me/55${w.celular}?text=${encodeURIComponent(w.msg)}`, '_blank');
+  }
+}
+// Mostra a mensagem pronta do orçamento com botão de copiar
+function verMensagemOrcamento() {
+  const w = window._orcWa; if (!w) return;
+  document.getElementById('modal-ver-msg-orc')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modal-ver-msg-orc';
+  modal.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this) this.remove()">
+      <div style="background:#fff;border-radius:14px;padding:22px;max-width:520px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><h3 style="margin:0;font-size:16px"><i class="bi bi-chat-text me-2"></i>Mensagem do orçamento</h3><button onclick="document.getElementById('modal-ver-msg-orc').remove()" style="background:none;border:none;font-size:22px;color:#666;cursor:pointer;line-height:1">×</button></div>
+        <textarea id="ver-msg-orc-txt" readonly rows="12" style="width:100%;box-sizing:border-box;font-size:13px;resize:vertical;border:1px solid var(--border);border-radius:8px;padding:10px">${esc(w.msg)}</textarea>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
+          <button class="btn btn-primary btn-sm" onclick="copiarMensagemOrcamento()"><i class="bi bi-clipboard me-1"></i>Copiar</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+}
+function copiarMensagemOrcamento() {
+  const w = window._orcWa; if (!w) return;
+  const done = () => toast('Mensagem copiada!', 'success');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(w.msg).then(done).catch(() => { const t = document.getElementById('ver-msg-orc-txt'); if (t) { t.select(); document.execCommand('copy'); done(); } });
+  } else { const t = document.getElementById('ver-msg-orc-txt'); if (t) { t.select(); document.execCommand('copy'); done(); } }
 }
 
 // ------------------------------------------------------------
