@@ -7899,7 +7899,15 @@ function waNorm(m) {
   };
 }
 
-function waClienteDe(c) { if (waEhGrupo(c)) return null; return window._wa.clientesIdx[waChaveDeChat(c)] || null; }
+function waClienteDe(c) {
+  if (waEhGrupo(c)) return null;
+  const chave = waChaveDeChat(c);
+  const direto = window._wa.clientesIdx[chave];
+  if (direto) return direto;
+  const vinc = window._wa.vinculos && window._wa.vinculos[chave];
+  if (vinc) { const cli = (window._wa.clientes || []).find(x => String(x.id) === String(vinc)); if (cli) return cli; }
+  return null;
+}
 function waNomeChat(c) {
   const cli = waClienteDe(c);
   if (cli) return cli.Title;
@@ -7973,6 +7981,13 @@ async function renderWhatsApp() {
       window._wa.clientes = cs;
     } catch (e) { window._wa.clientesIdx = {}; window._wa.clientes = []; }
   }
+  // Vínculos manuais (número -> cliente) definidos pelo operador
+  if (!window._wa.vinculos) {
+    try {
+      const v = await App.graph._readFile('whatsapp_vinculos').catch(() => ({}));
+      window._wa.vinculos = (v && !Array.isArray(v) && typeof v === 'object') ? v : {};
+    } catch (e) { window._wa.vinculos = {}; }
+  }
   // Baixa a lista de contatos salvos (agenda do WhatsApp) — usada para nomes e nova conversa
   if (!window._wa.contatosIdx) {
     window._wa.contatos = []; window._wa.contatosIdx = {};
@@ -8035,6 +8050,11 @@ async function renderWhatsApp() {
       .wa-emojis{position:absolute;bottom:56px;left:10px;background:#fff;border:1px solid var(--border);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.18);padding:8px;display:none;grid-template-columns:repeat(8,1fr);gap:2px;max-width:330px;z-index:5}
       .wa-emojis span{cursor:pointer;font-size:20px;padding:3px;border-radius:6px;text-align:center}
       .wa-emojis span:hover{background:#f0f2f5}
+      .wa-rapidas{position:absolute;bottom:56px;left:10px;right:10px;background:#fff;border:1px solid var(--border);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.18);padding:6px;display:none;max-height:320px;overflow-y:auto;z-index:6}
+      .wa-rapida-item{padding:8px 10px;border-radius:6px;cursor:pointer}
+      .wa-rapida-item:hover{background:#f0f2f5}
+      .wa-rapida-item .lbl{font-size:13px;font-weight:600;color:#111}
+      .wa-rapida-item .txt{font-size:11px;color:#667781;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     </style>
     <div class="wa-shell">
       <div class="wa-side">
@@ -8057,7 +8077,9 @@ async function renderWhatsApp() {
         <div class="wa-thread" id="wa-thread" onscroll="waAtualizarDataFlutuante()"></div>
         <div class="wa-composer" id="wa-composer" style="display:none">
           <div class="wa-emojis" id="wa-emojis"></div>
+          <div class="wa-rapidas" id="wa-rapidas"></div>
           <button class="wa-iconbtn" onclick="waToggleEmojis()" title="Emojis"><i class="bi bi-emoji-smile"></i></button>
+          <button class="wa-iconbtn" onclick="waToggleRapidas()" title="Mensagens rápidas"><i class="bi bi-lightning-charge"></i></button>
           <button class="wa-iconbtn" onclick="document.getElementById('wa-file').click()" title="Anexar arquivo"><i class="bi bi-paperclip"></i></button>
           <input type="file" id="wa-file" style="display:none" accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx" onchange="waEnviarArquivo(this)" />
           <input class="txt" id="wa-input" placeholder="Digite uma mensagem" onkeydown="if(event.key==='Enter'){event.preventDefault();waEnviar();}" />
@@ -8067,6 +8089,7 @@ async function renderWhatsApp() {
     </div>`;
 
   waMontarEmojis();
+  waMontarRapidas();
   waRenderStatus();
   waRenderLista();  // mostra imediatamente as conversas já em memória
   if (window._wa.socket) { try { window._wa.socket.disconnect(); } catch (e) {} window._wa.socket = null; }
@@ -8088,6 +8111,11 @@ function waConectar() {
     socket.on('status', e => { window._wa.estado = e; waRenderStatus(); });
     socket.on('message', m => waOnMessage(m));
     socket.on('refresh', () => waCarregarChats());
+    socket.on('read', d => {
+      if (d && d.all) window._wa.chats.forEach(c => c.unread = 0);
+      else if (d && d.jid) { const c = window._wa.chats.find(x => x.jid === d.jid); if (c) c.unread = 0; }
+      waRenderLista();
+    });
     socket.on('connect_error', err => { const el = document.getElementById('wa-status'); if (el) el.innerHTML = `<span style="color:var(--danger)"><i class="bi bi-x-circle me-1"></i>Erro de conexão: ${esc(err.message)}</span>`; });
   }).catch(e => { const el = document.getElementById('wa-status'); if (el) el.innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`; });
 }
@@ -8372,7 +8400,56 @@ function waRenderHeader() {
         <div style="font-size:12px;color:#667781">${esc((cli || chat.name) ? numero : '')}</div>
       </div>
     </div>
-    ${cli ? `<button class="btn btn-ghost btn-sm" onclick="navigate('clientes/perfil',{id:'${esc(String(cli.id))}'})"><i class="bi bi-person-lines-fill me-1"></i>Ver cliente</button>` : ''}`;
+    ${cli ? `<button class="btn btn-ghost btn-sm" onclick="navigate('clientes/perfil',{id:'${esc(String(cli.id))}'})"><i class="bi bi-person-lines-fill me-1"></i>Ver cliente</button>` : (waEhGrupo(chat) ? '' : `<button class="btn btn-outline btn-sm" onclick="waAbrirVincular()"><i class="bi bi-link-45deg me-1"></i>Vincular cliente</button>`)}`;
+}
+
+// ---- Vincular manualmente um número a um cliente ----
+function waAbrirVincular() {
+  if (!window._wa.jidAtivo) return;
+  document.getElementById('wa-modal-vincular')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'wa-modal-vincular';
+  modal.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this) this.remove()">
+      <div style="background:#fff;border-radius:14px;max-width:420px;width:100%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+        <div style="padding:16px 18px 10px;border-bottom:1px solid var(--border)">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><h3 style="margin:0;font-size:16px"><i class="bi bi-link-45deg me-2"></i>Vincular a um cliente</h3><button onclick="document.getElementById('wa-modal-vincular').remove()" style="background:none;border:none;font-size:22px;color:#666;cursor:pointer;line-height:1">×</button></div>
+          <input id="wa-vincular-busca" placeholder="Buscar cliente..." oninput="waRenderVincularLista()" style="width:100%;border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-size:13px;box-sizing:border-box" />
+        </div>
+        <div id="wa-vincular-lista" style="overflow-y:auto;flex:1"></div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  waRenderVincularLista();
+}
+function waRenderVincularLista() {
+  const cont = document.getElementById('wa-vincular-lista'); if (!cont) return;
+  const termo = (document.getElementById('wa-vincular-busca')?.value || '').toLowerCase();
+  const dig = termo.replace(/\D/g, '');
+  const rows = (window._wa.clientes || [])
+    .filter(c => !termo || (c.Title || '').toLowerCase().includes(termo) || (dig.length >= 3 && String(c.Celular || '').replace(/\D/g, '').includes(dig)))
+    .slice(0, 60)
+    .map(c => `<div class="wa-item" onclick="waVincularCliente('${esc(String(c.id))}')">
+      ${waAvatarHtml(c.Title, '', 40)}
+      <div style="flex:1;min-width:0"><div class="nome">${esc(c.Title)}</div><div class="prev">${esc(waFmtDigits(c.Celular) || '')}</div></div>
+    </div>`).join('');
+  cont.innerHTML = rows || '<div style="padding:16px;color:#667781;font-size:13px">Nenhum cliente encontrado.</div>';
+}
+async function waVincularCliente(clienteId) {
+  const jid = window._wa.jidAtivo; if (!jid) return;
+  const chat = window._wa.chats.find(x => x.jid === jid) || { jid };
+  const chave = waChaveDeChat(chat);
+  if (!chave) { toast('Não foi possível identificar o número deste contato.', 'error'); return; }
+  document.getElementById('wa-modal-vincular')?.remove();
+  try {
+    showLoading();
+    window._wa.vinculos = window._wa.vinculos || {};
+    window._wa.vinculos[chave] = String(clienteId);
+    await App.graph._writeFile('whatsapp_vinculos', window._wa.vinculos);
+    toast('Número vinculado ao cliente.', 'success');
+    document.getElementById('wa-modal-perfil')?.remove();
+    waRenderHeader(); waRenderLista();
+  } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 // ---- Perfil do contato (estilo WhatsApp): número, mídias e processos em aberto ----
@@ -8412,7 +8489,7 @@ async function waAbrirPerfil() {
           <div style="font-size:13px;color:#667781;margin-top:2px"><i class="bi bi-telephone me-1"></i>${esc(numero)}</div>
         </div>
         <div style="padding:18px 20px">
-          ${cli ? `<div style="margin-bottom:16px"><button class="btn btn-primary btn-sm" style="width:100%" onclick="document.getElementById('wa-modal-perfil').remove();navigate('clientes/perfil',{id:'${esc(String(cli.id))}'})"><i class="bi bi-person-lines-fill me-1"></i>Abrir cadastro de ${esc(cli.Title)}</button></div>` : `<div style="font-size:12px;color:#667781;margin-bottom:16px"><i class="bi bi-info-circle me-1"></i>Este número não está vinculado a nenhum cliente cadastrado.</div>`}
+          ${cli ? `<div style="margin-bottom:16px"><button class="btn btn-primary btn-sm" style="width:100%" onclick="document.getElementById('wa-modal-perfil').remove();navigate('clientes/perfil',{id:'${esc(String(cli.id))}'})"><i class="bi bi-person-lines-fill me-1"></i>Abrir cadastro de ${esc(cli.Title)}</button></div>` : `<div style="font-size:12px;color:#667781;margin-bottom:10px"><i class="bi bi-info-circle me-1"></i>Este número não está vinculado a nenhum cliente cadastrado.</div><button class="btn btn-outline btn-sm" style="width:100%;margin-bottom:16px" onclick="waAbrirVincular()"><i class="bi bi-link-45deg me-1"></i>Vincular a um cliente</button>`}
           <div style="font-weight:600;font-size:13px;margin-bottom:8px;color:#111"><i class="bi bi-folder2-open me-1"></i>Processos em aberto</div>
           <div id="wa-perfil-processos" style="margin-bottom:18px;font-size:13px;color:#667781">${cli ? 'Carregando...' : 'Sem cliente vinculado.'}</div>
           ${cli ? `
@@ -8699,9 +8776,30 @@ function waMontarEmojis() {
   const el = document.getElementById('wa-emojis'); if (!el) return;
   el.innerHTML = WA_EMOJIS.map(e => `<span onclick="waInserirEmoji('${e}')">${e}</span>`).join('');
 }
-function waToggleEmojis() { const el = document.getElementById('wa-emojis'); if (el) el.style.display = el.style.display === 'grid' ? 'none' : 'grid'; }
+function waToggleEmojis() { const el = document.getElementById('wa-emojis'); if (el) el.style.display = el.style.display === 'grid' ? 'none' : 'grid'; waFecharRapidas(); }
 function waFecharEmojis() { const el = document.getElementById('wa-emojis'); if (el) el.style.display = 'none'; }
 function waInserirEmoji(e) { const inp = document.getElementById('wa-input'); if (inp) { inp.value += e; inp.focus(); } }
+
+// ---- Mensagens rápidas (respostas prontas) ----
+function waMontarRapidas() {
+  const el = document.getElementById('wa-rapidas'); if (!el) return;
+  el.innerHTML = MENSAGENS_WHATSAPP_CONFIG.map(m => {
+    const txt = (MENSAGENS_WHATSAPP[m.chave] || '').replace(/\*/g, '');
+    return `<div class="wa-rapida-item" onclick="waInserirRapida('${m.chave}')"><div class="lbl">${esc(m.label)}</div><div class="txt">${esc(txt.slice(0, 90))}</div></div>`;
+  }).join('');
+}
+function waToggleRapidas() { const el = document.getElementById('wa-rapidas'); if (el) el.style.display = el.style.display === 'block' ? 'none' : 'block'; waFecharEmojis(); }
+function waFecharRapidas() { const el = document.getElementById('wa-rapidas'); if (el) el.style.display = 'none'; }
+function waInserirRapida(chave) {
+  const chat = window._wa.chats.find(x => x.jid === window._wa.jidAtivo) || {};
+  const cli = waClienteDe(chat);
+  const nome = cli ? String(cli.Title || '').split(' ')[0] : '';
+  let texto = MENSAGENS_WHATSAPP[chave] || '';
+  texto = texto.replace(/\{(\w+)\}/g, (mm, k) => ((k === 'nome' || k === 'cliente') && nome ? nome : mm));
+  const inp = document.getElementById('wa-input');
+  if (inp) { inp.value = texto; inp.focus(); }
+  waFecharRapidas();
+}
 
 function restaurarMensagemPadrao(chave) {
   const cfg = MENSAGENS_WHATSAPP_CONFIG.find(m => m.chave === chave);
