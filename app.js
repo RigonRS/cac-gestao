@@ -7932,6 +7932,7 @@ function waProcessarFilaAvatar() {
   }
 }
 function waAvatarUrl(jid) {
+  if (!jid || !String(jid).includes('@')) return '';   // contatos sem conversa: só inicial
   if (window._wa.avatars[jid] === undefined) {
     window._wa.avatars[jid] = null;       // marca como "buscando"
     _waAvatarFila.pend.push(jid);
@@ -7965,7 +7966,8 @@ async function renderWhatsApp() {
       const idx = {};
       cs.forEach(c => { const k = waChaveTel(c.Celular); if (k) idx[k] = c; });
       window._wa.clientesIdx = idx;
-    } catch (e) { window._wa.clientesIdx = {}; }
+      window._wa.clientes = cs;
+    } catch (e) { window._wa.clientesIdx = {}; window._wa.clientes = []; }
   }
 
   el.innerHTML = `
@@ -7976,11 +7978,21 @@ async function renderWhatsApp() {
       .wa-status .info{flex:1;min-width:0}
       .wa-desconectar{background:none;border:1px solid var(--danger);color:var(--danger);border-radius:6px;font-size:11px;padding:3px 8px;cursor:pointer;flex-shrink:0;white-space:nowrap}
       .wa-desconectar:hover{background:var(--danger);color:#fff}
-      .wa-tabs{display:flex;gap:6px;padding:8px 8px 0}
+      .wa-tabs{display:flex;gap:6px;padding:8px 8px 0;position:relative}
       .wa-tab{flex:1;background:#f0f2f5;border:none;border-radius:8px;padding:6px 8px;font-size:12.5px;font-weight:600;color:#54656f;cursor:pointer}
       .wa-tab.ativo{background:#25d366;color:#fff}
+      .wa-tab.mais{flex:0 0 auto;padding:6px 10px}
       .wa-tab .cont{background:rgba(0,0,0,.12);border-radius:999px;padding:0 6px;margin-left:4px;font-size:11px}
       .wa-tab.ativo .cont{background:rgba(255,255,255,.3)}
+      .wa-filtros-menu{position:absolute;top:40px;right:8px;background:#fff;border:1px solid var(--border);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.18);padding:6px;z-index:6;min-width:200px}
+      .wa-filtros-menu button{display:block;width:100%;text-align:left;background:none;border:none;padding:9px 12px;font-size:13px;color:#111;cursor:pointer;border-radius:6px}
+      .wa-filtros-menu button:hover{background:#f0f2f5}
+      .wa-data-sep{align-self:center;background:#fff;color:#54656f;font-size:11.5px;font-weight:600;padding:4px 12px;border-radius:8px;box-shadow:0 1px .5px rgba(0,0,0,.13);margin:8px 0;text-transform:capitalize}
+      .wa-data-flutuante{position:absolute;top:8px;left:50%;transform:translateX(-50%);background:rgba(255,255,255,.95);color:#54656f;font-size:11.5px;font-weight:600;padding:4px 12px;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.2);z-index:3;text-transform:capitalize;pointer-events:none;opacity:0;transition:opacity .2s}
+      .wa-bubble .fwd{position:absolute;top:2px;right:-30px;background:#fff;border:none;border-radius:50%;width:24px;height:24px;color:#54656f;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.2);display:none;font-size:12px;line-height:1}
+      .wa-bubble.me .fwd{right:auto;left:-30px}
+      .wa-bubble:hover .fwd{display:inline-block}
+      .wa-bubble{position:relative}
       .wa-search{padding:8px}
       .wa-search input{width:100%;border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-size:13px}
       .wa-nome-link{cursor:pointer}
@@ -8013,13 +8025,19 @@ async function renderWhatsApp() {
         <div class="wa-tabs" id="wa-tabs">
           <button class="wa-tab ativo" data-aba="tudo" onclick="waSetAba('tudo')">Tudo</button>
           <button class="wa-tab" data-aba="nlidas" onclick="waSetAba('nlidas')">Não lidas</button>
+          <button class="wa-tab mais" onclick="waToggleFiltros(event)" title="Mais filtros"><i class="bi bi-funnel"></i> <i class="bi bi-caret-down-fill" style="font-size:9px"></i></button>
+          <div class="wa-filtros-menu" id="wa-filtros-menu" style="display:none">
+            <button onclick="waSetFiltroEspecial('orcamentos')"><i class="bi bi-calculator me-2"></i>Orçamentos Pendentes</button>
+            <button onclick="waSetFiltroEspecial('debitos')"><i class="bi bi-cash-coin me-2"></i>Débitos Pendentes</button>
+          </div>
         </div>
         <div class="wa-search"><input id="wa-busca" placeholder="Buscar conversa..." oninput="waRenderLista()" /></div>
         <div class="wa-list" id="wa-lista"></div>
       </div>
-      <div class="wa-main">
+      <div class="wa-main" style="position:relative">
         <div class="wa-header" id="wa-header" style="display:none"></div>
-        <div class="wa-thread" id="wa-thread"></div>
+        <div class="wa-data-flutuante" id="wa-data-flutuante"></div>
+        <div class="wa-thread" id="wa-thread" onscroll="waAtualizarDataFlutuante()"></div>
         <div class="wa-composer" id="wa-composer" style="display:none">
           <div class="wa-emojis" id="wa-emojis"></div>
           <button class="wa-iconbtn" onclick="waToggleEmojis()" title="Emojis"><i class="bi bi-emoji-smile"></i></button>
@@ -8037,6 +8055,13 @@ async function renderWhatsApp() {
   if (window._wa.socket) { try { window._wa.socket.disconnect(); } catch (e) {} window._wa.socket = null; }
   waConectar();
   waCarregarChats();  // atualiza em segundo plano (sem travar a tela)
+  if (!window._waDocClick) {
+    window._waDocClick = true;
+    document.addEventListener('click', (e) => {
+      const m = document.getElementById('wa-filtros-menu');
+      if (m && m.style.display === 'block' && !e.target.closest('#wa-filtros-menu') && !e.target.closest('.wa-tab.mais')) m.style.display = 'none';
+    });
+  }
 }
 
 function waConectar() {
@@ -8101,18 +8126,145 @@ async function waDesconectar() {
 // ---- Abas Tudo / Não lidas ----
 function waSetAba(aba) {
   window._wa.aba = aba;
+  window._wa.filtroDados = null;
+  waFecharFiltros();
   document.querySelectorAll('#wa-tabs .wa-tab').forEach(b => b.classList.toggle('ativo', b.dataset.aba === aba));
+  const mais = document.querySelector('#wa-tabs .wa-tab.mais'); if (mais) mais.classList.remove('ativo');
   waRenderLista();
+}
+
+// ---- Filtros extras: Orçamentos Pendentes / Débitos Pendentes ----
+function waToggleFiltros(e) { if (e) e.stopPropagation(); const m = document.getElementById('wa-filtros-menu'); if (m) m.style.display = (m.style.display === 'none' ? 'block' : 'none'); }
+function waFecharFiltros() { const m = document.getElementById('wa-filtros-menu'); if (m) m.style.display = 'none'; }
+
+async function waSetFiltroEspecial(tipo) {
+  waFecharFiltros();
+  window._wa.aba = tipo;
+  document.querySelectorAll('#wa-tabs .wa-tab').forEach(b => b.classList.remove('ativo'));
+  const mais = document.querySelector('#wa-tabs .wa-tab.mais'); if (mais) mais.classList.add('ativo');
+  const lista = document.getElementById('wa-lista');
+  if (lista) lista.innerHTML = '<div style="padding:16px;color:#667781;font-size:13px">Carregando...</div>';
+  try {
+    const [processos, orcRaw] = await Promise.all([
+      App.getProcessos(),
+      App.graph._readFile('orcamentos').catch(() => []),
+    ]);
+    const orcs = Array.isArray(orcRaw) ? orcRaw : [];
+    const clientesPorId = {};
+    (window._wa.clientes || []).forEach(c => { clientesPorId[String(c.id)] = c; });
+    const mapa = {};
+    const add = (cid, nome, valor) => { const m = mapa[cid] || (mapa[cid] = { cid, nome, total: 0, count: 0 }); m.total += valor; m.count++; };
+    if (tipo === 'orcamentos') {
+      orcs.filter(o => o.status === 'Pendente').forEach(o => add(String(o.clienteId), o.clienteNome, Number(o.total) || 0));
+    } else {
+      processos.forEach(p => {
+        if (p.demandaId || !p.ValorProcesso || p.Status === 'Desistência Cliente') return;
+        const pend = getItensPendentesProcesso(p);
+        if (pend.length) add(String(p.ClienteId), p.ClienteNome, pend.reduce((s, i) => s + i.valor, 0));
+      });
+      orcs.filter(o => o.status !== 'Rejeitado' && statusPagamentoOrcamento(o) !== 'pago').forEach(o => {
+        const pend = parcelasPendentesOrcamento(o).total;
+        if (pend > 0) add(String(o.clienteId), o.clienteNome, pend);
+      });
+    }
+    const arr = Object.values(mapa).map(m => ({ ...m, cliente: clientesPorId[m.cid] || null })).sort((a, b) => (a.nome || '').localeCompare(b.nome || ''));
+    window._wa.filtroDados = { tipo, itens: arr };
+  } catch (e) {
+    window._wa.filtroDados = { tipo, itens: [], erro: e.message };
+  }
+  waRenderLista();
+}
+
+function waRenderFiltroEspecial() {
+  const lista = document.getElementById('wa-lista'); if (!lista) return;
+  const dados = window._wa.filtroDados;
+  const eOrc = window._wa.aba === 'orcamentos';
+  const titulo = eOrc ? 'Orçamentos Pendentes' : 'Débitos Pendentes';
+  if (!dados) { lista.innerHTML = '<div style="padding:16px;color:#667781;font-size:13px">Carregando...</div>'; return; }
+  const termo = (document.getElementById('wa-busca')?.value || '').toLowerCase();
+  const itens = dados.itens.filter(m => !termo || (m.nome || '').toLowerCase().includes(termo));
+  const cab = `<div style="padding:10px 12px;font-size:11px;font-weight:700;color:#667781;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #f0f0f0;display:flex;justify-content:space-between"><span>${titulo}</span><span>${itens.length}</span></div>`;
+  if (dados.erro) { lista.innerHTML = cab + `<div style="padding:16px;color:var(--danger);font-size:13px">Erro: ${esc(dados.erro)}</div>`; return; }
+  const rows = itens.map(m => {
+    const cli = m.cliente;
+    const tel = cli && cli.Celular ? String(cli.Celular).replace(/\D/g, '') : '';
+    const nome = m.nome || (cli && cli.Title) || 'Cliente';
+    const onclick = tel ? `onclick="waIniciarConversa('${esc(tel)}','${esc(nome)}')"` : '';
+    return `<div class="wa-item" ${onclick} style="${tel ? '' : 'opacity:.6;cursor:default'}">
+      ${waAvatarHtml(nome, '', 44)}
+      <div style="flex:1;min-width:0">
+        <div class="nome">${esc(nome)}</div>
+        <div class="prev">${eOrc ? `${m.count} orçamento(s) · ` : ''}${fmtMoeda(m.total)}${tel ? '' : ' · sem telefone'}</div>
+      </div>
+      ${tel ? '<i class="bi bi-chat-dots" style="color:#25d366"></i>' : ''}
+    </div>`;
+  }).join('');
+  lista.innerHTML = cab + (rows || `<div style="padding:16px;color:#667781;font-size:13px">Nenhum cliente ${eOrc ? 'com orçamento pendente' : 'com débito pendente'}.</div>`);
+}
+
+// ---- Iniciar uma nova conversa a partir de um contato/cliente ----
+function waIniciarConversa(phone, nome) {
+  const dig = String(phone || '').replace(/\D/g, '');
+  if (dig.length < 8) { toast('Número inválido.', 'warning'); return; }
+  const num = dig.startsWith('55') ? dig : ('55' + dig);
+  const jid = num + '@s.whatsapp.net';
+  let c = window._wa.chats.find(x => x.jid === jid || (x.phone && String(x.phone).replace(/\D/g, '').slice(-8) === dig.slice(-8)));
+  if (!c) { c = { jid, phone: num, name: nome || null, last_message: '', last_ts: Math.floor(Date.now() / 1000), unread: 0 }; window._wa.chats.unshift(c); }
+  const busca = document.getElementById('wa-busca'); if (busca) busca.value = '';
+  window._wa.aba = 'tudo';
+  window._wa.filtroDados = null;
+  document.querySelectorAll('#wa-tabs .wa-tab').forEach(b => b.classList.toggle('ativo', b.dataset.aba === 'tudo'));
+  const mais = document.querySelector('#wa-tabs .wa-tab.mais'); if (mais) mais.classList.remove('ativo');
+  waAbrir(c.jid);
+}
+
+// Contatos/clientes que casam com a busca e ainda não têm conversa (para iniciar uma nova)
+function waContatosBuscaHtml(termoRaw, termo) {
+  const digitos = termoRaw.replace(/\D/g, '');
+  const jaTem = new Set(window._wa.chats.map(c => waChaveDeChat(c)).filter(Boolean));
+  const clientes = (window._wa.clientes || []).filter(cl => {
+    if (!cl.Celular) return false;
+    const nome = (cl.Title || '').toLowerCase();
+    const tel = String(cl.Celular).replace(/\D/g, '');
+    const bateNome = termo && nome.includes(termo);
+    const bateTel = digitos.length >= 3 && tel.includes(digitos);
+    return (bateNome || bateTel) && !jaTem.has(waChaveTel(cl.Celular));
+  }).slice(0, 20);
+
+  let itens = clientes.map(cl => {
+    const tel = String(cl.Celular).replace(/\D/g, '');
+    return `<div class="wa-item" onclick="waIniciarConversa('${esc(tel)}','${esc(cl.Title)}')">
+      ${waAvatarHtml(cl.Title, '', 44)}
+      <div style="flex:1;min-width:0"><div class="nome">${esc(cl.Title)}</div><div class="prev">${esc(waFmtDigits(cl.Celular))}</div></div>
+      <i class="bi bi-chat-dots" style="color:#25d366"></i>
+    </div>`;
+  }).join('');
+
+  if (digitos.length >= 8) {
+    const jaClienteOuChat = clientes.some(cl => String(cl.Celular).replace(/\D/g, '').slice(-8) === digitos.slice(-8)) || jaTem.has(digitos.slice(-8));
+    if (!jaClienteOuChat) {
+      itens += `<div class="wa-item" onclick="waIniciarConversa('${esc(digitos)}','')">
+        <div style="width:44px;height:44px;border-radius:50%;background:#25d366;color:#fff;display:flex;align-items:center;justify-content:center;flex-shrink:0"><i class="bi bi-telephone-plus"></i></div>
+        <div style="flex:1;min-width:0"><div class="nome">Iniciar conversa</div><div class="prev">${esc(waFmtDigits(digitos))}</div></div>
+        <i class="bi bi-chat-dots" style="color:#25d366"></i>
+      </div>`;
+    }
+  }
+  if (!itens) return '';
+  return `<div style="padding:10px 12px 4px;font-size:11px;font-weight:700;color:#667781;text-transform:uppercase;letter-spacing:.5px">Nova conversa</div>${itens}`;
 }
 
 function waRenderLista() {
   const lista = document.getElementById('wa-lista'); if (!lista) return;
-  const termo = (document.getElementById('wa-busca')?.value || '').toLowerCase();
   const aba = window._wa.aba || 'tudo';
   // Atualiza o contador de não lidas na aba
   const totalNaoLidas = window._wa.chats.filter(c => (c.unread || 0) > 0).length;
   const btnNlidas = document.querySelector('#wa-tabs .wa-tab[data-aba="nlidas"]');
   if (btnNlidas) btnNlidas.innerHTML = `Não lidas${totalNaoLidas ? `<span class="cont">${totalNaoLidas}</span>` : ''}`;
+  // Filtros especiais mostram uma lista de clientes (orçamentos/débitos), não conversas
+  if (aba === 'orcamentos' || aba === 'debitos') { waRenderFiltroEspecial(); return; }
+  const termoRaw = (document.getElementById('wa-busca')?.value || '').trim();
+  const termo = termoRaw.toLowerCase();
   const rows = window._wa.chats
     .filter(c => aba !== 'nlidas' || (c.unread || 0) > 0)
     .filter(c => { const nome = waNomeChat(c).toLowerCase(); return !termo || nome.includes(termo) || String(c.jid).includes(termo); })
@@ -8131,7 +8283,10 @@ function waRenderLista() {
   const btnLer = (aba === 'nlidas' && totalNaoLidas > 0)
     ? `<div style="padding:8px 12px;border-bottom:1px solid #f0f0f0"><button class="btn btn-outline btn-sm" style="width:100%" onclick="waMarcarTodasLidas()"><i class="bi bi-check2-all me-1"></i>Marcar todas como lidas</button></div>`
     : '';
-  lista.innerHTML = btnLer + (rows || `<div style="padding:16px;color:#667781;font-size:13px">${aba === 'nlidas' ? 'Nenhuma conversa não lida.' : 'Nenhuma conversa ainda.'}</div>`);
+  const contatosHtml = termoRaw ? waContatosBuscaHtml(termoRaw, termo) : '';
+  let corpo = rows;
+  if (!corpo && !contatosHtml) corpo = `<div style="padding:16px;color:#667781;font-size:13px">${aba === 'nlidas' ? 'Nenhuma conversa não lida.' : (termoRaw ? 'Nenhuma conversa encontrada.' : 'Nenhuma conversa ainda.')}</div>`;
+  lista.innerHTML = btnLer + corpo + contatosHtml;
 }
 
 async function waMarcarTodasLidas() {
@@ -8329,13 +8484,94 @@ function waBolha(m) {
   const ehGrupo = String(m.jid || '').endsWith('@g.us');
   const remetente = (!me && ehGrupo && m.author) ? `<div style="font-size:12px;font-weight:600;color:#1f7aec;margin-bottom:2px">${esc(m.author)}</div>` : '';
   const rodape = `<div class="hora">${me && m.author && m.author !== 'sistema' ? esc(m.author) + ' · ' : ''}${hora}${m.savedPath ? ' <i class="bi bi-cloud-check" title="salvo na pasta do cliente"></i>' : ''}</div>`;
-  return `<div class="wa-bubble ${me ? 'me' : 'them'}">${remetente}${corpo}${rodape}</div>`;
+  const fwd = m.id ? `<button class="fwd" title="Encaminhar" onclick="waEncaminhar('${esc(String(m.id))}')"><i class="bi bi-arrow-return-right"></i></button>` : '';
+  return `<div class="wa-bubble ${me ? 'me' : 'them'}">${fwd}${remetente}${corpo}${rodape}</div>`;
 }
+
+// Rótulo de data estilo WhatsApp (Hoje / Ontem / dia da semana / dd/mm/aaaa)
+function waLabelData(ts) {
+  const d = new Date(ts * 1000); d.setHours(0, 0, 0, 0);
+  const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+  const diff = Math.round((hoje - d) / 86400000);
+  if (diff === 0) return 'Hoje';
+  if (diff === 1) return 'Ontem';
+  if (diff > 1 && diff < 7) return d.toLocaleDateString('pt-BR', { weekday: 'long' });
+  return d.toLocaleDateString('pt-BR');
+}
+function waChaveDia(ts) { const d = new Date(ts * 1000); return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`; }
 
 function waRenderThread() {
   const t = document.getElementById('wa-thread'); if (!t) return;
-  t.innerHTML = window._wa.msgs.map(waBolha).join('') || '<div style="color:#667781;font-size:13px;margin:auto">Nenhuma mensagem.</div>';
+  const msgs = window._wa.msgs || [];
+  if (!msgs.length) { t.innerHTML = '<div style="color:#667781;font-size:13px;margin:auto">Nenhuma mensagem.</div>'; return; }
+  let html = ''; let diaAtual = null;
+  for (const m of msgs) {
+    const dia = waChaveDia(m.ts);
+    if (dia !== diaAtual) { diaAtual = dia; const lbl = waLabelData(m.ts); html += `<div class="wa-data-sep" data-dia="${esc(lbl)}">${esc(lbl)}</div>`; }
+    html += waBolha(m);
+  }
+  t.innerHTML = html;
   t.scrollTop = t.scrollHeight;
+  waAtualizarDataFlutuante();
+}
+
+// Data fixada no topo, que muda conforme rola a conversa (igual ao WhatsApp)
+let _waDataFlutTimer = null;
+function waAtualizarDataFlutuante() {
+  const t = document.getElementById('wa-thread'); const pill = document.getElementById('wa-data-flutuante');
+  if (!t || !pill) return;
+  const seps = t.querySelectorAll('.wa-data-sep');
+  if (!seps.length) { pill.style.opacity = '0'; return; }
+  const topEdge = t.getBoundingClientRect().top;
+  let label = seps[0].dataset.dia;
+  for (const s of seps) {
+    if (s.getBoundingClientRect().top - topEdge <= 10) label = s.dataset.dia;
+    else break;
+  }
+  pill.textContent = label;
+  pill.style.opacity = '1';
+  if (_waDataFlutTimer) clearTimeout(_waDataFlutTimer);
+  _waDataFlutTimer = setTimeout(() => { pill.style.opacity = '0'; }, 1400);
+}
+
+// ---- Encaminhar mensagem ----
+function waEncaminhar(id) {
+  window._waFwdId = id;
+  document.getElementById('wa-modal-fwd')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'wa-modal-fwd';
+  modal.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this) this.remove()">
+      <div style="background:#fff;border-radius:14px;max-width:420px;width:100%;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+        <div style="padding:16px 18px 10px;border-bottom:1px solid var(--border)">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><h3 style="margin:0;font-size:16px"><i class="bi bi-arrow-return-right me-2"></i>Encaminhar para</h3><button onclick="document.getElementById('wa-modal-fwd').remove()" style="background:none;border:none;font-size:22px;color:#666;cursor:pointer;line-height:1">×</button></div>
+          <input id="wa-fwd-busca" placeholder="Buscar conversa..." oninput="waRenderFwdLista()" style="width:100%;border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-size:13px;box-sizing:border-box" />
+        </div>
+        <div id="wa-fwd-lista" style="overflow-y:auto;flex:1"></div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  waRenderFwdLista();
+}
+function waRenderFwdLista() {
+  const cont = document.getElementById('wa-fwd-lista'); if (!cont) return;
+  const termo = (document.getElementById('wa-fwd-busca')?.value || '').toLowerCase();
+  const rows = window._wa.chats
+    .filter(c => { const n = waNomeChat(c).toLowerCase(); return !termo || n.includes(termo) || String(c.jid).includes(termo); })
+    .slice(0, 80)
+    .map(c => { const nome = waNomeChat(c); return `<div class="wa-item" onclick="waConfirmarEncaminhar('${esc(c.jid)}')">${waAvatarHtml(nome, c.jid, 40)}<div style="flex:1;min-width:0"><div class="nome">${esc(nome)}</div></div></div>`; })
+    .join('');
+  cont.innerHTML = rows || '<div style="padding:16px;color:#667781;font-size:13px">Nenhuma conversa.</div>';
+}
+async function waConfirmarEncaminhar(jid) {
+  const id = window._waFwdId;
+  document.getElementById('wa-modal-fwd')?.remove();
+  if (!id || !jid) return;
+  try {
+    showLoading();
+    await waApi('/forward', { method: 'POST', body: JSON.stringify({ toJid: jid, messageId: id }) });
+    toast('Mensagem encaminhada.', 'success');
+  } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 function waOnMessage(raw) {
