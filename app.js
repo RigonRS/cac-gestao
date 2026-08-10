@@ -7904,6 +7904,10 @@ function waNomeChat(c) {
   const cli = waClienteDe(c);
   if (cli) return cli.Title;
   if (c.name) return c.name; // nome do WhatsApp (pushName)
+  if (!waEhGrupo(c)) {
+    const nomeCont = window._wa.contatosIdx && window._wa.contatosIdx[waChaveDeChat(c)];
+    if (nomeCont) return nomeCont; // nome salvo na agenda do WhatsApp
+  }
   return waFmtNumero(c.jid, c.phone);
 }
 
@@ -7969,6 +7973,17 @@ async function renderWhatsApp() {
       window._wa.clientes = cs;
     } catch (e) { window._wa.clientesIdx = {}; window._wa.clientes = []; }
   }
+  // Baixa a lista de contatos salvos (agenda do WhatsApp) — usada para nomes e nova conversa
+  if (!window._wa.contatosIdx) {
+    window._wa.contatos = []; window._wa.contatosIdx = {};
+    waApi('/contatos').then(r => {
+      window._wa.contatos = r.contatos || [];
+      const idx = {};
+      (r.contatos || []).forEach(c => { const k = waChaveTel(c.phone); if (k && c.nome && !idx[k]) idx[k] = c.nome; });
+      window._wa.contatosIdx = idx;
+      waRenderLista();
+    }).catch(() => {});
+  }
 
   el.innerHTML = `
     <style>
@@ -7989,16 +8004,18 @@ async function renderWhatsApp() {
       .wa-filtros-menu button:hover{background:#f0f2f5}
       .wa-data-sep{align-self:center;background:#fff;color:#54656f;font-size:11.5px;font-weight:600;padding:4px 12px;border-radius:8px;box-shadow:0 1px .5px rgba(0,0,0,.13);margin:8px 0;text-transform:capitalize}
       .wa-data-flutuante{position:absolute;top:8px;left:50%;transform:translateX(-50%);background:rgba(255,255,255,.95);color:#54656f;font-size:11.5px;font-weight:600;padding:4px 12px;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.2);z-index:3;text-transform:capitalize;pointer-events:none;opacity:0;transition:opacity .2s}
-      .wa-bubble .fwd{position:absolute;top:2px;right:-30px;background:#fff;border:none;border-radius:50%;width:24px;height:24px;color:#54656f;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.2);display:none;font-size:12px;line-height:1}
-      .wa-bubble.me .fwd{right:auto;left:-30px}
-      .wa-bubble:hover .fwd{display:inline-block}
-      .wa-bubble{position:relative}
+      .wa-msg{display:flex;align-items:center;gap:4px;max-width:78%}
+      .wa-msg.them{align-self:flex-start}
+      .wa-msg.me{align-self:flex-end;flex-direction:row-reverse}
+      .wa-msg .fwd{opacity:0;background:#fff;border:none;border-radius:50%;width:26px;height:26px;color:#54656f;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.2);flex-shrink:0;font-size:12px;line-height:1;transition:opacity .15s}
+      .wa-msg:hover .fwd{opacity:1}
       .wa-search{padding:8px}
       .wa-search input{width:100%;border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-size:13px}
       .wa-nome-link{cursor:pointer}
       .wa-nome-link:hover{text-decoration:underline}
       .wa-list{flex:1;overflow-y:auto}
       .wa-item{display:flex;gap:10px;align-items:center;padding:10px 12px;cursor:pointer;border-bottom:1px solid #f0f0f0}
+      .wa-item.nlida{background:#eafaf0}
       .wa-item:hover{background:#f5f6f6}
       .wa-item.ativo{background:#f0f2f5}
       .wa-item .nome{font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -8006,7 +8023,7 @@ async function renderWhatsApp() {
       .wa-main{flex:1;display:flex;flex-direction:column;min-width:0;background:#efeae2}
       .wa-header{display:flex;align-items:center;gap:10px;padding:9px 14px;background:#f0f2f5;border-bottom:1px solid var(--border)}
       .wa-thread{flex:1;overflow-y:auto;padding:16px 8%;display:flex;flex-direction:column;gap:4px}
-      .wa-bubble{max-width:65%;padding:6px 9px 4px;border-radius:8px;font-size:13.5px;box-shadow:0 1px .5px rgba(0,0,0,.13);word-break:break-word}
+      .wa-bubble{max-width:100%;padding:6px 9px 4px;border-radius:8px;font-size:13.5px;box-shadow:0 1px .5px rgba(0,0,0,.13);word-break:break-word}
       .wa-bubble.them{align-self:flex-start;background:#fff;border-top-left-radius:2px}
       .wa-bubble.me{align-self:flex-end;background:#d9fdd3;border-top-right-radius:2px}
       .wa-bubble .hora{font-size:10px;color:#667781;text-align:right;margin-top:2px}
@@ -8145,11 +8162,13 @@ async function waSetFiltroEspecial(tipo) {
   const lista = document.getElementById('wa-lista');
   if (lista) lista.innerHTML = '<div style="padding:16px;color:#667781;font-size:13px">Carregando...</div>';
   try {
-    const [processos, orcRaw] = await Promise.all([
+    const [processos, orcRaw, demRaw] = await Promise.all([
       App.getProcessos(),
       App.graph._readFile('orcamentos').catch(() => []),
+      App.graph._readFile('demandas').catch(() => []),
     ]);
     const orcs = Array.isArray(orcRaw) ? orcRaw : [];
+    const dems = Array.isArray(demRaw) ? demRaw : [];
     const clientesPorId = {};
     (window._wa.clientes || []).forEach(c => { clientesPorId[String(c.id)] = c; });
     const mapa = {};
@@ -8157,14 +8176,11 @@ async function waSetFiltroEspecial(tipo) {
     if (tipo === 'orcamentos') {
       orcs.filter(o => o.status === 'Pendente').forEach(o => add(String(o.clienteId), o.clienteNome, Number(o.total) || 0));
     } else {
+      // Débitos: mesmo cálculo da aba "Pagamentos" do cliente (por processo)
       processos.forEach(p => {
-        if (p.demandaId || !p.ValorProcesso || p.Status === 'Desistência Cliente') return;
-        const pend = getItensPendentesProcesso(p);
-        if (pend.length) add(String(p.ClienteId), p.ClienteNome, pend.reduce((s, i) => s + i.valor, 0));
-      });
-      orcs.filter(o => o.status !== 'Rejeitado' && statusPagamentoOrcamento(o) !== 'pago').forEach(o => {
-        const pend = parcelasPendentesOrcamento(o).total;
-        if (pend > 0) add(String(o.clienteId), o.clienteNome, pend);
+        if (!(Number(p.ValorProcesso) > 0)) return;
+        const pend = calcPagamentoCliente(p, orcs, dems).pendente;
+        if (pend > 0) add(String(p.ClienteId), p.ClienteNome, pend);
       });
     }
     const arr = Object.values(mapa).map(m => ({ ...m, cliente: clientesPorId[m.cid] || null })).sort((a, b) => (a.nome || '').localeCompare(b.nome || ''));
@@ -8222,33 +8238,43 @@ function waIniciarConversa(phone, nome) {
 function waContatosBuscaHtml(termoRaw, termo) {
   const digitos = termoRaw.replace(/\D/g, '');
   const jaTem = new Set(window._wa.chats.map(c => waChaveDeChat(c)).filter(Boolean));
-  const clientes = (window._wa.clientes || []).filter(cl => {
-    if (!cl.Celular) return false;
-    const nome = (cl.Title || '').toLowerCase();
-    const tel = String(cl.Celular).replace(/\D/g, '');
-    const bateNome = termo && nome.includes(termo);
-    const bateTel = digitos.length >= 3 && tel.includes(digitos);
-    return (bateNome || bateTel) && !jaTem.has(waChaveTel(cl.Celular));
-  }).slice(0, 20);
+  const vistos = new Set();
+  const casa = (nome, tel) => {
+    const bateNome = termo && (nome || '').toLowerCase().includes(termo);
+    const bateTel = digitos.length >= 3 && String(tel || '').includes(digitos);
+    return bateNome || bateTel;
+  };
+  const lista = [];
+  // 1) Clientes cadastrados no Gestão
+  (window._wa.clientes || []).forEach(cl => {
+    if (!cl.Celular) return;
+    const chave = waChaveTel(cl.Celular);
+    if (!chave || jaTem.has(chave) || vistos.has(chave)) return;
+    if (casa(cl.Title, String(cl.Celular).replace(/\D/g, ''))) { vistos.add(chave); lista.push({ phone: String(cl.Celular).replace(/\D/g, ''), nome: cl.Title }); }
+  });
+  // 2) Contatos salvos na agenda do WhatsApp
+  (window._wa.contatos || []).forEach(ct => {
+    const chave = waChaveTel(ct.phone);
+    if (!chave || jaTem.has(chave) || vistos.has(chave)) return;
+    if (casa(ct.nome, String(ct.phone).replace(/\D/g, ''))) { vistos.add(chave); lista.push({ phone: String(ct.phone).replace(/\D/g, ''), nome: ct.nome }); }
+  });
+  lista.sort((a, b) => (a.nome || '').localeCompare(b.nome || ''));
 
-  let itens = clientes.map(cl => {
-    const tel = String(cl.Celular).replace(/\D/g, '');
-    return `<div class="wa-item" onclick="waIniciarConversa('${esc(tel)}','${esc(cl.Title)}')">
-      ${waAvatarHtml(cl.Title, '', 44)}
-      <div style="flex:1;min-width:0"><div class="nome">${esc(cl.Title)}</div><div class="prev">${esc(waFmtDigits(cl.Celular))}</div></div>
+  let itens = lista.slice(0, 25).map(x => {
+    const nomeSafe = String(x.nome || '').replace(/['\\]/g, '');
+    return `<div class="wa-item" onclick="waIniciarConversa('${esc(x.phone)}','${esc(nomeSafe)}')">
+      ${waAvatarHtml(x.nome, '', 44)}
+      <div style="flex:1;min-width:0"><div class="nome">${esc(x.nome || waFmtDigits(x.phone))}</div><div class="prev">${esc(waFmtDigits(x.phone))}</div></div>
       <i class="bi bi-chat-dots" style="color:#25d366"></i>
     </div>`;
   }).join('');
 
-  if (digitos.length >= 8) {
-    const jaClienteOuChat = clientes.some(cl => String(cl.Celular).replace(/\D/g, '').slice(-8) === digitos.slice(-8)) || jaTem.has(digitos.slice(-8));
-    if (!jaClienteOuChat) {
-      itens += `<div class="wa-item" onclick="waIniciarConversa('${esc(digitos)}','')">
-        <div style="width:44px;height:44px;border-radius:50%;background:#25d366;color:#fff;display:flex;align-items:center;justify-content:center;flex-shrink:0"><i class="bi bi-telephone-plus"></i></div>
-        <div style="flex:1;min-width:0"><div class="nome">Iniciar conversa</div><div class="prev">${esc(waFmtDigits(digitos))}</div></div>
-        <i class="bi bi-chat-dots" style="color:#25d366"></i>
-      </div>`;
-    }
+  if (digitos.length >= 8 && !vistos.has(digitos.slice(-8)) && !jaTem.has(digitos.slice(-8))) {
+    itens += `<div class="wa-item" onclick="waIniciarConversa('${esc(digitos)}','')">
+      <div style="width:44px;height:44px;border-radius:50%;background:#25d366;color:#fff;display:flex;align-items:center;justify-content:center;flex-shrink:0"><i class="bi bi-telephone-plus"></i></div>
+      <div style="flex:1;min-width:0"><div class="nome">Iniciar conversa</div><div class="prev">${esc(waFmtDigits(digitos))}</div></div>
+      <i class="bi bi-chat-dots" style="color:#25d366"></i>
+    </div>`;
   }
   if (!itens) return '';
   return `<div style="padding:10px 12px 4px;font-size:11px;font-weight:700;color:#667781;text-transform:uppercase;letter-spacing:.5px">Nova conversa</div>${itens}`;
@@ -8272,7 +8298,7 @@ function waRenderLista() {
       const ativo = c.jid === window._wa.jidAtivo;
       const nome = waNomeChat(c);
       const hora = c.last_ts ? new Date(c.last_ts * 1000).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
-      return `<div class="wa-item ${ativo ? 'ativo' : ''}" onclick="waAbrir('${esc(c.jid)}')">
+      return `<div class="wa-item ${ativo ? 'ativo' : ''} ${c.unread ? 'nlida' : ''}" onclick="waAbrir('${esc(c.jid)}')">
         ${waAvatarHtml(nome, c.jid, 44)}
         <div style="flex:1;min-width:0">
           <div style="display:flex;justify-content:space-between;gap:6px"><span class="nome">${esc(nome)}</span><span style="font-size:11px;color:#667781;flex-shrink:0">${hora}</span></div>
@@ -8485,7 +8511,7 @@ function waBolha(m) {
   const remetente = (!me && ehGrupo && m.author) ? `<div style="font-size:12px;font-weight:600;color:#1f7aec;margin-bottom:2px">${esc(m.author)}</div>` : '';
   const rodape = `<div class="hora">${me && m.author && m.author !== 'sistema' ? esc(m.author) + ' · ' : ''}${hora}${m.savedPath ? ' <i class="bi bi-cloud-check" title="salvo na pasta do cliente"></i>' : ''}</div>`;
   const fwd = m.id ? `<button class="fwd" title="Encaminhar" onclick="waEncaminhar('${esc(String(m.id))}')"><i class="bi bi-arrow-return-right"></i></button>` : '';
-  return `<div class="wa-bubble ${me ? 'me' : 'them'}">${fwd}${remetente}${corpo}${rodape}</div>`;
+  return `<div class="wa-msg ${me ? 'me' : 'them'}"><div class="wa-bubble ${me ? 'me' : 'them'}">${remetente}${corpo}${rodape}</div>${fwd}</div>`;
 }
 
 // Rótulo de data estilo WhatsApp (Hoje / Ontem / dia da semana / dd/mm/aaaa)
