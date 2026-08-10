@@ -7908,14 +7908,34 @@ function waNomeChat(c) {
 }
 
 // ---- Foto de perfil (avatar) ----
+// Busca as fotos numa fila com no máximo 4 ao mesmo tempo, senão centenas de
+// requisições simultâneas entopem a conexão e travam o carregamento da página.
+const _waAvatarFila = { pend: [], ativos: 0, max: 4 };
+let _waRenderListaTimer = null;
+function waAgendarRenderLista() {
+  if (_waRenderListaTimer) return;
+  _waRenderListaTimer = setTimeout(() => { _waRenderListaTimer = null; waRenderLista(); }, 250);
+}
+function waProcessarFilaAvatar() {
+  const q = _waAvatarFila;
+  while (q.ativos < q.max && q.pend.length) {
+    const jid = q.pend.shift();
+    q.ativos++;
+    waApi('/avatar?jid=' + encodeURIComponent(jid))
+      .then(r => { window._wa.avatars[jid] = r.url || ''; })
+      .catch(() => { window._wa.avatars[jid] = ''; })
+      .finally(() => {
+        q.ativos--;
+        if (window._wa.avatars[jid]) { waAgendarRenderLista(); if (jid === window._wa.jidAtivo) waRenderHeader(); }
+        waProcessarFilaAvatar();
+      });
+  }
+}
 function waAvatarUrl(jid) {
   if (window._wa.avatars[jid] === undefined) {
-    window._wa.avatars[jid] = null;
-    waApi('/avatar?jid=' + encodeURIComponent(jid)).then(r => {
-      window._wa.avatars[jid] = r.url || '';
-      waRenderLista();
-      if (jid === window._wa.jidAtivo) waRenderHeader();
-    }).catch(() => { window._wa.avatars[jid] = ''; });
+    window._wa.avatars[jid] = null;       // marca como "buscando"
+    _waAvatarFila.pend.push(jid);
+    waProcessarFilaAvatar();
   }
   return window._wa.avatars[jid] || '';
 }
@@ -7932,16 +7952,21 @@ async function renderWhatsApp() {
   const el = document.getElementById('page-content');
   if (!CONFIG.waGatewayUrl) { el.innerHTML = `<div class="empty-state"><i class="bi bi-whatsapp" style="font-size:48px;color:#25D366"></i><p>A central de WhatsApp ainda não está configurada.</p></div>`; return; }
   if (typeof io === 'undefined') { el.innerHTML = `<div class="empty-state"><i class="bi bi-exclamation-triangle"></i><p>Biblioteca de tempo real não carregou.</p></div>`; return; }
+  const prev = window._wa || {};
   window._wa = window._wa || {};
-  window._wa.chats = []; window._wa.jidAtivo = null; window._wa.msgs = []; window._wa.avatars = {};
-  window._wa.estado = { conectado: false, qr: null, numero: null };
+  window._wa.jidAtivo = null; window._wa.msgs = [];
+  window._wa.chats = prev.chats || [];              // reaproveita a lista já carregada (aparece na hora)
+  window._wa.avatars = prev.avatars || {};          // mantém as fotos já baixadas entre navegações
+  window._wa.estado = prev.estado || { conectado: false, qr: null, numero: null };
   window._wa.aba = 'tudo';
-  try {
-    const cs = await App.getClientes();
-    const idx = {};
-    cs.forEach(c => { const k = waChaveTel(c.Celular); if (k) idx[k] = c; });
-    window._wa.clientesIdx = idx;
-  } catch (e) { window._wa.clientesIdx = {}; }
+  if (!window._wa.clientesIdx) {
+    try {
+      const cs = await App.getClientes();
+      const idx = {};
+      cs.forEach(c => { const k = waChaveTel(c.Celular); if (k) idx[k] = c; });
+      window._wa.clientesIdx = idx;
+    } catch (e) { window._wa.clientesIdx = {}; }
+  }
 
   el.innerHTML = `
     <style>
@@ -8008,9 +8033,10 @@ async function renderWhatsApp() {
 
   waMontarEmojis();
   waRenderStatus();
+  waRenderLista();  // mostra imediatamente as conversas já em memória
   if (window._wa.socket) { try { window._wa.socket.disconnect(); } catch (e) {} window._wa.socket = null; }
   waConectar();
-  await waCarregarChats();
+  waCarregarChats();  // atualiza em segundo plano (sem travar a tela)
 }
 
 function waConectar() {
