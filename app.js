@@ -11899,8 +11899,8 @@ async function iniciarApp() {
     if (navExt) navExt.style.display = '';
   }
   // Central de WhatsApp: disponível para admins e atendentes (se o gateway estiver configurado)
-  // Página WhatsApp: por enquanto visível apenas para administradores (ainda em finalização)
-  if (isAdminUser() && CONFIG.waGatewayUrl) {
+  // Página WhatsApp: liberada para a equipe (administradores + Andrieli, Priscila, Geison)
+  if (isExtrasUser() && CONFIG.waGatewayUrl) {
     const navWa = document.getElementById('nav-whatsapp');
     if (navWa) navWa.style.display = '';
   }
