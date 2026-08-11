@@ -7896,6 +7896,7 @@ function waNorm(m) {
     mediaUrl: m.mediaUrl || m.media_url || null,
     savedPath: m.savedPath || m.saved_path || null,
     ts: m.ts, author: m.author || null,
+    reaction: m.reaction || null,
   };
 }
 
@@ -8064,6 +8065,7 @@ async function renderWhatsApp() {
       .wa-bubble.them{align-self:flex-start;background:#fff;border-top-left-radius:2px}
       .wa-bubble.me{align-self:flex-end;background:#d9fdd3;border-top-right-radius:2px}
       .wa-bubble .hora{font-size:10px;color:#667781;text-align:right;margin-top:2px}
+      .wa-reacao{display:inline-block;background:rgba(0,0,0,.06);border-radius:10px;padding:0 6px;font-size:14px;margin-top:3px;line-height:20px}
       .wa-bubble img.midia,.wa-bubble video.midia{max-width:260px;max-height:280px;border-radius:6px;display:block;cursor:pointer}
       .wa-composer{display:flex;align-items:center;gap:6px;padding:8px 12px;background:#f0f2f5;border-top:1px solid var(--border);position:relative}
       .wa-composer input.txt{flex:1;border:1px solid var(--border);border-radius:20px;padding:9px 14px;font-size:14px;background:#fff}
@@ -8145,6 +8147,11 @@ function waConectar() {
       else if (d && d.jid) { const c = window._wa.chats.find(x => x.jid === d.jid); if (c) c.unread = 0; }
       waRenderLista();
     });
+    socket.on('unread', d => {
+      if (d && d.jid) { const c = window._wa.chats.find(x => x.jid === d.jid); if (c && !(c.unread > 0)) c.unread = 1; }
+      waRenderLista();
+    });
+    socket.on('reaction', d => waOnReaction(d));
     socket.on('connect_error', err => { const el = document.getElementById('wa-status'); if (el) el.innerHTML = `<span style="color:var(--danger)"><i class="bi bi-x-circle me-1"></i>Erro de conexão: ${esc(err.message)}</span>`; });
   }).catch(e => { const el = document.getElementById('wa-status'); if (el) el.innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`; });
 }
@@ -8337,18 +8344,54 @@ function waContatosBuscaHtml(termoRaw, termo) {
   return `<div style="padding:10px 12px 4px;font-size:11px;font-weight:700;color:#667781;text-transform:uppercase;letter-spacing:.5px">Nova conversa</div>${itens}`;
 }
 
+// Agrupa conversas do mesmo contato (jid de telefone + jid @lid) numa só, por telefone
+function waGrupos() {
+  const grupos = {};
+  for (const c of (window._wa.chats || [])) {
+    const tel = c.phone ? String(c.phone).replace(/\D/g, '') : '';
+    const key = tel.length >= 8 ? tel.slice(-8) : c.jid;
+    let g = grupos[key];
+    if (!g) { grupos[key] = { ...c, jids: [c.jid] }; }
+    else {
+      g.jids.push(c.jid);
+      g.unread = (g.unread || 0) + (c.unread || 0);
+      if ((c.last_ts || 0) > (g.last_ts || 0)) { g.last_ts = c.last_ts; g.last_message = c.last_message; }
+      if (String(c.jid).endsWith('@s.whatsapp.net')) g.jid = c.jid; // prefere o jid de telefone (para enviar)
+      if (!g.phone && c.phone) g.phone = c.phone;
+      if (!g.name && c.name) g.name = c.name;
+    }
+  }
+  const arr = Object.values(grupos).sort((a, b) => (b.last_ts || 0) - (a.last_ts || 0));
+  const map = {}; arr.forEach(g => { map[g.jid] = g.jids; });
+  window._wa.gruposMap = map;
+  window._wa._grupos = arr;
+  return arr;
+}
+function waGrupoDoJid(jid) {
+  return (window._wa._grupos || []).find(g => g.jid === jid) || (window._wa.chats || []).find(x => x.jid === jid) || { jid };
+}
+function waJidsDoGrupo(jid) {
+  return (window._wa.gruposMap && window._wa.gruposMap[jid]) || [jid];
+}
+function waJidPrincipal(jid) {
+  const map = window._wa.gruposMap || {};
+  for (const p in map) { if (map[p].includes(jid)) return p; }
+  return jid;
+}
+
 function waRenderLista() {
   const lista = document.getElementById('wa-lista'); if (!lista) return;
   const aba = window._wa.aba || 'tudo';
+  const grupos = waGrupos();
   // Atualiza o contador de não lidas na aba
-  const totalNaoLidas = window._wa.chats.filter(c => (c.unread || 0) > 0).length;
+  const totalNaoLidas = grupos.filter(c => (c.unread || 0) > 0).length;
   const btnNlidas = document.querySelector('#wa-tabs .wa-tab[data-aba="nlidas"]');
   if (btnNlidas) btnNlidas.innerHTML = `Não lidas${totalNaoLidas ? `<span class="cont">${totalNaoLidas}</span>` : ''}`;
   // Filtros especiais mostram uma lista de clientes (orçamentos/débitos), não conversas
   if (aba === 'orcamentos' || aba === 'debitos') { waRenderFiltroEspecial(); return; }
   const termoRaw = (document.getElementById('wa-busca')?.value || '').trim();
   const termo = termoRaw.toLowerCase();
-  const rows = window._wa.chats
+  const rows = grupos
     .filter(c => aba !== 'nlidas' || (c.unread || 0) > 0)
     .filter(c => { const nome = waNomeChat(c).toLowerCase(); return !termo || nome.includes(termo) || String(c.jid).includes(termo); })
     .map(c => {
@@ -8396,8 +8439,9 @@ function waMensagensBuscaHtml(termoRaw) {
     const chat = window._wa.chats.find(x => x.jid === r.jid) || { jid: r.jid };
     const nome = waNomeChat(chat);
     const trecho = String(r.body || '').slice(0, 70);
-    return `<div class="wa-item" onclick="waAbrir('${esc(r.jid)}')">
-      ${waAvatarHtml(nome, r.jid, 44)}
+    const principal = waJidPrincipal(r.jid);
+    return `<div class="wa-item" onclick="waAbrir('${esc(principal)}')">
+      ${waAvatarHtml(nome, principal, 44)}
       <div style="flex:1;min-width:0"><div class="nome">${esc(nome)}</div><div class="prev">${esc(trecho)}</div></div>
     </div>`;
   }).join('');
@@ -8416,7 +8460,7 @@ async function waMarcarTodasLidas() {
 function waRenderHeader() {
   const header = document.getElementById('wa-header'); if (!header || !window._wa.jidAtivo) return;
   const jid = window._wa.jidAtivo;
-  const chat = window._wa.chats.find(x => x.jid === jid) || { jid };
+  const chat = waGrupoDoJid(jid);
   const cli = waClienteDe(chat);
   const nome = waNomeChat(chat);
   const numero = waFmtNumero(jid, chat.phone);
@@ -8429,6 +8473,7 @@ function waRenderHeader() {
         <div style="font-size:12px;color:#667781">${esc((cli || chat.name) ? numero : '')}</div>
       </div>
     </div>
+    <button class="btn btn-ghost btn-sm" title="Marcar como não lida" onclick="waMarcarNaoLida()"><i class="bi bi-envelope"></i></button>
     ${(() => {
       if (cli) return `<button class="btn btn-ghost btn-sm" onclick="navigate('clientes/perfil',{id:'${esc(String(cli.id))}'})"><i class="bi bi-person-lines-fill me-1"></i>Ver cliente</button>`;
       const clube = waClubeDe(chat);
@@ -8437,6 +8482,20 @@ function waRenderHeader() {
       return `<button class="btn btn-outline btn-sm" onclick="waAbrirVincular('cliente')"><i class="bi bi-person-plus me-1"></i>Cliente</button>
         <button class="btn btn-outline btn-sm" onclick="waAbrirVincular('clube')"><i class="bi bi-building-add me-1"></i>Clube</button>`;
     })()}`;
+}
+
+// Marca a conversa aberta como não lida (e volta o foco para a lista)
+async function waMarcarNaoLida() {
+  const jid = window._wa.jidAtivo; if (!jid) return;
+  const principal = jid;
+  const c = window._wa.chats.find(x => x.jid === principal) || window._wa.chats.find(x => waJidsDoGrupo(jid).includes(x.jid));
+  if (c && !(c.unread > 0)) c.unread = 1;
+  window._wa.jidAtivo = null;
+  document.getElementById('wa-header').style.display = 'none';
+  document.getElementById('wa-composer').style.display = 'none';
+  document.getElementById('wa-thread').innerHTML = '';
+  waRenderLista();
+  try { await waApi('/unread', { method: 'POST', body: JSON.stringify({ jid: principal }) }); } catch (e) {}
 }
 
 // ---- Vincular manualmente um número a um cliente ou clube ----
@@ -8623,13 +8682,17 @@ async function waAbrir(jid) {
   waRenderHeader();
   document.getElementById('wa-composer').style.display = 'flex';
   document.getElementById('wa-thread').innerHTML = '<div style="color:#667781;font-size:13px;margin:auto">Carregando...</div>';
+  const jids = waJidsDoGrupo(jid);
   try {
-    const r = await waApi('/messages?jid=' + encodeURIComponent(jid));
-    window._wa.msgs = (r.messages || []).map(waNorm);
+    const arrays = await Promise.all(jids.map(j => waApi('/messages?jid=' + encodeURIComponent(j)).then(r => r.messages || []).catch(() => [])));
+    const vistos = new Set();
+    window._wa.msgs = arrays.flat().map(waNorm)
+      .filter(m => { if (vistos.has(m.id)) return false; vistos.add(m.id); return true; })
+      .sort((a, b) => (a.ts || 0) - (b.ts || 0));
     waRenderThread();
   } catch (e) { document.getElementById('wa-thread').innerHTML = `<div style="color:var(--danger);font-size:13px;margin:auto">${esc(e.message)}</div>`; }
-  const c = window._wa.chats.find(x => x.jid === jid);
-  if (c) { c.unread = 0; waRenderLista(); }
+  jids.forEach(j => { const c = window._wa.chats.find(x => x.jid === j); if (c) c.unread = 0; });
+  waRenderLista();
 }
 
 // Renderiza a formatação do WhatsApp (*negrito*, _itálico_, ~riscado~) e quebras de linha
@@ -8666,7 +8729,8 @@ function waBolha(m) {
   const remetente = (!me && ehGrupo && m.author) ? `<div style="font-size:12px;font-weight:600;color:#1f7aec;margin-bottom:2px">${esc(m.author)}</div>` : '';
   const rodape = `<div class="hora">${me && m.author && m.author !== 'sistema' ? esc(m.author) + ' · ' : ''}${hora}${m.savedPath ? ' <i class="bi bi-cloud-check" title="salvo na pasta do cliente"></i>' : ''}</div>`;
   const fwd = m.id ? `<button class="fwd" title="Encaminhar" onclick="waEncaminhar('${esc(String(m.id))}')"><i class="bi bi-arrow-return-right"></i></button>` : '';
-  return `<div class="wa-msg ${me ? 'me' : 'them'}"><div class="wa-bubble ${me ? 'me' : 'them'}">${remetente}${corpo}${rodape}</div>${fwd}</div>`;
+  const reacao = m.reaction ? `<div class="wa-reacao">${esc(m.reaction)}</div>` : '';
+  return `<div class="wa-msg ${me ? 'me' : 'them'}"><div class="wa-bubble ${me ? 'me' : 'them'}">${remetente}${corpo}${rodape}${reacao}</div>${fwd}</div>`;
 }
 
 // Rótulo de data estilo WhatsApp (Hoje / Ontem / dia da semana / dd/mm/aaaa)
@@ -8737,7 +8801,7 @@ function waEncaminhar(id) {
 function waRenderFwdLista() {
   const cont = document.getElementById('wa-fwd-lista'); if (!cont) return;
   const termo = (document.getElementById('wa-fwd-busca')?.value || '').toLowerCase();
-  const rows = window._wa.chats
+  const rows = waGrupos()
     .filter(c => { const n = waNomeChat(c).toLowerCase(); return !termo || n.includes(termo) || String(c.jid).includes(termo); })
     .slice(0, 80)
     .map(c => { const nome = waNomeChat(c); return `<div class="wa-item" onclick="waConfirmarEncaminhar('${esc(c.jid)}')">${waAvatarHtml(nome, c.jid, 40)}<div style="flex:1;min-width:0"><div class="nome">${esc(nome)}</div></div></div>`; })
@@ -8757,16 +8821,25 @@ async function waConfirmarEncaminhar(jid) {
 
 function waOnMessage(raw) {
   const m = waNorm(raw);
+  const abertoJids = window._wa.jidAtivo ? waJidsDoGrupo(window._wa.jidAtivo) : [];
+  const noGrupoAberto = abertoJids.includes(m.jid);
   let c = window._wa.chats.find(x => x.jid === m.jid);
   const resumo = (m.type === 'text' || m.type === 'other') ? m.body : `[${m.type}] ${m.body || m.mediaName || ''}`.trim();
-  if (c) { c.last_message = resumo; c.last_ts = m.ts; if (m.phone && !c.phone) c.phone = m.phone; if (m.name && !c.name) c.name = m.name; if (!m.fromMe && m.jid !== window._wa.jidAtivo) c.unread = (c.unread || 0) + 1; }
-  else { window._wa.chats.push({ jid: m.jid, name: m.name || null, phone: m.phone, last_message: resumo, last_ts: m.ts, unread: m.fromMe ? 0 : 1 }); }
+  if (c) { c.last_message = resumo; c.last_ts = m.ts; if (m.phone && !c.phone) c.phone = m.phone; if (m.name && !c.name) c.name = m.name; if (!m.fromMe && !noGrupoAberto) c.unread = (c.unread || 0) + 1; }
+  else { window._wa.chats.push({ jid: m.jid, name: m.name || null, phone: m.phone, last_message: resumo, last_ts: m.ts, unread: (m.fromMe || noGrupoAberto) ? 0 : 1 }); }
   window._wa.chats.sort((a, b) => (b.last_ts || 0) - (a.last_ts || 0));
   waRenderLista();
-  if (m.jid === window._wa.jidAtivo && !window._wa.msgs.some(x => x.id === m.id)) {
+  if (noGrupoAberto && !window._wa.msgs.some(x => x.id === m.id)) {
     window._wa.msgs.push(m); waRenderThread();
     if (!m.fromMe) { const cc = window._wa.chats.find(x => x.jid === m.jid); if (cc) cc.unread = 0; waApi('/messages?jid=' + encodeURIComponent(m.jid)).catch(() => {}); }
   }
+}
+
+// Reação recebida: atualiza a mensagem correspondente (se estiver aberta)
+function waOnReaction(d) {
+  if (!d || !d.id) return;
+  const msg = (window._wa.msgs || []).find(x => x.id === d.id);
+  if (msg) { msg.reaction = d.emoji || null; waRenderThread(); }
 }
 
 // Regra de identificação do operador:
