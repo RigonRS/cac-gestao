@@ -131,6 +131,7 @@ function getCurrentUserName() {
   const fullName = (acc?.name || '').toLowerCase();
   if (email.includes('recepcao')) return 'Andrieli';
   if (email.includes('geison'))   return 'Geison';
+  if (email.includes('janaina'))  return 'Janaína';
   return RESPONSAVEIS.find(r => fullName.includes(r.toLowerCase())) || (acc?.name || '').split(' ')[0];
 }
 function normalizeUserName(nome) {
@@ -150,7 +151,7 @@ async function proximoNumero(colecao, prefixo) {
   return `${prefixo}${String(max + 1).padStart(3, '0')}`;
 }
 // Usuários que recebem extras por processo deferido
-const EXTRAS_USERS = ['Andrieli', 'Priscila', 'Geison'];
+const EXTRAS_USERS = ['Andrieli', 'Priscila', 'Geison', 'Janaína'];
 function isExtrasUser() {
   const nome = getCurrentUserName();
   return ['Matheus', 'Simone', ...EXTRAS_USERS].includes(nome);
@@ -713,7 +714,7 @@ const STATUS_PROCESSO = [
   'Desistência Cliente',
 ];
 const STATUS_FECHADOS = ['Deferido', 'Indeferido', 'Desistência Cliente'];
-const RESPONSAVEIS = ['Andrieli', 'Geison', 'Matheus', 'Priscila', 'Simone'];
+const RESPONSAVEIS = ['Andrieli', 'Geison', 'Janaína', 'Matheus', 'Priscila', 'Simone'];
 const TIPOS_SEM_GRU = ['Defesa de Notificação', 'Mudança de endereço SINARM PF', 'Porte de Arma PF', 'Correção de dados de arma', 'Comunicado de Furto/Extravio'];
 const FORMAS_PAGAMENTO_OPTS = ['Pix', 'Dinheiro', 'Cartão'];
 const BANCOS_PAGAMENTO_OPTS = ['Banco do Brasil', 'Sicredi', 'Cresol'];
@@ -774,7 +775,7 @@ function perguntarTipoRenovacao(titulo, onEscolha) {
 
 async function registrarExtraRenovacao(tipo, clienteId, clienteNome, detalhe) {
   const responsavel = getCurrentUserName();
-  if (!['Andrieli', 'Priscila'].includes(responsavel)) return;
+  if (!EXTRAS_USERS.includes(responsavel)) return;
   try {
     const lista = await App.graph._readFile('extras_avulsos').catch(() => []);
     const arr = Array.isArray(lista) ? lista : [];
@@ -7269,6 +7270,7 @@ async function renderPagamentosExtras() {
     Andrieli: ['#fef3c7', '#d97706'],
     Priscila: ['#ede9fe', '#7c3aed'],
     Geison:   ['#dbeafe', '#2563eb'],
+    'Janaína': ['#fce7f3', '#db2777'],
   };
   const usuarioAtual = getCurrentUserName();
   const soMeu = !isAdminUser() && EXTRAS_USERS.includes(usuarioAtual);
@@ -7593,7 +7595,7 @@ function renderConfigWhatsApp() {
 
 function renderConfigExtras() {
   const el = document.getElementById('page-content');
-  const cols = ['Geison', 'Andrieli', 'Priscila'];
+  const cols = ['Geison', 'Andrieli', 'Priscila', 'Janaína'];
   const idFromTipo = t => t.replace(/[^a-zA-Z0-9]/g, '_');
   el.innerHTML = `
     <button class="btn btn-ghost btn-sm" style="margin-bottom:12px" onclick="renderConfiguracoes('menu')"><i class="bi bi-arrow-left me-1"></i>Voltar</button>
@@ -7897,6 +7899,8 @@ function waNorm(m) {
     savedPath: m.savedPath || m.saved_path || null,
     ts: m.ts, author: m.author || null,
     reaction: m.reaction || null,
+    replyBody: m.replyBody || m.reply_body || null,
+    replyId: m.replyId || m.reply_id || null,
   };
 }
 
@@ -8045,8 +8049,16 @@ async function renderWhatsApp() {
       .wa-msg{display:flex;align-items:center;gap:4px;max-width:78%}
       .wa-msg.them{align-self:flex-start}
       .wa-msg.me{align-self:flex-end;flex-direction:row-reverse}
-      .wa-msg .fwd{opacity:0;background:#fff;border:none;border-radius:50%;width:26px;height:26px;color:#54656f;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.2);flex-shrink:0;font-size:12px;line-height:1;transition:opacity .15s}
-      .wa-msg:hover .fwd{opacity:1}
+      .wa-msg .wa-acoes{display:flex;flex-direction:column;gap:3px;opacity:0;transition:opacity .15s}
+      .wa-msg:hover .wa-acoes{opacity:1}
+      .wa-msg .fwd{background:#fff;border:none;border-radius:50%;width:26px;height:26px;color:#54656f;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.2);flex-shrink:0;font-size:12px;line-height:1}
+      .wa-citada{border-left:3px solid #25d366;background:rgba(0,0,0,.05);border-radius:4px;padding:3px 8px;font-size:12px;color:#54656f;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+      .wa-responder{position:absolute;bottom:100%;left:0;right:0;background:#f7f8fa;border-top:1px solid var(--border);padding:8px 12px;display:none;align-items:center;gap:8px}
+      .wa-responder .barra{width:3px;align-self:stretch;background:#25d366;border-radius:2px}
+      .wa-responder .rtxt{flex:1;min-width:0;font-size:12px;color:#667781;overflow:hidden}
+      .wa-responder .rnome{font-weight:600;color:#128c7e;font-size:12px}
+      .wa-resizer{width:5px;cursor:col-resize;background:transparent;flex-shrink:0}
+      .wa-resizer:hover{background:#25d366}
       .wa-search{padding:8px}
       .wa-search input{width:100%;border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-size:13px}
       .wa-nome-link{cursor:pointer}
@@ -8068,7 +8080,7 @@ async function renderWhatsApp() {
       .wa-reacao{display:inline-block;background:rgba(0,0,0,.06);border-radius:10px;padding:0 6px;font-size:14px;margin-top:3px;line-height:20px}
       .wa-bubble img.midia,.wa-bubble video.midia{max-width:260px;max-height:280px;border-radius:6px;display:block;cursor:pointer}
       .wa-composer{display:flex;align-items:center;gap:6px;padding:8px 12px;background:#f0f2f5;border-top:1px solid var(--border);position:relative}
-      .wa-composer input.txt{flex:1;border:1px solid var(--border);border-radius:20px;padding:9px 14px;font-size:14px;background:#fff}
+      .wa-composer .txt{flex:1;border:1px solid var(--border);border-radius:20px;padding:9px 14px;font-size:14px;background:#fff;resize:none;line-height:20px;max-height:176px;overflow-y:hidden;font-family:inherit;box-sizing:border-box}
       .wa-iconbtn{background:none;border:none;cursor:pointer;font-size:20px;color:#54656f;padding:4px 6px;line-height:1}
       .wa-send{background:#25d366;color:#fff;border:none;border-radius:50%;width:40px;height:40px;cursor:pointer;font-size:16px;flex-shrink:0}
       .wa-emojis{position:absolute;bottom:56px;left:10px;background:#fff;border:1px solid var(--border);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.18);padding:8px;display:none;grid-template-columns:repeat(8,1fr);gap:2px;max-width:330px;z-index:5}
@@ -8081,7 +8093,7 @@ async function renderWhatsApp() {
       .wa-rapida-item .txt{font-size:11px;color:#667781;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     </style>
     <div class="wa-shell">
-      <div class="wa-side">
+      <div class="wa-side" id="wa-side" style="width:${Number(localStorage.getItem('waSideW')) || 340}px">
         <div class="wa-status" id="wa-status"></div>
         <div class="wa-tabs" id="wa-tabs">
           <button class="wa-tab ativo" data-aba="tudo" onclick="waSetAba('tudo')">Tudo</button>
@@ -8095,18 +8107,20 @@ async function renderWhatsApp() {
         <div class="wa-search"><input id="wa-busca" placeholder="Buscar conversa ou mensagem..." oninput="waOnBusca()" /></div>
         <div class="wa-list" id="wa-lista"></div>
       </div>
+      <div class="wa-resizer" id="wa-resizer" onmousedown="waIniciarResize(event)" title="Arraste para redimensionar"></div>
       <div class="wa-main" style="position:relative">
         <div class="wa-header" id="wa-header" style="display:none"></div>
         <div class="wa-data-flutuante" id="wa-data-flutuante"></div>
         <div class="wa-thread" id="wa-thread" onscroll="waAtualizarDataFlutuante()"></div>
         <div class="wa-composer" id="wa-composer" style="display:none">
+          <div class="wa-responder" id="wa-responder"></div>
           <div class="wa-emojis" id="wa-emojis"></div>
           <div class="wa-rapidas" id="wa-rapidas"></div>
           <button class="wa-iconbtn" onclick="waToggleEmojis()" title="Emojis"><i class="bi bi-emoji-smile"></i></button>
           <button class="wa-iconbtn" onclick="waToggleRapidas()" title="Mensagens rápidas"><i class="bi bi-lightning-charge"></i></button>
           <button class="wa-iconbtn" onclick="document.getElementById('wa-file').click()" title="Anexar arquivo"><i class="bi bi-paperclip"></i></button>
           <input type="file" id="wa-file" style="display:none" accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx" onchange="waEnviarArquivo(this)" />
-          <input class="txt" id="wa-input" placeholder="Digite uma mensagem" onkeydown="if(event.key==='Enter'){event.preventDefault();waEnviar();}" />
+          <textarea class="txt" id="wa-input" rows="1" placeholder="Digite uma mensagem" oninput="waAutoGrow(this)" onkeydown="waInputKey(event)"></textarea>
           <button class="wa-send" onclick="waEnviar()"><i class="bi bi-send-fill"></i></button>
         </div>
       </div>
@@ -8124,7 +8138,7 @@ async function renderWhatsApp() {
     const p = window._waAbrirPendente; window._waAbrirPendente = null;
     waIniciarConversa(p.phone, '');
     const inp = document.getElementById('wa-input');
-    if (inp) { inp.value = p.texto || ''; inp.focus(); }
+    if (inp) { inp.value = p.texto || ''; waAutoGrow(inp); inp.focus(); }
   }
   if (!window._waDocClick) {
     window._waDocClick = true;
@@ -8591,9 +8605,9 @@ async function waAbrirPerfil() {
         </div>
         <div style="padding:18px 20px">
           ${cli
-            ? `<div style="margin-bottom:16px"><button class="btn btn-primary btn-sm" style="width:100%" onclick="document.getElementById('wa-modal-perfil').remove();navigate('clientes/perfil',{id:'${esc(String(cli.id))}'})"><i class="bi bi-person-lines-fill me-1"></i>Abrir cadastro de ${esc(cli.Title)}</button></div>`
+            ? `<div style="margin-bottom:16px"><button class="btn btn-primary btn-sm" style="width:100%;margin-bottom:8px" onclick="document.getElementById('wa-modal-perfil').remove();navigate('clientes/perfil',{id:'${esc(String(cli.id))}'})"><i class="bi bi-person-lines-fill me-1"></i>Abrir cadastro de ${esc(cli.Title)}</button><button class="btn btn-outline btn-sm" style="width:100%" onclick="waAbrirVincular('cliente')"><i class="bi bi-pencil me-1"></i>Alterar cadastro vinculado</button></div>`
             : clube
-              ? `<div style="margin-bottom:16px"><button class="btn btn-primary btn-sm" style="width:100%" onclick="document.getElementById('wa-modal-perfil').remove();navigate('clubes/editar',{id:'${esc(String(clube.id))}'})"><i class="bi bi-building me-1"></i>Abrir clube ${esc(clube.Title)}</button></div>`
+              ? `<div style="margin-bottom:16px"><button class="btn btn-primary btn-sm" style="width:100%;margin-bottom:8px" onclick="document.getElementById('wa-modal-perfil').remove();navigate('clubes/editar',{id:'${esc(String(clube.id))}'})"><i class="bi bi-building me-1"></i>Abrir clube ${esc(clube.Title)}</button><button class="btn btn-outline btn-sm" style="width:100%" onclick="waAbrirVincular('clube')"><i class="bi bi-pencil me-1"></i>Alterar clube vinculado</button></div>`
               : `<div style="font-size:12px;color:#667781;margin-bottom:10px"><i class="bi bi-info-circle me-1"></i>Este número não está vinculado a nenhum cliente ou clube.</div><div style="display:flex;gap:8px;margin-bottom:16px"><button class="btn btn-outline btn-sm" style="flex:1" onclick="waAbrirVincular('cliente')"><i class="bi bi-person-plus me-1"></i>Cliente</button><button class="btn btn-outline btn-sm" style="flex:1" onclick="waAbrirVincular('clube')"><i class="bi bi-building-add me-1"></i>Clube</button></div>`}
           <div style="font-weight:600;font-size:13px;margin-bottom:8px;color:#111"><i class="bi bi-folder2-open me-1"></i>Processos em aberto</div>
           <div id="wa-perfil-processos" style="margin-bottom:18px;font-size:13px;color:#667781">${cli ? 'Carregando...' : 'Sem cliente vinculado.'}</div>
@@ -8678,6 +8692,7 @@ async function waAbrirPerfil() {
 
 async function waAbrir(jid) {
   window._wa.jidAtivo = jid;
+  window._wa.respondendo = null; waRenderRespondendo();
   waRenderLista();
   waRenderHeader();
   document.getElementById('wa-composer').style.display = 'flex';
@@ -8728,9 +8743,13 @@ function waBolha(m) {
   const ehGrupo = String(m.jid || '').endsWith('@g.us');
   const remetente = (!me && ehGrupo && m.author) ? `<div style="font-size:12px;font-weight:600;color:#1f7aec;margin-bottom:2px">${esc(m.author)}</div>` : '';
   const rodape = `<div class="hora">${me && m.author && m.author !== 'sistema' ? esc(m.author) + ' · ' : ''}${hora}${m.savedPath ? ' <i class="bi bi-cloud-check" title="salvo na pasta do cliente"></i>' : ''}</div>`;
-  const fwd = m.id ? `<button class="fwd" title="Encaminhar" onclick="waEncaminhar('${esc(String(m.id))}')"><i class="bi bi-arrow-return-right"></i></button>` : '';
+  const citada = m.replyBody ? `<div class="wa-citada">${waFmtTexto(String(m.replyBody).slice(0, 140))}</div>` : '';
+  const acoes = m.id ? `<div class="wa-acoes">
+      <button class="fwd" title="Responder" onclick="waResponder('${esc(String(m.id))}')"><i class="bi bi-reply-fill"></i></button>
+      <button class="fwd" title="Encaminhar" onclick="waEncaminhar('${esc(String(m.id))}')"><i class="bi bi-arrow-return-right"></i></button>
+    </div>` : '';
   const reacao = m.reaction ? `<div class="wa-reacao">${esc(m.reaction)}</div>` : '';
-  return `<div class="wa-msg ${me ? 'me' : 'them'}"><div class="wa-bubble ${me ? 'me' : 'them'}">${remetente}${corpo}${rodape}${reacao}</div>${fwd}</div>`;
+  return `<div class="wa-msg ${me ? 'me' : 'them'}"><div class="wa-bubble ${me ? 'me' : 'them'}">${remetente}${citada}${corpo}${rodape}${reacao}</div>${acoes}</div>`;
 }
 
 // Rótulo de data estilo WhatsApp (Hoje / Ontem / dia da semana / dd/mm/aaaa)
@@ -8859,11 +8878,66 @@ async function waEnviar() {
   const input = document.getElementById('wa-input');
   const txt = (input?.value || '').trim();
   if (!txt || !window._wa.jidAtivo) return;
-  input.value = '';
+  input.value = ''; waAutoGrow(input);
   waFecharEmojis();
+  const quotedId = window._wa.respondendo?.id || undefined;
+  window._wa.respondendo = null; waRenderRespondendo();
   const texto = (waDevePrefixarOperador() ? waPrefixoOperador() : '') + txt;
-  try { await waApi('/send', { method: 'POST', body: JSON.stringify({ jid: window._wa.jidAtivo, text: texto }) }); }
-  catch (e) { toast(e.message, 'error'); input.value = txt; }
+  try { await waApi('/send', { method: 'POST', body: JSON.stringify({ jid: window._wa.jidAtivo, text: texto, quotedId }) }); }
+  catch (e) { toast(e.message, 'error'); input.value = txt; waAutoGrow(input); }
+}
+
+// Campo de mensagem que cresce até 8 linhas
+function waAutoGrow(el) {
+  if (!el) return;
+  el.style.height = 'auto';
+  const max = 176; // ~8 linhas
+  el.style.height = Math.min(el.scrollHeight, max) + 'px';
+  el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden';
+}
+function waInputKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); waEnviar(); }
+}
+
+// Responder a uma mensagem (citação)
+function waResponder(id) {
+  const m = (window._wa.msgs || []).find(x => x.id === id); if (!m) return;
+  const chat = waGrupoDoJid(window._wa.jidAtivo);
+  const nome = m.fromMe ? (m.author && m.author !== 'sistema' ? m.author : 'Você') : waNomeChat(chat);
+  const texto = m.body || (m.type && m.type !== 'text' ? `[${m.type}]` : '');
+  window._wa.respondendo = { id, nome, texto };
+  waRenderRespondendo();
+  const inp = document.getElementById('wa-input'); if (inp) inp.focus();
+}
+function waCancelarResposta() { window._wa.respondendo = null; waRenderRespondendo(); }
+function waRenderRespondendo() {
+  const el = document.getElementById('wa-responder'); if (!el) return;
+  const r = window._wa.respondendo;
+  if (!r) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = 'flex';
+  el.innerHTML = `<div class="barra"></div><div class="rtxt"><div class="rnome">${esc(r.nome)}</div><div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.texto || 'mídia')}</div></div><button class="wa-iconbtn" onclick="waCancelarResposta()" title="Cancelar"><i class="bi bi-x-lg"></i></button>`;
+}
+
+// Redimensionar a largura da lista de conversas (arrastar)
+function waIniciarResize(e) {
+  e.preventDefault();
+  const side = document.getElementById('wa-side'); if (!side) return;
+  const inicioX = e.clientX;
+  const larguraInicial = side.getBoundingClientRect().width;
+  const mover = (ev) => {
+    let nova = larguraInicial + (ev.clientX - inicioX);
+    nova = Math.max(240, Math.min(560, nova));
+    side.style.width = nova + 'px';
+  };
+  const soltar = () => {
+    document.removeEventListener('mousemove', mover);
+    document.removeEventListener('mouseup', soltar);
+    document.body.style.userSelect = '';
+    try { localStorage.setItem('waSideW', String(Math.round(side.getBoundingClientRect().width))); } catch (e2) {}
+  };
+  document.body.style.userSelect = 'none';
+  document.addEventListener('mousemove', mover);
+  document.addEventListener('mouseup', soltar);
 }
 
 async function waEnviarArquivo(inputEl) {
@@ -8927,7 +9001,7 @@ function waInserirRapida(id) {
   const nome = cli ? String(cli.Title || '').split(' ')[0] : '';
   const texto = (r.texto || '').replace(/\{(\w+)\}/g, (mm, k) => ((k === 'nome' || k === 'cliente') && nome ? nome : mm));
   const inp = document.getElementById('wa-input');
-  if (inp) { inp.value = texto; inp.focus(); }
+  if (inp) { inp.value = texto; waAutoGrow(inp); inp.focus(); }
   waFecharRapidas();
 }
 function waNovaRapida() { waModalRapida(null); }
@@ -10071,7 +10145,7 @@ async function renderRegistroMovimentacoes() {
   } catch(e) {} finally { hideLoading(); }
 
   const filtrados = lista
-    .filter(m => ['Andrieli', 'Priscila'].includes(m.usuario))
+    .filter(m => ['Andrieli', 'Priscila', 'Geison', 'Janaína'].includes(m.usuario))
     .slice().reverse();
 
   const ACOES_ICONE = {
@@ -10091,7 +10165,7 @@ async function renderRegistroMovimentacoes() {
   el.innerHTML = `
     <div class="card">
       <div class="card-header">
-        <h3><i class="bi bi-journal-text me-2"></i>Movimentações — Andrieli e Priscila</h3>
+        <h3><i class="bi bi-journal-text me-2"></i>Movimentações — Equipe</h3>
         <span style="font-size:12px;color:var(--text-muted)">${filtrados.length} registro(s)</span>
       </div>
       ${filtrados.length === 0
