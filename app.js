@@ -8015,6 +8015,11 @@ async function renderWhatsApp() {
     try { const r = await App.graph._readFile('whatsapp_respostas_rapidas').catch(() => []); window._wa.rapidas = Array.isArray(r) ? r : []; }
     catch (e) { window._wa.rapidas = []; }
   }
+  // Assinaturas (nome do operador enviado junto das mensagens), por usuário
+  if (!window._wa.assinaturas) {
+    try { const a = await App.graph._readFile('whatsapp_assinaturas').catch(() => ({})); window._wa.assinaturas = (a && !Array.isArray(a) && typeof a === 'object') ? a : {}; }
+    catch (e) { window._wa.assinaturas = {}; }
+  }
   // Baixa a lista de contatos salvos (agenda do WhatsApp) — usada para nomes e nova conversa
   if (!window._wa.contatosIdx) {
     window._wa.contatos = []; window._wa.contatosIdx = {};
@@ -8031,6 +8036,7 @@ async function renderWhatsApp() {
     <style>
       .wa-shell{display:flex;height:calc(100vh - 110px);border:1px solid var(--border);border-radius:12px;overflow:hidden;background:#fff}
       .wa-side{width:340px;border-right:1px solid var(--border);display:flex;flex-direction:column;min-width:0;background:#fff}
+      .wa-topbar{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--border)}
       .wa-status{padding:8px 12px;border-bottom:1px solid var(--border);font-size:12px;display:flex;align-items:center;gap:8px}
       .wa-status .info{flex:1;min-width:0}
       .wa-desconectar{background:none;border:1px solid var(--danger);color:var(--danger);border-radius:6px;font-size:11px;padding:3px 8px;cursor:pointer;flex-shrink:0;white-space:nowrap}
@@ -8094,6 +8100,10 @@ async function renderWhatsApp() {
     </style>
     <div class="wa-shell">
       <div class="wa-side" id="wa-side" style="width:${Number(localStorage.getItem('waSideW')) || 340}px">
+        <div class="wa-topbar">
+          <span style="font-weight:700;font-size:14px"><i class="bi bi-whatsapp" style="color:#25d366;margin-right:5px"></i>Conversas</span>
+          <button class="wa-iconbtn" style="font-size:18px" onclick="waAbrirConfig()" title="Configurações"><i class="bi bi-gear"></i></button>
+        </div>
         <div class="wa-status" id="wa-status"></div>
         <div class="wa-tabs" id="wa-tabs">
           <button class="wa-tab ativo" data-aba="tudo" onclick="waSetAba('tudo')">Tudo</button>
@@ -8865,13 +8875,76 @@ function waOnReaction(d) {
 // ao INICIAR a conversa ou RESPONDER logo após o cliente, a mensagem sai com o
 // nome do operador em negrito na 1ª linha. Enquanto o cliente não mandar outra
 // mensagem, as próximas saem normais (sem repetir o nome).
+function waAssinaturaCfg() {
+  const u = normalizeUserName(getCurrentUserName());
+  const cfg = (window._wa.assinaturas && window._wa.assinaturas[u]) || {};
+  return { ativo: cfg.ativo !== false, nome: cfg.nome || u, formato: cfg.formato || 'negrito' };
+}
 function waDevePrefixarOperador() {
+  if (!waAssinaturaCfg().ativo) return false;     // identificação desligada nas configurações
   const msgs = window._wa.msgs || [];
   if (!msgs.length) return true;                 // conversa nova -> identifica
   return !msgs[msgs.length - 1].fromMe;          // última foi do cliente -> identifica
 }
 function waPrefixoOperador() {
-  return `*${normalizeUserName(getCurrentUserName())}*\n`;
+  const c = waAssinaturaCfg();
+  const nome = c.formato === 'negrito' ? `*${c.nome}*` : c.formato === 'italico' ? `_${c.nome}_` : c.nome;
+  return `${nome}\n`;
+}
+
+// ---- Configurações do WhatsApp (assinatura do operador) ----
+function waAbrirConfig() {
+  const c = waAssinaturaCfg();
+  document.getElementById('wa-modal-config')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'wa-modal-config';
+  modal.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this) this.remove()">
+      <div style="background:#fff;border-radius:14px;padding:22px;max-width:440px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px"><h3 style="margin:0;font-size:16px"><i class="bi bi-gear me-2"></i>Configurações do WhatsApp</h3><button onclick="document.getElementById('wa-modal-config').remove()" style="background:none;border:none;font-size:22px;color:#666;cursor:pointer;line-height:1">×</button></div>
+        <div style="font-weight:600;font-size:13px;margin-bottom:6px">Identificação nas mensagens</div>
+        <p style="font-size:12px;color:var(--text-muted);margin:0 0 12px">O nome abaixo é enviado na 1ª linha ao iniciar uma conversa ou responder após o cliente.</p>
+        <label class="checkbox-item" style="margin:0 0 12px;font-size:13px"><input type="checkbox" id="wa-cfg-ativo" ${c.ativo ? 'checked' : ''} onchange="waPreviewAssinatura()"> Enviar meu nome junto das mensagens</label>
+        <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">Nome</label>
+        <input id="wa-cfg-nome" value="${esc(c.nome)}" oninput="waPreviewAssinatura()" style="width:100%;box-sizing:border-box;border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-size:13px;margin-bottom:12px" />
+        <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">Formatação</label>
+        <select id="wa-cfg-formato" onchange="waPreviewAssinatura()" style="width:100%;box-sizing:border-box;border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-size:13px;margin-bottom:14px">
+          <option value="negrito" ${c.formato === 'negrito' ? 'selected' : ''}>Negrito</option>
+          <option value="italico" ${c.formato === 'italico' ? 'selected' : ''}>Itálico</option>
+          <option value="nenhum" ${c.formato === 'nenhum' ? 'selected' : ''}>Sem formatação</option>
+        </select>
+        <div style="font-size:12px;font-weight:600;margin-bottom:4px">Prévia</div>
+        <div id="wa-cfg-preview" style="background:#d9fdd3;border-radius:8px;padding:8px 12px;font-size:13.5px;margin-bottom:16px"></div>
+        <div style="display:flex;justify-content:flex-end;gap:8px">
+          <button class="btn btn-outline btn-sm" onclick="document.getElementById('wa-modal-config').remove()">Cancelar</button>
+          <button class="btn btn-primary btn-sm" onclick="waSalvarAssinatura()"><i class="bi bi-floppy me-1"></i>Salvar</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  waPreviewAssinatura();
+}
+function waPreviewAssinatura() {
+  const el = document.getElementById('wa-cfg-preview'); if (!el) return;
+  const nome = (document.getElementById('wa-cfg-nome')?.value || '').trim() || normalizeUserName(getCurrentUserName());
+  const fmt = document.getElementById('wa-cfg-formato')?.value || 'negrito';
+  const ativo = document.getElementById('wa-cfg-ativo')?.checked;
+  const nomeH = fmt === 'negrito' ? `<b>${esc(nome)}</b>` : fmt === 'italico' ? `<i>${esc(nome)}</i>` : esc(nome);
+  el.innerHTML = ativo ? `${nomeH}<br>Olá, tudo bem?` : 'Olá, tudo bem?';
+}
+async function waSalvarAssinatura() {
+  const u = normalizeUserName(getCurrentUserName());
+  const ativo = !!document.getElementById('wa-cfg-ativo')?.checked;
+  const nome = (document.getElementById('wa-cfg-nome')?.value || '').trim() || u;
+  const formato = document.getElementById('wa-cfg-formato')?.value || 'negrito';
+  window._wa.assinaturas = window._wa.assinaturas || {};
+  window._wa.assinaturas[u] = { ativo, nome, formato };
+  try {
+    showLoading();
+    await App.graph._writeFile('whatsapp_assinaturas', window._wa.assinaturas);
+    document.getElementById('wa-modal-config')?.remove();
+    toast('Configuração salva.', 'success');
+  } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 async function waEnviar() {
@@ -8883,8 +8956,10 @@ async function waEnviar() {
   const quotedId = window._wa.respondendo?.id || undefined;
   window._wa.respondendo = null; waRenderRespondendo();
   const texto = (waDevePrefixarOperador() ? waPrefixoOperador() : '') + txt;
-  try { await waApi('/send', { method: 'POST', body: JSON.stringify({ jid: window._wa.jidAtivo, text: texto, quotedId }) }); }
-  catch (e) { toast(e.message, 'error'); input.value = txt; waAutoGrow(input); }
+  try {
+    const r = await waApi('/send', { method: 'POST', body: JSON.stringify({ jid: window._wa.jidAtivo, text: texto, quotedId }) });
+    if (r && r.message) waOnMessage(r.message);   // mostra imediatamente (deduplicado com o eco)
+  } catch (e) { toast(e.message, 'error'); input.value = txt; waAutoGrow(input); }
 }
 
 // Campo de mensagem que cresce até 8 linhas
