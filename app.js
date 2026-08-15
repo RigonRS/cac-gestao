@@ -715,7 +715,7 @@ const STATUS_PROCESSO = [
 ];
 const STATUS_FECHADOS = ['Deferido', 'Indeferido', 'Desistência Cliente'];
 const RESPONSAVEIS = ['Andrieli', 'Geison', 'Janaína', 'Matheus', 'Priscila', 'Simone'];
-const TIPOS_SEM_GRU = ['Defesa de Notificação', 'Mudança de endereço SINARM PF', 'Porte de Arma PF', 'Correção de dados de arma', 'Comunicado de Furto/Extravio'];
+const TIPOS_SEM_GRU = ['Defesa de Notificação', 'Mudança de endereço SINARM PF', 'Porte de Arma PF', 'Correção de dados de arma', 'Comunicado de Furto/Extravio', 'Registrar arma de fogo'];
 const FORMAS_PAGAMENTO_OPTS = ['Pix', 'Dinheiro', 'Cartão'];
 const BANCOS_PAGAMENTO_OPTS = ['Banco do Brasil', 'Sicredi', 'Cresol'];
 
@@ -5165,6 +5165,17 @@ async function renderProcessoDetalhe(id) {
           </div>
         </div>` : ''}
 
+        ${processo.TipoProcesso === 'Registrar arma de fogo' ? `
+        <div class="card" style="margin-bottom:16px">
+          <div class="card-header"><h3><i class="bi bi-building me-2"></i>Dados do Registro</h3></div>
+          <div class="card-body">
+            <label>CNPJ do Vendedor</label>
+            <input type="text" id="registrar-cnpj" value="${esc(_dadosEsp(processo).cnpjVendedor||'')}" placeholder="00.000.000/0000-00" style="margin-top:4px;margin-bottom:10px;width:100%;box-sizing:border-box" />
+            <button class="btn btn-primary btn-sm" onclick="salvarCnpjRegistrar('${id}')"><i class="bi bi-floppy me-1"></i>Salvar CNPJ</button>
+            <div style="font-size:12px;color:var(--text-muted);margin-top:8px"><i class="bi bi-info-circle me-1"></i>Ao deferir, a arma será registrada no acervo do cliente e serão criadas 2 Guias de Tráfego automaticamente.</div>
+          </div>
+        </div>` : ''}
+
         <div id="dados-pagamento-wrapper">${usaModeloOrcamento ? renderPagamentoViaOrcamento(_orcVinculado) : renderDadosPagamento(processo)}</div>
 
       </div>
@@ -5371,6 +5382,83 @@ function alertaJaDeferido() {
   modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
 }
 
+function _dadosEsp(p) { try { return p && p.DadosEspecificosJSON ? JSON.parse(p.DadosEspecificosJSON) : {}; } catch (e) { return {}; } }
+
+// Monta os campos da arma a partir dos dados específicos de um processo de aquisição/registro
+function _camposArmaDeDados(dados, p, atividade) {
+  const normalizeGrupo = g => g === 'Uso Permitido' ? 'Permitido' : g === 'Uso Restrito' ? 'Restrito' : (g || '');
+  return {
+    Title:             `${dados.marcaArma||dados.marca||''} ${dados.modeloArma||dados.modelo||''}`.trim(),
+    ClienteId:         p.ClienteId,
+    ClienteNome:       p.ClienteNome || '',
+    Especie:           dados.especie || dados.proc_especie || '',
+    Calibre:           dados.calibre || '',
+    Marca:             dados.marcaArma || dados.marca || '',
+    Modelo:            dados.modeloArma || dados.modelo || '',
+    NumeroSerie:       dados.serieArma || '',
+    NumeroSIGMA:       dados.numSigma || '',
+    AtividadeCadastrada: atividade || dados.acervo || '',
+    GrupoCalibre:      normalizeGrupo(dados.grupoCalibre),
+    PaisFabricacao:    dados.paisFabricacao || '',
+    CapacidadeTiro:    dados.capacidadeTiros || dados.capacidadeCartucho || '',
+    NumeroCanos:       dados.numeroCanos || '',
+    AlmaCano:          dados.almaCano || dados.alma || '',
+    NumeroRaias:       dados.numeroRaias || '',
+    SentidoRaias:      dados.sentidoRaias || '',
+    ComprimentoCano:   dados.comprimentoCano || dados.comprCano || '',
+    Acabamento:        dados.acabamento || '',
+    Funcionamento:     dados.funcionamento || '',
+  };
+}
+
+// Cria um processo automático (valor 0) vinculado a um "pai" via DadosEspecificosJSON
+async function criarProcessoAutomatico(pai, tipo, dadosBase, subTipo) {
+  const dados = { ...(dadosBase || {}), geradoAutomatico: true, processoPaiId: String(pai.id) };
+  const checklist = buildChecklistItems(tipo, subTipo || null);
+  const hoje = new Date();
+  const fields = {
+    Title:        `${tipo} — ${pai.ClienteNome || ''}`,
+    ClienteId:    pai.ClienteId,
+    ClienteNome:  pai.ClienteNome || '',
+    TipoProcesso: tipo,
+    Responsavel:  pai.Responsavel || '',
+    DataAbertura: hoje.toISOString().split('T')[0],
+    Status:       'Parado',
+    ValorProcesso: 0,
+    ChecklistJSON: JSON.stringify(checklist),
+    DadosEspecificosJSON: JSON.stringify(dados),
+    HistoricoStatus: JSON.stringify([{ data: hoje.toLocaleDateString('pt-BR'), hora: hoje.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }), status: 'Parado', usuario: 'Sistema (automático)' }]),
+  };
+  return App.graph.createItem(CONFIG.listas.processos, fields);
+}
+
+// Cria 2 Guias de Tráfego (valor 0) vinculadas e marca a origem da comissão (extraSourceId)
+// como "extraViaGuias": a comissão só entra nos extras quando as 2 guias forem deferidas.
+async function criarGuiasEExtraViaGuias(paiProc, extraSourceId, armaId) {
+  const dadosGuia = { extraSourceId: String(extraSourceId) };
+  if (armaId) dadosGuia.armaId = String(armaId);
+  await criarProcessoAutomatico(paiProc, 'Guia de Tráfego', { ...dadosGuia }, null);
+  await criarProcessoAutomatico(paiProc, 'Guia de Tráfego', { ...dadosGuia }, null);
+  try {
+    const alvo = await App.graph.getItem(CONFIG.listas.processos, String(extraSourceId));
+    const d = _dadosEsp(alvo); d.extraViaGuias = true;
+    await App.graph.updateItem(CONFIG.listas.processos, String(extraSourceId), { DadosEspecificosJSON: JSON.stringify(d) });
+  } catch (e) {}
+}
+
+async function salvarCnpjRegistrar(id) {
+  const cnpj = (document.getElementById('registrar-cnpj')?.value || '').trim();
+  try {
+    showLoading();
+    const proc = await App.graph.getItem(CONFIG.listas.processos, id);
+    const d = _dadosEsp(proc); d.cnpjVendedor = cnpj;
+    await App.graph.updateItem(CONFIG.listas.processos, id, { DadosEspecificosJSON: JSON.stringify(d) });
+    App.invalidateCache('processos');
+    if (window._processoDetalhe) window._processoDetalhe.DadosEspecificosJSON = JSON.stringify(d);
+    toast('CNPJ salvo.', 'success');
+  } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
 async function deferirProcesso(id) {
   const p = window._processoDetalhe;
   if (!p) return;
@@ -5404,8 +5492,10 @@ async function deferirProcesso(id) {
   const _eGuiaDefer = _tipoDefer === 'Guia de Tráfego';
   const _eRenovCRAF = _tipoDefer === 'Renovação de CRAF';
   const _eAquisDefer = _tipoDefer === 'Aquisição de Arma SIGMA' || _tipoDefer === 'Aquisição de Arma PF';
+  const _eRegistrarDefer = _tipoDefer === 'Registrar arma de fogo';
   const _eTransfDefer = TIPOS_TRANSFERENCIA.includes(_tipoDefer);
-  const _pedirCRAF = _eAquisDefer || _eTransfDefer || _eRenovCRAF;
+  // Aquisição SIGMA não pede mais CRAF aqui (o CRAF/arma vai para o "Registrar arma de fogo")
+  const _pedirCRAF = (_tipoDefer === 'Aquisição de Arma PF') || _eTransfDefer || _eRenovCRAF || _eRegistrarDefer;
   const modal = document.createElement('div');
   modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center';
   const hoje = new Date().toISOString().split('T')[0];
@@ -5464,32 +5554,10 @@ async function deferirProcesso(id) {
       // Auto-ações ao deferir
       const tipo = p.TipoProcesso;
       const dados = p.DadosEspecificosJSON ? JSON.parse(p.DadosEspecificosJSON) : {};
-      if (tipo === 'Aquisição de Arma SIGMA' || tipo === 'Aquisição de Arma PF') {
+      if (tipo === 'Aquisição de Arma PF') {
         // Salvar arma no acervo do cliente
         try {
-          const normalizeGrupo = g => g === 'Uso Permitido' ? 'Permitido' : g === 'Uso Restrito' ? 'Restrito' : (g || '');
-          const camposArma = {
-            Title:             `${dados.marcaArma||dados.marca||''} ${dados.modeloArma||dados.modelo||''}`.trim(),
-            ClienteId:         p.ClienteId,
-            ClienteNome:       p.ClienteNome || '',
-            Especie:           dados.especie           || dados.proc_especie || '',
-            Calibre:           dados.calibre           || '',
-            Marca:             dados.marcaArma         || dados.marca || '',
-            Modelo:            dados.modeloArma        || dados.modelo || '',
-            NumeroSerie:       dados.serieArma         || '',
-            NumeroSIGMA:       dados.numSigma          || '',
-            AtividadeCadastrada: tipo === 'Aquisição de Arma PF' ? 'PF Defesa Pessoal' : (dados.acervo || ''),
-            GrupoCalibre:      normalizeGrupo(dados.grupoCalibre),
-            PaisFabricacao:    dados.paisFabricacao     || '',
-            CapacidadeTiro:    dados.capacidadeTiros    || dados.capacidadeCartucho || '',
-            NumeroCanos:       dados.numeroCanos        || '',
-            AlmaCano:          dados.almaCano           || dados.alma || '',
-            NumeroRaias:       dados.numeroRaias        || '',
-            SentidoRaias:      dados.sentidoRaias       || '',
-            ComprimentoCano:   dados.comprimentoCano    || dados.comprCano || '',
-            Acabamento:        dados.acabamento         || '',
-            Funcionamento:     dados.funcionamento      || '',
-          };
+          const camposArma = _camposArmaDeDados(dados, p, 'PF Defesa Pessoal');
           await App.graph.createItem(CONFIG.listas.armas, camposArma);
           App.invalidateCache('armas');
           if (_dataEmissaoCRAF || _dataValidadeCRAF) {
@@ -5508,6 +5576,36 @@ async function deferirProcesso(id) {
         } catch(e2) {
           toast('Deferido, mas não foi possível salvar a arma: ' + e2.message, 'warning');
         }
+      } else if (tipo === 'Aquisição de Arma SIGMA') {
+        // Não salva a arma aqui: abre um "Registrar arma de fogo" vinculado (valor 0),
+        // que herda os dados da arma e, ao ser deferido, salva a arma e gera as guias.
+        try {
+          await criarProcessoAutomatico(p, 'Registrar arma de fogo', { ...dados, cnpjVendedor: '' });
+          App.invalidateCache('processos');
+          toast('Processo deferido! Criado "Registrar arma de fogo" para concluir o registro.', 'success');
+        } catch(e2) { toast('Deferido, mas não foi possível criar o Registrar: ' + e2.message, 'warning'); }
+      } else if (tipo === 'Registrar arma de fogo') {
+        // Salva a arma no acervo e abre 2 Guias de Tráfego (valor 0). A comissão da
+        // Aquisição SIGMA vinculada só entra nos extras quando as 2 guias forem deferidas.
+        try {
+          const camposArma = _camposArmaDeDados(dados, p, dados.acervo || '');
+          const armaCriada = await App.graph.createItem(CONFIG.listas.armas, camposArma);
+          App.invalidateCache('armas');
+          if (_dataEmissaoCRAF || _dataValidadeCRAF) {
+            try {
+              await App.graph.createItem(CONFIG.listas.documentos, {
+                ClienteId: p.ClienteId, ClienteNome: p.ClienteNome || '', TipoDocumento: 'CRAF',
+                ArmaVinculadaId: armaCriada?.id || null,
+                DataEmissao: _dataEmissaoCRAF || null, DataValidade: _dataValidadeCRAF || null,
+              });
+              App.invalidateCache('documentos');
+            } catch(e3) {}
+          }
+          const aquisicaoId = dados.processoPaiId || p.id; // origem da comissão (a Aquisição SIGMA)
+          await criarGuiasEExtraViaGuias(p, aquisicaoId, armaCriada?.id || null);
+          App.invalidateCache('processos');
+          toast('Processo deferido! Arma registrada e 2 Guias de Tráfego criadas.', 'success');
+        } catch(e2) { toast('Deferido, mas houve um erro: ' + e2.message, 'warning'); }
       } else if (tipo === 'Guia de Tráfego') {
         try {
           const armaId = (dados.armaId || '').split('|')[0];
@@ -5632,6 +5730,13 @@ async function deferirProcesso(id) {
               });
               App.invalidateCache('documentos');
             } catch(e3) {}
+          }
+          // Transferências SINARM/SIGMA x SIGMA: geram 2 Guias de Tráfego (valor 0);
+          // a comissão desta transferência só entra nos extras quando as 2 forem deferidas.
+          if (TIPOS_TRANSF_GERA_GUIAS.includes(tipo)) {
+            const armaIdTransf = (dados.armaId || dados.armaIdMesmoTitular || '').split('|')[0];
+            await criarGuiasEExtraViaGuias(p, p.id, armaIdTransf);
+            App.invalidateCache('processos');
           }
         } catch(e2) { toast('Deferido, mas não foi possível atualizar armas: ' + e2.message, 'warning'); }
       } else if (tipo === 'Mudança de Acervo') {
@@ -7028,6 +7133,22 @@ function getDataDeferido(p) {
   return null;
 }
 
+// Mês efetivo (YYYY-MM) de uma comissão "extraViaGuias": mês da 2ª guia deferida (ou null)
+function _mesEfetivoViaGuias(p, processos) {
+  const datas = (processos || [])
+    .filter(g => g.Status === 'Deferido' && String(_dadosEsp(g).extraSourceId || '') === String(p.id))
+    .map(g => getDataDeferido(g)).filter(Boolean).sort();
+  return datas.length >= 2 ? datas[datas.length - 1].slice(0, 7) : null;
+}
+// O extra deste processo conta no mês informado?
+function _extraProcessoNoMes(p, processos, filtroMes) {
+  const d = _dadosEsp(p);
+  if (d.geradoAutomatico) return false;                 // guias/registrar automáticos não geram extra próprio
+  if (d.extraViaGuias) return _mesEfetivoViaGuias(p, processos) === filtroMes; // só quando as 2 guias deferirem
+  const iso = getDataDeferido(p);
+  return !!(iso && iso.startsWith(filtroMes));
+}
+
 function getProcessoDescExtra(p) {
   try {
     const d = JSON.parse(p.DadosEspecificosJSON || '{}');
@@ -7085,11 +7206,7 @@ function imprimirExtras(responsavel) {
     return `${NOMES_MESES_EXTENSO[parseInt(m)-1]} ${y}`;
   }
 
-  const meusDeferidos = processos.filter(p => {
-    if (p.Responsavel !== responsavel) return false;
-    const iso = getDataDeferido(p);
-    return iso && iso.startsWith(filtroMes);
-  });
+  const meusDeferidos = processos.filter(p => p.Responsavel === responsavel && _extraProcessoNoMes(p, processos, filtroMes));
   const meusAvulsos = avulsos.filter(a => a.responsavel === responsavel && (a.data||'').startsWith(filtroMes));
 
   const totalExtra = meusDeferidos.reduce((s, p) => {
@@ -7172,11 +7289,7 @@ async function renderPagamentosExtras() {
   }
 
   function renderPainelExtra(responsavel) {
-    const meusDeferidos = processos.filter(p => {
-      if (p.Responsavel !== responsavel) return false;
-      const iso = getDataDeferido(p);
-      return iso && iso.startsWith(filtroMes);
-    });
+    const meusDeferidos = processos.filter(p => p.Responsavel === responsavel && _extraProcessoNoMes(p, processos, filtroMes));
     const meusAvulsos = avulsos.filter(a => a.responsavel === responsavel && (a.data||'').startsWith(filtroMes));
     const pagoMes = extrasPagosMes.find(x => x.responsavel === responsavel && x.mes === filtroMes);
 
@@ -7238,6 +7351,10 @@ async function renderPagamentosExtras() {
               <div style="font-size:14px;font-weight:700;color:var(--success)">${fmtMoeda(a.valor)}</div>
               <div style="font-size:10px;color:var(--text-muted)">renovação ${esc(a.tipo)}</div>
             </div>
+            ${(isAdminUser() || a.responsavel === getCurrentUserName()) ? `<div style="display:flex;gap:4px">
+              <button class="btn btn-ghost btn-xs" style="font-size:11px;padding:1px 6px" onclick="editarExtraAvulso('${esc(String(a.id))}')" title="Editar valor"><i class="bi bi-pencil"></i></button>
+              <button class="btn btn-ghost btn-xs" style="font-size:11px;padding:1px 6px;color:var(--danger)" onclick="excluirExtraAvulso('${esc(String(a.id))}')" title="Excluir extra"><i class="bi bi-trash"></i></button>
+            </div>` : ''}
           </div>
         </div>`;
       }).join('')}
@@ -9956,6 +10073,7 @@ async function excluirRenovacaoCTF(clienteId, idx) {
       HistoricoRenovacoesCTF: JSON.stringify(hist),
     });
     App.invalidateCache('clientes');
+    await removerExtraRenovacao('CTF', clienteId);
     toast('Registro excluído.', 'success');
     await renderClientePerfil(clienteId, 'ibama');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
@@ -9975,9 +10093,52 @@ async function excluirRenovacaoSIMAF(clienteId, idx) {
       HistoricoRenovacoesSIMAF: JSON.stringify(hist),
     });
     App.invalidateCache('clientes');
+    await removerExtraRenovacao('SIMAF', clienteId);
     toast('Registro excluído.', 'success');
     await renderClientePerfil(clienteId, 'ibama');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+// Remove o extra (não pago) mais recente de uma renovação CTF/SIMAF daquele cliente
+async function removerExtraRenovacao(tipo, clienteId) {
+  try {
+    const lista = await App.graph._readFile('extras_avulsos').catch(() => []);
+    const arr = Array.isArray(lista) ? lista : [];
+    let idxRem = -1;
+    for (let i = arr.length - 1; i >= 0; i--) {
+      if (arr[i].tipo === tipo && String(arr[i].clienteId) === String(clienteId) && !arr[i].pago) { idxRem = i; break; }
+    }
+    if (idxRem >= 0) { arr.splice(idxRem, 1); await App.graph._writeFile('extras_avulsos', arr); }
+  } catch (e) { console.error('removerExtraRenovacao:', e); }
+}
+
+async function excluirExtraAvulso(id) {
+  if (!confirm('Excluir este extra?')) return;
+  showLoading();
+  try {
+    const lista = await App.graph._readFile('extras_avulsos').catch(() => []);
+    const arr = (Array.isArray(lista) ? lista : []).filter(a => String(a.id) !== String(id));
+    await App.graph._writeFile('extras_avulsos', arr);
+    toast('Extra excluído.', 'success');
+    await renderPagamentosExtras();
+  } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+async function editarExtraAvulso(id) {
+  const lista = await App.graph._readFile('extras_avulsos').catch(() => []);
+  const arr = Array.isArray(lista) ? lista : [];
+  const a = arr.find(x => String(x.id) === String(id));
+  if (!a) { toast('Extra não encontrado.', 'error'); return; }
+  const novo = prompt('Valor do extra (R$):', a.valor);
+  if (novo === null) return;
+  const v = parseFloat(String(novo).replace(',', '.'));
+  if (isNaN(v) || v < 0) { toast('Valor inválido.', 'warning'); return; }
+  showLoading();
+  try {
+    a.valor = v;
+    await App.graph._writeFile('extras_avulsos', arr);
+    toast('Extra atualizado.', 'success');
+    await renderPagamentosExtras();
+  } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 async function toggleNaoRenovarCTF(clienteId, checked) {

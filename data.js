@@ -31,6 +31,13 @@ const TIPOS_PROCESSO = [
   'Defesa de Notificação',
   'Correção de dados de arma',
   'Porte de Arma PF',
+  'Registrar arma de fogo',
+];
+
+// Transferências que, ao deferir, geram automaticamente 2 Guias de Tráfego (valor 0)
+const TIPOS_TRANSF_GERA_GUIAS = [
+  'Transferência de Arma SINARM x SIGMA',
+  'Transferência de Arma SIGMA x SIGMA',
 ];
 
 const TIPOS_TRANSFERENCIA = [
@@ -150,7 +157,8 @@ const CHECKLISTS = {
   'Transferência de Arma SINARM x SINARM': CHECKLIST_TRANSFERENCIA_SINARM_SINARM,
   'Transferência de Arma SIGMA x SIGMA':   CHECKLIST_TRANSFERENCIA_SIGMA_SIGMA,
   'Transferência de Arma SINARM x SIGMA':  CHECKLIST_TRANSFERENCIA,
-  'Cancelamento de CR': ['Documento de identificação']
+  'Cancelamento de CR': ['Documento de identificação'],
+  'Registrar arma de fogo': ['Nota Fiscal da Arma']
 };
 
 // Snapshot dos checklists originais definidos no código (para "Restaurar padrão"
