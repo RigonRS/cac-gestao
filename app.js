@@ -5108,6 +5108,7 @@ async function renderProcessoDetalhe(id) {
             &nbsp;·&nbsp; Protocolo: ${esc(processo.NumeroProtocolo||'—')}
             &nbsp;·&nbsp; Abertura: ${fmtDate(processo.DataAbertura?processo.DataAbertura.split('T')[0]:'')}
             ${processo.DataPrazo ? `&nbsp;·&nbsp; Prazo: ${fmtDate(processo.DataPrazo.split('T')[0])}` : ''}
+            ${(() => { const _dg = _dadosEsp(processo); return (processo.TipoProcesso === 'Guia de Tráfego' && _dg.geradoAutomatico && _dg.valorAtrelado) ? `&nbsp;·&nbsp; <span title="Valor do processo ao qual esta guia está atrelada"><i class="bi bi-link-45deg"></i> Atrelado: <strong style="color:#1f2937">${fmtMoeda(_dg.valorAtrelado)}</strong>${_dg.tipoAtrelado ? ` (${esc(_dg.tipoAtrelado)})` : ''}</span>` : ''; })()}
           </div>
           ${(_clienteDetalhe.CPF || _clienteDetalhe.SenhaGOV) ? `
           <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:6px;font-size:12px">
@@ -5477,13 +5478,27 @@ async function criarProcessoAutomatico(pai, tipo, dadosBase, subTipo) {
     DadosEspecificosJSON: JSON.stringify(dados),
     HistoricoStatus: JSON.stringify([{ data: hoje.toLocaleDateString('pt-BR'), hora: hoje.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }), status: 'Parado', usuario: 'Sistema (automático)' }]),
   };
-  return App.graph.createItem(CONFIG.listas.processos, fields);
+  const criado = await App.graph.createItem(CONFIG.listas.processos, fields);
+  // Registra p/ o popup de aviso ao operador (valor atrelado vem do processo de origem)
+  try {
+    const valAtrel = (dados.valorAtrelado != null) ? (Number(dados.valorAtrelado) || 0) : (Number(pai.ValorProcesso) || 0);
+    const tipoAtrel = dados.tipoAtrelado || pai.TipoProcesso || '';
+    if (window._novosAutoCriados) window._novosAutoCriados.push({ id: criado.id, tipo, cliente: pai.ClienteNome || '', valorAtrelado: valAtrel, tipoAtrelado: tipoAtrel });
+  } catch (e) {}
+  return criado;
 }
 
 // Cria 2 Guias de Tráfego (valor 0) vinculadas e marca a origem da comissão (extraSourceId)
 // como "extraViaGuias": a comissão só entra nos extras quando as 2 guias forem deferidas.
 async function criarGuiasEExtraViaGuias(paiProc, extraSourceId, armaId) {
-  const dadosGuia = { extraSourceId: String(extraSourceId) };
+  // Busca o processo de origem (Aquisição/Transferência) para herdar o valor atrelado
+  let valorAtrelado = 0, tipoAtrelado = '';
+  try {
+    const alvo = await App.graph.getItem(CONFIG.listas.processos, String(extraSourceId));
+    valorAtrelado = Number(alvo.ValorProcesso) || 0;
+    tipoAtrelado = alvo.TipoProcesso || '';
+  } catch (e) {}
+  const dadosGuia = { extraSourceId: String(extraSourceId), atreladoId: String(extraSourceId), valorAtrelado, tipoAtrelado };
   if (armaId) dadosGuia.armaId = String(armaId);
   await criarProcessoAutomatico(paiProc, 'Guia de Tráfego', { ...dadosGuia }, null);
   await criarProcessoAutomatico(paiProc, 'Guia de Tráfego', { ...dadosGuia }, null);
@@ -5584,6 +5599,7 @@ async function deferirProcesso(id) {
     const _dataEmissaoCRAF = modal.querySelector('#modal-data-emissao-craf')?.value || null;
     const _dataValidadeCRAF = modal.querySelector('#modal-data-validade-craf')?.value || null;
     document.body.removeChild(modal);
+    window._novosAutoCriados = []; // coleta processos gerados automaticamente p/ avisar o operador
     showLoading();
     try {
       // Registra no histórico
@@ -5895,8 +5911,41 @@ async function deferirProcesso(id) {
 
       liberarProcessosFuturos(id);
       await renderProcessoDetalhe(id);
+      if (window._novosAutoCriados && window._novosAutoCriados.length) {
+        mostrarPopupProcessosAuto(window._novosAutoCriados.slice());
+      }
     } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
   };
+}
+
+// Popup avisando o operador dos processos criados automaticamente ao deferir,
+// com botão para ir direto a cada um.
+function mostrarPopupProcessosAuto(lista) {
+  if (!lista || !lista.length) return;
+  const modal = document.createElement('div');
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px';
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;max-width:460px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.25);overflow:hidden">
+      <div style="padding:18px 20px;border-bottom:1px solid var(--border)">
+        <h3 style="margin:0;font-size:16px;color:#2563eb"><i class="bi bi-stars me-2"></i>Novos processos criados automaticamente</h3>
+        <p style="font-size:12.5px;color:var(--text-muted);margin:6px 0 0">O deferimento gerou ${lista.length === 1 ? 'um novo processo' : lista.length + ' novos processos'}. Clique em "Ir" para abrir e dar andamento.</p>
+      </div>
+      <div style="max-height:50vh;overflow-y:auto">
+        ${lista.map(x => `
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 20px;border-bottom:1px solid var(--border)">
+          <div style="min-width:0">
+            <div style="font-size:13px;font-weight:600">${esc(x.tipo)}</div>
+            <div style="font-size:11.5px;color:var(--text-muted)">${esc(x.cliente || '')}${x.valorAtrelado ? ` · atrelado a ${esc(x.tipoAtrelado || 'processo')} (${fmtMoeda(x.valorAtrelado)})` : ''}</div>
+          </div>
+          <button class="btn btn-primary btn-sm" style="flex-shrink:0" onclick="this.closest('[style*=fixed]').remove();navigate('processos/detalhe',{id:'${x.id}'})"><i class="bi bi-box-arrow-up-right me-1"></i>Ir</button>
+        </div>`).join('')}
+      </div>
+      <div style="padding:12px 20px;text-align:right">
+        <button class="btn btn-outline btn-sm" onclick="this.closest('[style*=fixed]').remove()">Fechar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
 }
 
 async function mostrarSeletorProcessoFuturo(processoId) {
@@ -9688,9 +9737,9 @@ async function renderProcessoEditar(id) {
               ${STATUS_PROCESSO.map(s => `<option value="${s}" ${processo.Status===s?'selected':''}>${s}</option>`).join('')}
             </select>
           </div>
-          <div><label>Data de Última Conferência</label><input type="date" name="DataUltimaConferencia" value="${d('DataUltimaConferencia')}" /></div>
+          ${processo.TipoProcesso === 'Guia de Tráfego' ? '' : `<div><label>Data de Última Conferência</label><input type="date" name="DataUltimaConferencia" value="${d('DataUltimaConferencia')}" /></div>`}
           <div><label>Data de Abertura</label><input type="date" name="DataAbertura" value="${d('DataAbertura')}" /></div>
-          <div><label>Prazo</label><input type="date" name="DataPrazo" value="${d('DataPrazo')}" /></div>
+          ${processo.TipoProcesso === 'Guia de Tráfego' ? '' : `<div><label>Prazo</label><input type="date" name="DataPrazo" value="${d('DataPrazo')}" /></div>`}
         </div>
       </div>
     </div>
@@ -9750,7 +9799,10 @@ async function renderProcessoEditar(id) {
   if (tipo) {
     onTipoProcessoChange(tipo, true); // skipValor=true to preserve existing value
     const dados = processo.DadosEspecificosJSON ? JSON.parse(processo.DadosEspecificosJSON) : {};
+    window._processoEditDadosOrig = dados; // guarda p/ preservar campos de automação/vínculo ao salvar
     popularCamposEspecificos(dados);
+  } else {
+    window._processoEditDadosOrig = processo.DadosEspecificosJSON ? JSON.parse(processo.DadosEspecificosJSON) : {};
   }
 }
 
@@ -9758,6 +9810,12 @@ async function salvarProcessoEdicao(e, id) {
   e.preventDefault();
   const fd = new FormData(e.target);
   const dadosEsp = coletarDadosEspecificos(null, 'form-processo-edit');
+  // Preserva campos de automação/vínculo que NÃO estão no formulário (senão o extra some).
+  // Ex.: guias de tráfego automáticas guardam "extraSourceId" — sem ele a comissão nunca entra.
+  const _origDados = window._processoEditDadosOrig || {};
+  ['geradoAutomatico','processoPaiId','extraSourceId','extraViaGuias','valorAtrelado','tipoAtrelado','atreladoId','cnpjFornecedor','cnpjVendedor'].forEach(k => {
+    if (_origDados[k] !== undefined && dadosEsp[k] === undefined) dadosEsp[k] = _origDados[k];
+  });
   showLoading();
   try {
     await App.graph.updateItem(CONFIG.listas.processos, id, {
