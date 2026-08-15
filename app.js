@@ -602,7 +602,10 @@ async function renderDashboard() {
       return `<div class="card" style="margin-top:20px">
         <div class="card-header">
           <h3><i class="bi bi-check-circle-fill me-2" style="color:#16a34a"></i>Últimos Processos Deferidos</h3>
-          <span style="font-size:12px;color:var(--text-muted)">últimos 10</span>
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="font-size:12px;color:var(--text-muted)">últimos 10</span>
+            <button class="btn btn-ghost btn-sm" onclick="abrirTodosDeferidos()" title="Ver todos os deferidos por data"><i class="bi bi-list-ul me-1"></i>Ver todos</button>
+          </div>
         </div>
         <div class="card-body" style="padding:0">
           ${deferidos.map(({ p, dataDef, deferidoPor }) => `
@@ -1637,6 +1640,8 @@ async function renderClientePerfil(id, tab = 'dados') {
   const processos  = todosProcessos.filter(p => String(p.ClienteId) === String(id));
 
   const isCacador = (cliente.Categoria || '').includes('Caçador');
+  let numOrcamentos = 0;
+  try { const _orcAll = await App.graph._readFile('orcamentos').catch(() => []); numOrcamentos = (Array.isArray(_orcAll) ? _orcAll : []).filter(o => String(o.clienteId) === String(id)).length; } catch (e) {}
   const tabs = [
     { key:'dados',      label:'Dados Pessoais',               icon:'bi-person-vcard' },
     { key:'armas',      label:`Armas (${armas.length})`,       icon:'bi-shield-fill' },
@@ -1644,7 +1649,7 @@ async function renderClientePerfil(id, tab = 'dados') {
     { key:'documentos',  label:`Documentos (${documentos.length})`, icon:'bi-file-earmark-text' },
     { key:'processos',   label:`Processos (${processos.length})`,   icon:'bi-folder2-open' },
     { key:'pagamentos',  label:'Pagamentos',                        icon:'bi-cash-coin' },
-    { key:'orcamentos',  label:'Orçamentos',                        icon:'bi-calculator' },
+    { key:'orcamentos',  label:`Orçamentos (${numOrcamentos})`,     icon:'bi-calculator' },
   ];
 
   const cats = (cliente.Categoria || '').split(',').filter(Boolean).map(ct => `<span class="badge badge-blue">${esc(ct.trim())}</span>`).join(' ');
@@ -2274,6 +2279,7 @@ function renderPerfilProcessos(processos, clienteId) {
                   <td><div class="btn-group">
                     <button class="btn btn-outline btn-sm" onclick="event.stopPropagation();navigate('processos/detalhe',{id:'${p.id}'})"><i class="bi bi-eye"></i></button>
                     <button class="btn btn-outline btn-sm" onclick="event.stopPropagation();navigate('processos/editar',{id:'${p.id}'})"><i class="bi bi-pencil"></i></button>
+                    ${isAdminUser() ? `<button class="btn btn-outline btn-sm" style="color:var(--danger)" onclick="event.stopPropagation();excluirProcessoDoCliente('${p.id}','${clienteId}')" title="Excluir processo"><i class="bi bi-trash"></i></button>` : ''}
                   </div></td>
                 </tr>`;
               }).join('')
@@ -2281,6 +2287,18 @@ function renderPerfilProcessos(processos, clienteId) {
         </table>
       </div>
     </div>`;
+}
+
+async function excluirProcessoDoCliente(procId, clienteId) {
+  if (!isAdminUser()) { toast('Apenas administradores podem excluir processos.', 'error'); return; }
+  if (!confirm('Excluir este processo? Esta ação não pode ser desfeita.')) return;
+  showLoading();
+  try {
+    await App.graph.deleteItem(CONFIG.listas.processos, procId);
+    App.invalidateCache('processos');
+    toast('Processo excluído.', 'success');
+    await renderClientePerfil(clienteId, 'processos');
+  } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 function renderPerfilPagamentos(processos, clienteId, orcamentos, demandas) {
@@ -3735,7 +3753,7 @@ function buildCamposAquisicao() {
       <div><label>Comprimento do Cano (mm)</label><input name="proc_comprimentoCano" /></div>
       <div><label>N° de Raias</label><input name="proc_numeroRaias" /></div>
       <div><label>Sentido das Raias</label><select name="proc_sentidoRaias"><option value="">Selecione...</option><option>Não tem</option><option>Direita</option><option>Esquerda</option></select></div>
-      <div><label>Acabamento</label><input name="proc_acabamento" /></div>
+      <div><label>Acabamento</label><select name="proc_acabamento"><option value="">Selecione...</option><option>Oxidado</option><option>Aço Inox</option><option>Niquelado</option><option>Outros</option></select></div>
       <div><label>CNPJ do Fornecedor</label><input name="proc_cnpjFornecedor" oninput="this.value=fmtCNPJ(this.value)" maxlength="18" /></div>
       <div><label>Nome do Fornecedor</label><input name="proc_nomeFornecedor" /></div>
     </div>
@@ -4424,6 +4442,26 @@ async function verificarConclusaoDemanda(demandaId) {
   } catch(e) { console.error('verificarConclusaoDemanda:', e); }
 }
 
+function _certidaoDataDeCliente(c) {
+  return {
+    cpf:            c.CPF || '',
+    nome:           c.Title || '',
+    dataNascimento: c.DataNascimento ? c.DataNascimento.split('T')[0] : '',
+    nomeMae:        c.NomeMae || '',
+    nomePai:        c.NomePai || '',
+    rg:             c.RG || '',
+    orgaoEmissor:   c.OrgaoEmissor || '',
+    ufRG:           c.UFDoc || '',
+    endereco:       c.Endereco1 || '',
+    numero:         c.Numero1 || '',
+    complemento:    c.Complemento1 || '',
+    bairro:         c.Bairro1 || '',
+    cidade:         c.Cidade1 || '',
+    uf:             c.UF1Endereco || '',
+    cep:            c.CEP1 || '',
+  };
+}
+
 async function abrirCertidao(keyword) {
   const cfg = CERTIDOES_CONFIG.find(c => c.keyword === keyword);
   if (!cfg) return;
@@ -4431,24 +4469,36 @@ async function abrirCertidao(keyword) {
   if (!p) return;
   showLoading();
   try {
-    const c = await App.graph.getItem(CONFIG.listas.clientes, p.ClienteId);
-    const data = {
-      cpf:            c.CPF || '',
-      nome:           c.Title || '',
-      dataNascimento: c.DataNascimento ? c.DataNascimento.split('T')[0] : '',
-      nomeMae:        c.NomeMae || '',
-      nomePai:        c.NomePai || '',
-      rg:             c.RG || '',
-      orgaoEmissor:   c.OrgaoEmissor || '',
-      ufRG:           c.UFDoc || '',
-      endereco:       c.Endereco1 || '',
-      numero:         c.Numero1 || '',
-      complemento:    c.Complemento1 || '',
-      bairro:         c.Bairro1 || '',
-      cidade:         c.Cidade1 || '',
-      uf:             c.UF1Endereco || '',
-      cep:            c.CEP1 || '',
-    };
+    const dados = p.DadosEspecificosJSON ? JSON.parse(p.DadosEspecificosJSON) : {};
+    const eTransf = TIPOS_TRANSFERENCIA.includes(p.TipoProcesso);
+    const usaComprador = eTransf && dados.clienteVende === 'sim';   // cliente é o VENDEDOR -> certidão do comprador
+    let data;
+    if (usaComprador && dados.compradorClienteId) {
+      const b = await App.graph.getItem(CONFIG.listas.clientes, dados.compradorClienteId);
+      data = _certidaoDataDeCliente(b);
+    } else if (usaComprador) {
+      const rgUF = String(dados.rgUFComprador || '').split('/');
+      data = {
+        cpf:            dados.cpfComprador || '',
+        nome:           dados.nomeComprador || '',
+        dataNascimento: dados.nascimentoComprador ? String(dados.nascimentoComprador).split('T')[0] : '',
+        nomeMae:        dados.nomeMaeComprador || '',
+        nomePai:        dados.nomePaiComprador || '',
+        rg:             (rgUF[0] || '').trim(),
+        orgaoEmissor:   '',
+        ufRG:           (rgUF[1] || '').trim(),
+        endereco:       dados.endResidComprador || '',
+        numero:         dados.numResidComprador || '',
+        complemento:    dados.complResidComprador || '',
+        bairro:         dados.bairroResidComprador || '',
+        cidade:         dados.municipioResidComprador || '',
+        uf:             dados.ufResidComprador || '',
+        cep:            dados.cepResidComprador || '',
+      };
+    } else {
+      const c = await App.graph.getItem(CONFIG.listas.clientes, p.ClienteId);
+      data = _certidaoDataDeCliente(c);
+    }
     try { await navigator.clipboard.writeText(JSON.stringify(data)); } catch(e) {}
     window.open(cfg.url, '_blank');
     toast(`Dados de ${data.nome || data.cpf} copiados. Use o bookmarklet no site.`, 'info');
@@ -5169,9 +5219,7 @@ async function renderProcessoDetalhe(id) {
         <div class="card" style="margin-bottom:16px">
           <div class="card-header"><h3><i class="bi bi-building me-2"></i>Dados do Registro</h3></div>
           <div class="card-body">
-            <label>CNPJ do Vendedor</label>
-            <input type="text" id="registrar-cnpj" value="${esc(_dadosEsp(processo).cnpjVendedor||'')}" placeholder="00.000.000/0000-00" style="margin-top:4px;margin-bottom:10px;width:100%;box-sizing:border-box" />
-            <button class="btn btn-primary btn-sm" onclick="salvarCnpjRegistrar('${id}')"><i class="bi bi-floppy me-1"></i>Salvar CNPJ</button>
+            <div style="font-size:13px"><strong>CNPJ do Fornecedor:</strong> ${esc(_dadosEsp(processo).cnpjFornecedor || _dadosEsp(processo).cnpjVendedor || '—')}</div>
             <div style="font-size:12px;color:var(--text-muted);margin-top:8px"><i class="bi bi-info-circle me-1"></i>Ao deferir, a arma será registrada no acervo do cliente e serão criadas 2 Guias de Tráfego automaticamente.</div>
           </div>
         </div>` : ''}
@@ -5580,7 +5628,12 @@ async function deferirProcesso(id) {
         // Não salva a arma aqui: abre um "Registrar arma de fogo" vinculado (valor 0),
         // que herda os dados da arma e, ao ser deferido, salva a arma e gera as guias.
         try {
-          await criarProcessoAutomatico(p, 'Registrar arma de fogo', { ...dados, cnpjVendedor: '' });
+          await criarProcessoAutomatico(p, 'Registrar arma de fogo', { ...dados });
+          // A comissão desta aquisição fica RETIDA já no deferimento: só entra nos extras
+          // quando as 2 guias (geradas ao deferir o Registrar) forem deferidas.
+          const dAq = { ...dados, extraViaGuias: true };
+          await App.graph.updateItem(CONFIG.listas.processos, id, { DadosEspecificosJSON: JSON.stringify(dAq) });
+          if (window._processoDetalhe) window._processoDetalhe.DadosEspecificosJSON = JSON.stringify(dAq);
           App.invalidateCache('processos');
           toast('Processo deferido! Criado "Registrar arma de fogo" para concluir o registro.', 'success');
         } catch(e2) { toast('Deferido, mas não foi possível criar o Registrar: ' + e2.message, 'warning'); }
@@ -7120,6 +7173,44 @@ async function renderPagamentosGRU() {
 // ============================================================
 // PAGAMENTOS DE EXTRAS (Andrieli e Priscila)
 // ============================================================
+async function abrirTodosDeferidos() {
+  document.getElementById('modal-todos-deferidos')?.remove();
+  showLoading();
+  let lista = [];
+  try {
+    const processos = await App.getProcessos();
+    lista = processos
+      .filter(p => p.Status === 'Deferido')
+      .map(p => {
+        const dataDef = getDataDeferido(p);
+        let deferidoPor = '';
+        try { deferidoPor = [...JSON.parse(p.HistoricoStatus || '[]')].reverse().find(h => h.status === 'Deferido')?.usuario || ''; } catch (e) {}
+        return { p, dataDef, deferidoPor };
+      })
+      .filter(x => x.dataDef)
+      .sort((a, b) => b.dataDef.localeCompare(a.dataDef));
+  } catch (e) {} finally { hideLoading(); }
+  const modal = document.createElement('div');
+  modal.id = 'modal-todos-deferidos';
+  modal.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this) this.remove()">
+      <div style="background:#fff;border-radius:14px;max-width:640px;width:100%;max-height:86vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:18px 20px;border-bottom:1px solid var(--border)">
+          <h3 style="margin:0;font-size:16px"><i class="bi bi-check-circle-fill me-2" style="color:#16a34a"></i>Processos Deferidos <span style="font-weight:400;color:var(--text-muted);font-size:13px">(${lista.length})</span></h3>
+          <button onclick="document.getElementById('modal-todos-deferidos').remove()" style="background:none;border:none;font-size:22px;color:#666;cursor:pointer;line-height:1">×</button>
+        </div>
+        <div style="overflow-y:auto;flex:1">
+          ${lista.length === 0 ? '<div class="empty-state" style="padding:30px"><i class="bi bi-inbox"></i><p>Nenhum processo deferido.</p></div>' : lista.map(({ p, dataDef, deferidoPor }) => `
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--border);cursor:pointer" onclick="document.getElementById('modal-todos-deferidos').remove();navigate('processos/detalhe',{id:'${p.id}'})">
+            <div style="min-width:0"><div style="font-size:13px;font-weight:600">${esc(p.TipoProcesso||'—')}</div><div style="font-size:11px;color:var(--text-muted)">${esc(p.ClienteNome||'—')}</div></div>
+            <div style="text-align:right;flex-shrink:0"><div style="font-size:12px;font-weight:600">${fmtDate(dataDef)}</div>${deferidoPor ? `<div style="font-size:11px;color:var(--text-muted)"><i class="bi bi-person-fill"></i> ${esc(deferidoPor)}</div>` : ''}</div>
+          </div>`).join('')}
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
 function getDataDeferido(p) {
   try {
     const hist = JSON.parse(p.HistoricoStatus || '[]');
