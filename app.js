@@ -1682,7 +1682,7 @@ async function renderClientePerfil(id, tab = 'dados') {
         ${!inativo ? `
         <button class="btn btn-primary btn-sm" onclick="navigate('processos/novo',{clienteId:'${id}'})"><i class="bi bi-plus-lg"></i> Novo Processo</button>
         <button class="btn btn-sm" style="background:#f97316;color:#fff;border:1px solid #ea580c" onclick="novoOrcamentoComVerificacao('${id}')"><i class="bi bi-calculator"></i> Novo Orçamento</button>` : ''}
-        <button class="btn btn-sm" style="background:${portalBloqueado?'#16a34a':'#f59e0b'};color:#fff;border:none" onclick="${portalBloqueado?`desbloquearPortalCliente('${id}')`:`abrirModalBloquearPortal('${id}')`}"><i class="bi bi-shield-lock"></i> ${portalBloqueado?'Desbloquear Portal':'Bloquear Portal'}</button>
+        ${isAdminUser() ? `<button class="btn btn-sm" style="background:${portalBloqueado?'#16a34a':'#f59e0b'};color:#fff;border:none" onclick="${portalBloqueado?`desbloquearPortalCliente('${id}')`:`abrirModalBloquearPortal('${id}')`}"><i class="bi bi-shield-lock"></i> ${portalBloqueado?'Desbloquear Portal':'Bloquear Portal'}</button>` : ''}
         ${isAdminUser() ? `<button class="btn btn-sm" style="background:${inativo?'#16a34a':'#dc2626'};color:#fff;border:none" onclick="${inativo?`ativarCliente('${id}')`:`inativarCliente('${id}')`}"><i class="bi bi-${inativo?'person-check':'person-x'}"></i> ${inativo?'Ativar Cliente':'Inativar Cliente'}</button>` : ''}
       </div>
     </div>
@@ -2768,7 +2768,7 @@ async function onClienteCRAFChange(val, clienteId) {
   const todasArmas = await App.getArmas();
   const armas = todasArmas.filter(a => String(a.ClienteId) === String(cid));
   const sel = document.getElementById('arma-craf-sel');
-  sel.innerHTML = '<option value="">Selecione...</option>' + armas.map(a => `<option value="${a.id}|${esc(a.NumeroSerie||'')} ${esc(a.Marca||'')} ${esc(a.Modelo||'')}">${esc(a.NumeroSerie||'')} — ${esc(a.Marca||'')} ${esc(a.Modelo||'')}</option>`).join('');
+  sel.innerHTML = '<option value="">Selecione...</option>' + armas.map(a => `<option value="${a.id}|${esc(a.NumeroSerie||'')} ${esc(a.Marca||'')} ${esc(a.Modelo||'')}">${a.Especie ? esc(a.Especie)+' · ' : ''}${esc(a.NumeroSerie||'')} — ${esc(a.Marca||'')} ${esc(a.Modelo||'')}</option>`).join('');
 }
 
 async function salvarDocumento(e, clienteId, id) {
@@ -3646,7 +3646,7 @@ function onTipoProcessoChange(tipo, skipValor = false) {
   }
 
   if (camposEl) camposEl.innerHTML = '';
-  const armasOpts = _processoArmasCache.map(a => `<option value="${a.id}|${esc(a.AtividadeCadastrada||'')}|${esc(a.Marca||'')}|${esc(a.Modelo||'')}">${esc(a.Marca||'')} ${esc(a.Modelo||'')}${a.NumeroSerie ? ' ('+esc(a.NumeroSerie)+')' : ''} — ${esc(a.AtividadeCadastrada||'')}</option>`).join('');
+  const armasOpts = _processoArmasCache.map(a => `<option value="${a.id}|${esc(a.AtividadeCadastrada||'')}|${esc(a.Marca||'')}|${esc(a.Modelo||'')}">${a.Especie ? esc(a.Especie)+' · ' : ''}${esc(a.Marca||'')} ${esc(a.Modelo||'')}${a.NumeroSerie ? ' ('+esc(a.NumeroSerie)+')' : ''} — ${esc(a.AtividadeCadastrada||'')}</option>`).join('');
 
   if (!camposEl) return;
 
@@ -3673,7 +3673,7 @@ function onTipoProcessoChange(tipo, skipValor = false) {
     camposEl.innerHTML = buildCamposCorrecaoArma(armasOpts);
   } else if (tipo === 'Porte de Arma PF') {
     const armasPFOpts = _processoArmasCache.filter(a => a.OrgaoCadastro === 'PF - Defesa Pessoal')
-      .map(a => `<option value="${a.id}|${esc(a.AtividadeCadastrada||'')}|${esc(a.Marca||'')}|${esc(a.Modelo||'')}">${esc(a.Marca||'')} ${esc(a.Modelo||'')}${a.NumeroSerie ? ' ('+esc(a.NumeroSerie)+')' : ''}</option>`).join('');
+      .map(a => `<option value="${a.id}|${esc(a.AtividadeCadastrada||'')}|${esc(a.Marca||'')}|${esc(a.Modelo||'')}">${a.Especie ? esc(a.Especie)+' · ' : ''}${esc(a.Marca||'')} ${esc(a.Modelo||'')}${a.NumeroSerie ? ' ('+esc(a.NumeroSerie)+')' : ''}</option>`).join('');
     camposEl.innerHTML = buildCamposPortePF(armasPFOpts);
   } else if (tipo === 'Defesa de Notificação') {
     camposEl.innerHTML = buildCamposDefesaNotificacao();
