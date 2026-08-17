@@ -718,7 +718,7 @@ const STATUS_PROCESSO = [
 ];
 const STATUS_FECHADOS = ['Deferido', 'Indeferido', 'Desistência Cliente'];
 const RESPONSAVEIS = ['Andrieli', 'Geison', 'Janaína', 'Matheus', 'Priscila', 'Simone'];
-const TIPOS_SEM_GRU = ['Defesa de Notificação', 'Mudança de endereço SINARM PF', 'Porte de Arma PF', 'Correção de dados de arma', 'Comunicado de Furto/Extravio', 'Registrar arma de fogo'];
+const TIPOS_SEM_GRU = ['Defesa de Notificação', 'Mudança de endereço SINARM PF', 'Porte de Arma PF', 'Correção de dados de arma', 'Comunicado de Furto/Extravio'];
 const FORMAS_PAGAMENTO_OPTS = ['Pix', 'Dinheiro', 'Cartão'];
 const BANCOS_PAGAMENTO_OPTS = ['Banco do Brasil', 'Sicredi', 'Cresol'];
 
@@ -5047,13 +5047,16 @@ async function renderProcessoDetalhe(id) {
   const dadosEsp = {};
   {
     const _resolveArma = async (armaIdStr) => {
-      if (!armaIdStr || !armaIdStr.includes('|')) return armaIdStr;
-      const parts = armaIdStr.split('|');
+      if (!armaIdStr) return armaIdStr;
+      const temPipe = String(armaIdStr).includes('|');
+      const parts = String(armaIdStr).split('|');
+      // Guias automáticas guardam só o id da arma (sem "|"): mesmo assim buscamos os dados
       try {
         const a = await App.graph.getItem(CONFIG.listas.armas, parts[0]);
-        return [a.Especie||parts[2], a.Marca||'', a.Modelo||'', a.Calibre||parts[3]].filter(Boolean).join(' ').trim();
+        const desc = [a.Especie||parts[2]||'', a.Marca||'', a.Modelo||'', a.Calibre||parts[3]||''].filter(Boolean).join(' ').trim();
+        return desc || armaIdStr;
       } catch(e) {
-        return [parts[2], parts[3]].filter(Boolean).join(' ') || armaIdStr;
+        return temPipe ? ([parts[2], parts[3]].filter(Boolean).join(' ') || armaIdStr) : armaIdStr;
       }
     };
     for (const [k, v] of Object.entries(dadosEspRaw)) {
@@ -5313,7 +5316,7 @@ async function renderProcessoDetalhe(id) {
               <label style="font-size:12px">N° Protocolo</label>
               <input type="text" inputmode="numeric" pattern="[0-9]*" name="NumeroProtocolo" value="" placeholder="Apenas números" style="margin-bottom:10px" oninput="this.value=this.value.replace(/\\D/g,'')" />
               <label style="font-size:12px">Data do Protocolo no Sistema</label>
-              <input type="date" name="DataProtocoloSistema" value="" style="margin-bottom:14px" />
+              <input type="date" name="DataProtocoloSistema" value="${new Date().toISOString().split('T')[0]}" style="margin-bottom:14px" />
               <button type="submit" class="btn btn-outline" style="width:100%"><i class="bi bi-floppy"></i> Salvar Protocolo</button>
             </form>`}
           </div>
@@ -5562,6 +5565,8 @@ async function deferirProcesso(id) {
   const modal = document.createElement('div');
   modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center';
   const hoje = new Date().toISOString().split('T')[0];
+  // Validade padrão da Guia de Tráfego = data de emissão + 6 meses
+  const hoje6 = (() => { const d = new Date(hoje + 'T00:00:00'); d.setMonth(d.getMonth() + 6); return d.toISOString().split('T')[0]; })();
   modal.innerHTML = `
     <div style="background:#fff;border-radius:10px;padding:24px;max-width:420px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.2);overflow-y:auto;max-height:90vh">
       <h3 style="margin:0 0 8px;font-size:16px;color:#15803d"><i class="bi bi-check-circle me-2"></i>Deferir Processo</h3>
@@ -5572,9 +5577,9 @@ async function deferirProcesso(id) {
       <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;padding:10px;margin-bottom:12px">
         <div style="font-size:12px;font-weight:700;color:#0369a1;margin-bottom:8px"><i class="bi bi-file-earmark-text me-1"></i>Guia de Tráfego — Datas do Documento</div>
         <label style="font-size:12px;font-weight:600">Data de Emissão</label>
-        <input type="date" id="modal-data-emissao-guia" value="${hoje}" style="margin-top:4px;margin-bottom:8px;width:100%;box-sizing:border-box" />
-        <label style="font-size:12px;font-weight:600">Data de Validade</label>
-        <input type="date" id="modal-data-validade-guia" style="margin-top:4px;width:100%;box-sizing:border-box" />
+        <input type="date" id="modal-data-emissao-guia" value="${hoje}" oninput="(function(){var e=document.getElementById('modal-data-emissao-guia').value;var v=document.getElementById('modal-data-validade-guia');if(e&&v){var d=new Date(e+'T00:00:00');d.setMonth(d.getMonth()+6);v.value=d.toISOString().split('T')[0];}})()" style="margin-top:4px;margin-bottom:8px;width:100%;box-sizing:border-box" />
+        <label style="font-size:12px;font-weight:600">Data de Validade <span style="font-weight:400;color:#0369a1">(Emissão + 6 meses)</span></label>
+        <input type="date" id="modal-data-validade-guia" value="${hoje6}" style="margin-top:4px;width:100%;box-sizing:border-box" />
       </div>` : ''}
       ${_pedirCRAF ? `
       <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:10px;margin-bottom:12px">
@@ -6531,6 +6536,11 @@ async function registrarStatusHistorico(id) {
 
 async function onGruPagaChange(id, checked) {
   document.getElementById('campo-gru-data-pag').style.display = checked ? '' : 'none';
+  // Ao marcar, já preenche a data de pagamento com hoje (se estiver vazia)
+  if (checked) {
+    const inp = document.getElementById('input-gru-data');
+    if (inp && !inp.value) inp.value = new Date().toISOString().split('T')[0];
+  }
   showLoading();
   try {
     await App.graph.updateItem(CONFIG.listas.processos, id, {
@@ -9716,6 +9726,8 @@ async function renderProcessoEditar(id) {
   const d = (f) => processo[f] ? processo[f].split('T')[0] : '';
   const tipoPag = processo.TipoPagamento || 'À vista';
   const lockValor = !!processo.demandaId && !isAdminUser();
+  // Guia de Tráfego gerada automaticamente não tem cobrança própria (valor 0): oculta o quadro de Pagamento
+  const _autoGuiaEdit = processo.TipoProcesso === 'Guia de Tráfego' && _dadosEsp(processo).geradoAutomatico;
 
   document.getElementById('page-content').innerHTML = `
   <div style="margin-bottom:12px"><span style="color:var(--text-muted);font-size:13px">Cliente: </span><strong>${esc(processo.ClienteNome||'—')}</strong> &nbsp;·&nbsp; <span style="color:var(--text-muted);font-size:13px">Tipo: </span><strong>${esc(processo.TipoProcesso||'—')}</strong></div>
@@ -9731,7 +9743,7 @@ async function renderProcessoEditar(id) {
             </select>
           </div>
           <div><label>N° Protocolo</label><input name="NumeroProtocolo" value="${esc(processo.NumeroProtocolo||'')}" /></div>
-          <div><label>Data de Protocolo no Sistema</label><input type="date" name="DataProtocoloSistema" value="${d('DataProtocoloSistema')}" /></div>
+          <div><label>Data de Protocolo no Sistema</label><input type="date" name="DataProtocoloSistema" value="${d('DataProtocoloSistema') || new Date().toISOString().split('T')[0]}" /></div>
           <div><label>Status</label>
             <select name="Status">
               ${STATUS_PROCESSO.map(s => `<option value="${s}" ${processo.Status===s?'selected':''}>${s}</option>`).join('')}
@@ -9743,7 +9755,7 @@ async function renderProcessoEditar(id) {
         </div>
       </div>
     </div>
-    <div class="form-section">
+    <div class="form-section" style="${_autoGuiaEdit ? 'display:none' : ''}">
       <div class="form-section-title">Pagamento</div>
       <div class="form-body">
         <div class="form-grid">
