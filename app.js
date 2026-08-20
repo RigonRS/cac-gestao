@@ -8375,18 +8375,32 @@ async function renderWhatsApp() {
       .wa-rapida-item .txt{font-size:11px;color:#667781;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .wa-voltar{display:none;background:none;border:none;cursor:pointer;font-size:22px;color:#54656f;padding:0 6px 0 0;line-height:1;flex-shrink:0}
       /* ---- Modo celular (link ?app=wa): só a página do WhatsApp, estilo app ---- */
+      html.wa-mobile-html,body.wa-mobile-mode{overflow:hidden;width:100%;max-width:100vw}
       body.wa-mobile-mode #sidebar{display:none}
       body.wa-mobile-mode #page-header{display:none}
-      body.wa-mobile-mode #main-content{margin:0!important;padding:0!important}
-      body.wa-mobile-mode .wa-shell{height:100vh;height:100dvh;border:none;border-radius:0}
-      body.wa-mobile-mode .wa-side{width:100%!important;border-right:none}
+      body.wa-mobile-mode #main-content{margin:0!important;padding:0!important;width:100vw;max-width:100vw;overflow:hidden}
+      body.wa-mobile-mode .wa-shell{height:100vh;height:100dvh;width:100vw;max-width:100vw;border:none;border-radius:0;overflow:hidden}
+      body.wa-mobile-mode .wa-side{width:100vw!important;max-width:100vw;border-right:none}
       body.wa-mobile-mode .wa-resizer{display:none}
-      body.wa-mobile-mode .wa-main{display:none}
+      body.wa-mobile-mode .wa-main{display:none;width:100vw;max-width:100vw}
       body.wa-mobile-mode.wa-conv .wa-side{display:none}
       body.wa-mobile-mode.wa-conv .wa-main{display:flex}
       body.wa-mobile-mode .wa-voltar{display:inline-flex;align-items:center}
-      body.wa-mobile-mode .wa-thread{padding:14px 12px}
-      body.wa-mobile-mode .wa-msg{max-width:88%}
+      /* cabeçalho e barra de digitar TRAVADOS (não rolam junto) */
+      body.wa-mobile-mode .wa-header,body.wa-mobile-mode .wa-composer{flex-shrink:0;z-index:2}
+      body.wa-mobile-mode .wa-header{padding:9px 10px}
+      body.wa-mobile-mode .wa-composer{padding:8px 8px calc(8px + env(safe-area-inset-bottom,0px))}
+      /* leitura confortável e sem cortar no lado direito */
+      body.wa-mobile-mode .wa-thread{padding:10px 10px;gap:3px;overflow-x:hidden}
+      body.wa-mobile-mode .wa-msg{max-width:82%}
+      body.wa-mobile-mode .wa-bubble{font-size:15px;line-height:1.35}
+      body.wa-mobile-mode .wa-item .nome{font-size:16px}
+      body.wa-mobile-mode .wa-item .prev{font-size:13.5px}
+      body.wa-mobile-mode .wa-item{padding:11px 12px}
+      body.wa-mobile-mode .wa-bubble img.midia,body.wa-mobile-mode .wa-bubble video.midia{max-width:72vw}
+      /* no celular não há "passar o mouse": mostra sempre os botões de ação */
+      body.wa-mobile-mode .wa-msg .wa-acoes{opacity:1}
+      body.wa-mobile-mode .wa-input,body.wa-mobile-mode .wa-composer .txt{font-size:16px}
     </style>
     <div class="wa-shell">
       <div class="wa-side" id="wa-side" style="width:${Number(localStorage.getItem('waSideW')) || 340}px">
@@ -12476,7 +12490,12 @@ async function iniciarApp() {
   // Modo celular: link "?app=wa" abre SOMENTE a página do WhatsApp, adaptada ao celular
   if (/(?:^|[?&])app=wa(?:&|$)/.test(location.search)) {
     window._waMobile = true;
+    document.documentElement.classList.add('wa-mobile-html');
     document.body.classList.add('wa-mobile-mode');
+    // Trava a escala em 1:1 (evita a página "encolhida") e desabilita o zoom com dois dedos,
+    // que fazia o cabeçalho e a barra de digitar sumirem.
+    const vp = document.querySelector('meta[name="viewport"]');
+    if (vp) vp.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover');
     if ((location.hash.replace('#', '').split('?')[0] || '') !== 'whatsapp') location.hash = 'whatsapp';
   }
 
