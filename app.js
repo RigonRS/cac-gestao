@@ -8380,32 +8380,39 @@ async function renderWhatsApp() {
       .wa-rapida-item .txt{font-size:11px;color:#667781;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .wa-voltar{display:none;background:none;border:none;cursor:pointer;font-size:22px;color:#54656f;padding:0 6px 0 0;line-height:1;flex-shrink:0}
       /* ---- Modo celular (link ?app=wa): só a página do WhatsApp, estilo app ---- */
-      html.wa-mobile-html,body.wa-mobile-mode{overflow:hidden;width:100%;max-width:100vw}
-      body.wa-mobile-mode #sidebar{display:none}
-      body.wa-mobile-mode #page-header{display:none}
-      body.wa-mobile-mode #main-content{margin:0!important;padding:0!important;width:100vw;max-width:100vw;overflow:hidden}
-      body.wa-mobile-mode .wa-shell{height:100vh;height:100dvh;width:100vw;max-width:100vw;border:none;border-radius:0;overflow:hidden}
-      body.wa-mobile-mode .wa-side{width:100vw!important;max-width:100vw;border-right:none}
+      /* Nada pode ultrapassar a largura da tela (senão corta tudo na direita) */
+      html.wa-mobile-html,html.wa-mobile-html body{width:100%!important;max-width:100%!important;overflow-x:hidden!important}
+      body.wa-mobile-mode{overflow:hidden}
+      body.wa-mobile-mode #sidebar,body.wa-mobile-mode #page-header{display:none}
+      body.wa-mobile-mode #app-shell,body.wa-mobile-mode #main-content,body.wa-mobile-mode .wa-shell,
+      body.wa-mobile-mode .wa-side,body.wa-mobile-mode .wa-main,body.wa-mobile-mode .wa-header,
+      body.wa-mobile-mode .wa-status,body.wa-mobile-mode .wa-tabs,body.wa-mobile-mode .wa-search,
+      body.wa-mobile-mode .wa-list,body.wa-mobile-mode .wa-thread,body.wa-mobile-mode .wa-composer{
+        max-width:100vw!important;box-sizing:border-box!important;overflow-x:hidden}
+      body.wa-mobile-mode #main-content{margin:0!important;padding:0!important;width:100vw}
+      body.wa-mobile-mode .wa-shell{height:100vh;height:100dvh;width:100vw;border:none;border-radius:0;overflow:hidden}
+      body.wa-mobile-mode .wa-side{width:100vw!important;border-right:none}
       body.wa-mobile-mode .wa-resizer{display:none}
-      body.wa-mobile-mode .wa-main{display:none;width:100vw;max-width:100vw}
+      body.wa-mobile-mode .wa-main{display:none;width:100vw}
       body.wa-mobile-mode.wa-conv .wa-side{display:none}
       body.wa-mobile-mode.wa-conv .wa-main{display:flex}
       body.wa-mobile-mode .wa-voltar{display:inline-flex;align-items:center}
-      /* cabeçalho e barra de digitar TRAVADOS (não rolam junto) */
+      /* cabeçalho estilo WhatsApp: só voltar + foto + nome (esconde botões que estouram) */
       body.wa-mobile-mode .wa-header,body.wa-mobile-mode .wa-composer{flex-shrink:0;z-index:2}
-      body.wa-mobile-mode .wa-header{padding:9px 10px;overflow:hidden}
+      body.wa-mobile-mode .wa-header{padding:9px 10px}
+      body.wa-mobile-mode .wa-header .btn{display:none}
+      body.wa-mobile-mode .wa-desconectar{display:none}
       body.wa-mobile-mode .wa-composer{padding:8px 8px max(12px,env(safe-area-inset-bottom,0px))}
-      /* leitura confortável e SEM cortar no lado direito (balões encolhem) */
-      body.wa-mobile-mode .wa-thread{padding:10px 8px;gap:3px;overflow-x:hidden}
-      body.wa-mobile-mode .wa-msg{max-width:90%}
-      body.wa-mobile-mode .wa-bubble{font-size:15px;line-height:1.35;min-width:0;overflow-wrap:anywhere;word-break:break-word}
-      body.wa-mobile-mode .wa-item .nome{font-size:16px}
-      body.wa-mobile-mode .wa-item .prev{font-size:13.5px}
-      body.wa-mobile-mode .wa-item{padding:11px 12px}
-      body.wa-mobile-mode .wa-bubble img.midia,body.wa-mobile-mode .wa-bubble video.midia{max-width:68vw}
-      /* no celular não há "passar o mouse": mostra os botões de ação (menores) */
-      body.wa-mobile-mode .wa-msg .wa-acoes{opacity:1}
-      body.wa-mobile-mode .wa-msg .fwd{width:22px;height:22px;font-size:10px}
+      /* conversa: balões largos que quebram; SEM botões de ação ocupando espaço (igual ao app) */
+      body.wa-mobile-mode .wa-thread{padding:10px 7px;gap:2px}
+      body.wa-mobile-mode .wa-msg{max-width:85%}
+      body.wa-mobile-mode .wa-msg .wa-acoes{display:none}
+      body.wa-mobile-mode .wa-bubble{font-size:15.5px;line-height:1.34;padding:7px 10px 5px;min-width:0;overflow-wrap:anywhere;word-break:break-word}
+      body.wa-mobile-mode .wa-bubble img.midia,body.wa-mobile-mode .wa-bubble video.midia{max-width:70vw}
+      /* lista estilo WhatsApp: nomes e prévias maiores */
+      body.wa-mobile-mode .wa-item{padding:10px 12px}
+      body.wa-mobile-mode .wa-item .nome{font-size:16.5px}
+      body.wa-mobile-mode .wa-item .prev{font-size:14px}
       body.wa-mobile-mode .wa-composer .txt{font-size:16px}
     </style>
     <div class="wa-shell">
