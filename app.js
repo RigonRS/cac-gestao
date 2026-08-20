@@ -8336,6 +8336,11 @@ async function renderWhatsApp() {
       .wa-msg .fwd{background:#fff;border:none;border-radius:50%;width:26px;height:26px;color:#54656f;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.2);flex-shrink:0;font-size:12px;line-height:1}
       .wa-citada{border-left:3px solid #25d366;background:rgba(0,0,0,.05);border-radius:4px;padding:3px 8px;font-size:12px;color:#54656f;margin-bottom:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
       .wa-responder{position:absolute;bottom:100%;left:0;right:0;background:#f7f8fa;border-top:1px solid var(--border);padding:8px 12px;display:none;align-items:center;gap:8px}
+      .wa-anexo{position:absolute;bottom:100%;left:0;right:0;background:#f7f8fa;border-top:1px solid var(--border);padding:8px 12px;display:none;align-items:center;gap:10px}
+      .wa-anexo img{width:48px;height:48px;object-fit:cover;border-radius:6px;flex-shrink:0}
+      .wa-anexo .ico{width:48px;height:48px;border-radius:6px;background:#e9edef;display:flex;align-items:center;justify-content:center;font-size:22px;color:#54656f;flex-shrink:0}
+      .wa-anexo .an-nome{flex:1;min-width:0;font-size:13px;color:#111;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .wa-anexo .an-x{background:none;border:none;cursor:pointer;font-size:18px;color:#54656f;flex-shrink:0}
       .wa-responder .barra{width:3px;align-self:stretch;background:#25d366;border-radius:2px}
       .wa-responder .rtxt{flex:1;min-width:0;font-size:12px;color:#667781;overflow:hidden}
       .wa-responder .rnome{font-weight:600;color:#128c7e;font-size:12px}
@@ -8388,19 +8393,20 @@ async function renderWhatsApp() {
       body.wa-mobile-mode .wa-voltar{display:inline-flex;align-items:center}
       /* cabeçalho e barra de digitar TRAVADOS (não rolam junto) */
       body.wa-mobile-mode .wa-header,body.wa-mobile-mode .wa-composer{flex-shrink:0;z-index:2}
-      body.wa-mobile-mode .wa-header{padding:9px 10px}
-      body.wa-mobile-mode .wa-composer{padding:8px 8px calc(8px + env(safe-area-inset-bottom,0px))}
-      /* leitura confortável e sem cortar no lado direito */
-      body.wa-mobile-mode .wa-thread{padding:10px 10px;gap:3px;overflow-x:hidden}
-      body.wa-mobile-mode .wa-msg{max-width:82%}
-      body.wa-mobile-mode .wa-bubble{font-size:15px;line-height:1.35}
+      body.wa-mobile-mode .wa-header{padding:9px 10px;overflow:hidden}
+      body.wa-mobile-mode .wa-composer{padding:8px 8px max(12px,env(safe-area-inset-bottom,0px))}
+      /* leitura confortável e SEM cortar no lado direito (balões encolhem) */
+      body.wa-mobile-mode .wa-thread{padding:10px 8px;gap:3px;overflow-x:hidden}
+      body.wa-mobile-mode .wa-msg{max-width:90%}
+      body.wa-mobile-mode .wa-bubble{font-size:15px;line-height:1.35;min-width:0;overflow-wrap:anywhere;word-break:break-word}
       body.wa-mobile-mode .wa-item .nome{font-size:16px}
       body.wa-mobile-mode .wa-item .prev{font-size:13.5px}
       body.wa-mobile-mode .wa-item{padding:11px 12px}
-      body.wa-mobile-mode .wa-bubble img.midia,body.wa-mobile-mode .wa-bubble video.midia{max-width:72vw}
-      /* no celular não há "passar o mouse": mostra sempre os botões de ação */
+      body.wa-mobile-mode .wa-bubble img.midia,body.wa-mobile-mode .wa-bubble video.midia{max-width:68vw}
+      /* no celular não há "passar o mouse": mostra os botões de ação (menores) */
       body.wa-mobile-mode .wa-msg .wa-acoes{opacity:1}
-      body.wa-mobile-mode .wa-input,body.wa-mobile-mode .wa-composer .txt{font-size:16px}
+      body.wa-mobile-mode .wa-msg .fwd{width:22px;height:22px;font-size:10px}
+      body.wa-mobile-mode .wa-composer .txt{font-size:16px}
     </style>
     <div class="wa-shell">
       <div class="wa-side" id="wa-side" style="width:${Number(localStorage.getItem('waSideW')) || 340}px">
@@ -8428,6 +8434,7 @@ async function renderWhatsApp() {
         <div class="wa-thread" id="wa-thread" onscroll="waAtualizarDataFlutuante()"></div>
         <div class="wa-composer" id="wa-composer" style="display:none">
           <div class="wa-responder" id="wa-responder"></div>
+          <div class="wa-anexo" id="wa-anexo"></div>
           <div class="wa-emojis" id="wa-emojis"></div>
           <div class="wa-rapidas" id="wa-rapidas"></div>
           <button class="wa-iconbtn" onclick="waToggleEmojis()" title="Emojis"><i class="bi bi-emoji-smile"></i></button>
@@ -9008,6 +9015,7 @@ async function waAbrirPerfil() {
 async function waAbrir(jid) {
   window._wa.jidAtivo = jid;
   window._wa.respondendo = null; waRenderRespondendo();
+  if (window._wa.anexoPendente) waCancelarAnexo();
   if (window._waMobile) document.body.classList.add('wa-conv'); // celular: mostra a conversa
   waRenderLista();
   waRenderHeader();
@@ -9285,6 +9293,14 @@ async function waSalvarAssinatura() {
 
 async function waEnviar() {
   const input = document.getElementById('wa-input');
+  // Se há um anexo aguardando, envia o arquivo usando o texto digitado como legenda
+  if (window._wa.anexoPendente) {
+    const file = window._wa.anexoPendente.file;
+    const nome = window._wa.anexoPendente.nome;
+    waCancelarAnexo();                 // fecha a prévia (o texto continua no campo, vira legenda)
+    await waEnviarArquivoDireto(file, nome);
+    return;
+  }
   const txt = (input?.value || '').trim();
   if (!txt || !window._wa.jidAtivo) return;
   input.value = ''; waAutoGrow(input);
@@ -9386,10 +9402,36 @@ function waIniciarResize(e) {
   document.addEventListener('mouseup', soltar);
 }
 
-async function waEnviarArquivo(inputEl) {
+function waEnviarArquivo(inputEl) {
   const file = inputEl.files && inputEl.files[0];
   inputEl.value = '';
-  await waEnviarArquivoDireto(file);
+  waPrepararAnexo(file);   // mostra prévia + campo de legenda antes de enviar
+}
+
+// Coloca um arquivo/imagem "em espera" com prévia, para adicionar legenda antes de enviar
+function waPrepararAnexo(file, nomePadrao) {
+  if (!file || !window._wa.jidAtivo) return;
+  if (file.size > 25 * 1024 * 1024) { toast('Arquivo muito grande (máx. 25 MB).', 'warning'); return; }
+  if (window._wa.anexoPendente && window._wa.anexoPendente.url) { try { URL.revokeObjectURL(window._wa.anexoPendente.url); } catch (e) {} }
+  const nome = (file.name && file.name !== 'image.png') ? file.name : (nomePadrao || `colado-${Date.now()}.png`);
+  const ehImg = (file.type || '').startsWith('image/');
+  window._wa.anexoPendente = { file, nome, ehImg, url: ehImg ? URL.createObjectURL(file) : null };
+  waRenderAnexo();
+  const inp = document.getElementById('wa-input'); if (inp) inp.focus();
+}
+function waRenderAnexo() {
+  const el = document.getElementById('wa-anexo'); if (!el) return;
+  const a = window._wa.anexoPendente;
+  if (!a) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = 'flex';
+  const mini = a.ehImg ? `<img src="${a.url}" alt="" />` : `<div class="ico"><i class="bi bi-file-earmark-text"></i></div>`;
+  el.innerHTML = `${mini}<div class="an-nome">${esc(a.nome)}<div style="font-size:11px;color:#667781">Escreva uma legenda (opcional) e toque em enviar</div></div><button class="an-x" onclick="waCancelarAnexo()" title="Remover"><i class="bi bi-x-lg"></i></button>`;
+}
+function waCancelarAnexo() {
+  const a = window._wa.anexoPendente;
+  if (a && a.url) { try { URL.revokeObjectURL(a.url); } catch (e) {} }
+  window._wa.anexoPendente = null;
+  waRenderAnexo();
 }
 
 // Envia um arquivo/imagem (usado pelo anexo e pelo colar Ctrl+V)
@@ -9409,14 +9451,14 @@ async function waEnviarArquivoDireto(file, nomePadrao) {
 }
 
 // Colar (Ctrl+V) imagens/prints direto na conversa
-async function waColar(e) {
+function waColar(e) {
   const items = (e.clipboardData || window.clipboardData)?.items;
   if (!items || !window._wa.jidAtivo) return;
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
     if (it && it.type && it.type.startsWith('image/')) {
-      const file = it.getAsFile();   // precisa ser chamado antes de qualquer await
-      if (file) { e.preventDefault(); await waEnviarArquivoDireto(file); return; }
+      const file = it.getAsFile();
+      if (file) { e.preventDefault(); waPrepararAnexo(file); return; }  // mostra prévia p/ legenda
     }
   }
 }
@@ -11614,6 +11656,9 @@ async function renderPerfilOrcamentos(clienteId) {
               const isRejeitado = o.status === 'Rejeitado';
               const isAprovado  = o.status === 'Aprovado';
               const temDemanda  = isAprovado && demandas.some(d => String(d.orcamentoId) === String(o.id));
+              // Cor do valor: verde=pago, vermelho=rejeitado, amarelo escuro=pendente de pagamento
+              const corTotal = isRejeitado ? '#dc2626'
+                : (statusPagamentoOrcamento(o) === 'pago' ? '#16a34a' : '#b45309');
               const statusBadge = isPendente
                 ? `<span class="badge" style="background:#e2e8f0;color:#64748b">Pendente</span>`
                 : isRejeitado
@@ -11640,7 +11685,7 @@ async function renderPerfilOrcamentos(clienteId) {
                 <td style="white-space:nowrap">${fmtDate(o.data)}</td>
                 <td>${statusBadge}</td>
                 <td style="font-size:12px">${(o.itens||[]).map(i => `${i.qtd>1?i.qtd+'× ':''}${esc(i.tipo)}`).join('<br>')}</td>
-                <td style="white-space:nowrap;font-weight:600">${fmtTotalOrc(o)}</td>
+                <td style="white-space:nowrap;font-weight:700;color:${corTotal}">${fmtTotalOrc(o)}</td>
                 <td><span class="badge badge-blue">${esc(o.criadoPor||'—')}</span></td>
                 <td style="white-space:nowrap">${acoes}</td>
               </tr>`;
@@ -12495,7 +12540,7 @@ async function iniciarApp() {
     // Trava a escala em 1:1 (evita a página "encolhida") e desabilita o zoom com dois dedos,
     // que fazia o cabeçalho e a barra de digitar sumirem.
     const vp = document.querySelector('meta[name="viewport"]');
-    if (vp) vp.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover');
+    if (vp) vp.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no');
     if ((location.hash.replace('#', '').split('?')[0] || '') !== 'whatsapp') location.hash = 'whatsapp';
   }
 
