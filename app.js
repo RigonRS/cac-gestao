@@ -1683,6 +1683,7 @@ async function renderClientePerfil(id, tab = 'dados') {
         <button class="btn btn-outline btn-sm" onclick="imprimirDadosCliente('${id}')"><i class="bi bi-printer"></i> Imprimir Dados</button>
         <button class="btn btn-outline btn-sm" onclick="imprimirArmasCliente('${id}')"><i class="bi bi-printer"></i> Imprimir Armas</button>
         <button class="btn btn-outline btn-sm" onclick="acessarPortalCliente('${esc(cliente.CPF||'')}','${cliente.DataNascimento?normISO(cliente.DataNascimento):''}')" title="Abrir o portal deste cliente"><i class="bi bi-box-arrow-up-right"></i> Acessar Portal</button>
+        ${(cliente.Celular && CONFIG.waGatewayUrl && isExtrasUser()) ? `<button class="btn btn-sm" style="background:#25d366;color:#fff;border:none" onclick="abrirConversaWhatsAppCliente('${esc(cliente.Celular)}')" title="Abrir conversa no WhatsApp"><i class="bi bi-whatsapp"></i> WhatsApp</button>` : ''}
         <button class="btn btn-outline btn-sm" onclick="navigate('clientes/editar',{id:'${id}'})"><i class="bi bi-pencil"></i> Editar</button>
         ${!inativo ? `
         <button class="btn btn-primary btn-sm" onclick="navigate('processos/novo',{clienteId:'${id}'})"><i class="bi bi-plus-lg"></i> Novo Processo</button>
@@ -1697,6 +1698,14 @@ async function renderClientePerfil(id, tab = 'dados') {
     </div>
 
     ${tabContent}`;
+}
+
+// Abre a página do WhatsApp já na conversa com o cliente
+function abrirConversaWhatsAppCliente(celular) {
+  const dig = String(celular || '').replace(/\D/g, '');
+  if (dig.length < 8) { toast('Cliente sem celular válido cadastrado.', 'warning'); return; }
+  window._waAbrirPendente = { phone: dig, texto: '' };
+  navigate('whatsapp');
 }
 
 function renderPerfilDados(c) {
@@ -8364,6 +8373,20 @@ async function renderWhatsApp() {
       .wa-rapida-item:hover{background:#f0f2f5}
       .wa-rapida-item .lbl{font-size:13px;font-weight:600;color:#111}
       .wa-rapida-item .txt{font-size:11px;color:#667781;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .wa-voltar{display:none;background:none;border:none;cursor:pointer;font-size:22px;color:#54656f;padding:0 6px 0 0;line-height:1;flex-shrink:0}
+      /* ---- Modo celular (link ?app=wa): só a página do WhatsApp, estilo app ---- */
+      body.wa-mobile-mode #sidebar{display:none}
+      body.wa-mobile-mode #page-header{display:none}
+      body.wa-mobile-mode #main-content{margin:0!important;padding:0!important}
+      body.wa-mobile-mode .wa-shell{height:100vh;height:100dvh;border:none;border-radius:0}
+      body.wa-mobile-mode .wa-side{width:100%!important;border-right:none}
+      body.wa-mobile-mode .wa-resizer{display:none}
+      body.wa-mobile-mode .wa-main{display:none}
+      body.wa-mobile-mode.wa-conv .wa-side{display:none}
+      body.wa-mobile-mode.wa-conv .wa-main{display:flex}
+      body.wa-mobile-mode .wa-voltar{display:inline-flex;align-items:center}
+      body.wa-mobile-mode .wa-thread{padding:14px 12px}
+      body.wa-mobile-mode .wa-msg{max-width:88%}
     </style>
     <div class="wa-shell">
       <div class="wa-side" id="wa-side" style="width:${Number(localStorage.getItem('waSideW')) || 340}px">
@@ -8397,7 +8420,7 @@ async function renderWhatsApp() {
           <button class="wa-iconbtn" onclick="waToggleRapidas()" title="Mensagens rápidas"><i class="bi bi-lightning-charge"></i></button>
           <button class="wa-iconbtn" onclick="document.getElementById('wa-file').click()" title="Anexar arquivo"><i class="bi bi-paperclip"></i></button>
           <input type="file" id="wa-file" style="display:none" accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx" onchange="waEnviarArquivo(this)" />
-          <textarea class="txt" id="wa-input" rows="1" placeholder="Digite uma mensagem" oninput="waAutoGrow(this)" onkeydown="waInputKey(event)"></textarea>
+          <textarea class="txt" id="wa-input" rows="1" placeholder="Digite uma mensagem" oninput="waAutoGrow(this)" onkeydown="waInputKey(event)" onpaste="waColar(event)"></textarea>
           <button class="wa-send" onclick="waEnviar()"><i class="bi bi-send-fill"></i></button>
         </div>
       </div>
@@ -8757,6 +8780,7 @@ function waRenderHeader() {
   const numero = waFmtNumero(jid, chat.phone);
   header.style.display = 'flex';
   header.innerHTML = `
+    <button class="wa-voltar" onclick="waVoltarLista()" title="Voltar"><i class="bi bi-arrow-left"></i></button>
     <div class="wa-nome-link" style="display:flex;align-items:center;gap:10px;flex:1;min-width:0" onclick="waAbrirPerfil()" title="Ver perfil do contato">
       ${waAvatarHtml(nome, jid, 40)}
       <div style="flex:1;min-width:0">
@@ -8970,6 +8994,7 @@ async function waAbrirPerfil() {
 async function waAbrir(jid) {
   window._wa.jidAtivo = jid;
   window._wa.respondendo = null; waRenderRespondendo();
+  if (window._waMobile) document.body.classList.add('wa-conv'); // celular: mostra a conversa
   waRenderLista();
   waRenderHeader();
   document.getElementById('wa-composer').style.display = 'flex';
@@ -8981,9 +9006,20 @@ async function waAbrir(jid) {
     window._wa.msgs = arrays.flat().map(waNorm)
       .filter(m => { if (vistos.has(m.id)) return false; vistos.add(m.id); return true; })
       .sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    waMesclarEnviadas(); // reinsere mensagens recém-enviadas que o servidor ainda não devolveu
     waRenderThread();
   } catch (e) { document.getElementById('wa-thread').innerHTML = `<div style="color:var(--danger);font-size:13px;margin:auto">${esc(e.message)}</div>`; }
   jids.forEach(j => { const c = window._wa.chats.find(x => x.jid === j); if (c) c.unread = 0; });
+  waRenderLista();
+}
+
+// Celular: volta da conversa para a lista de conversas (seta no topo)
+function waVoltarLista() {
+  window._wa.jidAtivo = null;
+  document.body.classList.remove('wa-conv');
+  const h = document.getElementById('wa-header'); if (h) h.style.display = 'none';
+  const c = document.getElementById('wa-composer'); if (c) c.style.display = 'none';
+  const t = document.getElementById('wa-thread'); if (t) t.innerHTML = '';
   waRenderLista();
 }
 
@@ -9021,12 +9057,17 @@ function waBolha(m) {
   const remetente = (!me && ehGrupo && m.author) ? `<div style="font-size:12px;font-weight:600;color:#1f7aec;margin-bottom:2px">${esc(m.author)}</div>` : '';
   const rodape = `<div class="hora">${me && m.author && m.author !== 'sistema' ? esc(m.author) + ' · ' : ''}${hora}${m.savedPath ? ' <i class="bi bi-cloud-check" title="salvo na pasta do cliente"></i>' : ''}</div>`;
   const citada = m.replyBody ? `<div class="wa-citada">${waFmtTexto(String(m.replyBody).slice(0, 140))}</div>` : '';
-  const acoes = m.id ? `<div class="wa-acoes">
-      <button class="fwd" title="Responder" onclick="waResponder('${esc(String(m.id))}')"><i class="bi bi-reply-fill"></i></button>
-      <button class="fwd" title="Encaminhar" onclick="waEncaminhar('${esc(String(m.id))}')"><i class="bi bi-arrow-return-right"></i></button>
-    </div>` : '';
   const reacao = m.reaction ? `<div class="wa-reacao">${esc(m.reaction)}</div>` : '';
-  return `<div class="wa-msg ${me ? 'me' : 'them'}"><div class="wa-bubble ${me ? 'me' : 'them'}">${remetente}${citada}${corpo}${rodape}${reacao}</div>${acoes}</div>`;
+  // Botão de download para qualquer arquivo (foto, vídeo, áudio, documento)
+  const btnBaixar = m.mediaUrl
+    ? `<button class="fwd" title="Baixar arquivo" onclick="waBaixarMidia('${esc(base + m.mediaUrl)}','${esc(String(m.mediaName || 'arquivo').replace(/['\\]/g, ''))}')"><i class="bi bi-download"></i></button>`
+    : '';
+  const acoesFull = (m.id || btnBaixar) ? `<div class="wa-acoes">
+      ${m.id ? `<button class="fwd" title="Responder" onclick="waResponder('${esc(String(m.id))}')"><i class="bi bi-reply-fill"></i></button>
+      <button class="fwd" title="Encaminhar" onclick="waEncaminhar('${esc(String(m.id))}')"><i class="bi bi-arrow-return-right"></i></button>` : ''}
+      ${btnBaixar}
+    </div>` : '';
+  return `<div class="wa-msg ${me ? 'me' : 'them'}"><div class="wa-bubble ${me ? 'me' : 'them'}">${remetente}${citada}${corpo}${rodape}${reacao}</div>${acoesFull}</div>`;
 }
 
 // Rótulo de data estilo WhatsApp (Hoje / Ontem / dia da semana / dd/mm/aaaa)
@@ -9043,6 +9084,7 @@ function waChaveDia(ts) { const d = new Date(ts * 1000); return `${d.getFullYear
 
 function waRenderThread() {
   const t = document.getElementById('wa-thread'); if (!t) return;
+  waMesclarEnviadas(); // garante que mensagens enviadas por nós não sumam
   const msgs = window._wa.msgs || [];
   if (!msgs.length) { t.innerHTML = '<div style="color:#667781;font-size:13px;margin:auto">Nenhuma mensagem.</div>'; return; }
   let html = ''; let diaAtual = null;
@@ -9125,9 +9167,22 @@ function waOnMessage(raw) {
   else { window._wa.chats.push({ jid: m.jid, name: m.name || null, phone: m.phone, last_message: resumo, last_ts: m.ts, unread: (m.fromMe || noGrupoAberto) ? 0 : 1 }); }
   window._wa.chats.sort((a, b) => (b.last_ts || 0) - (a.last_ts || 0));
   waRenderLista();
-  if (noGrupoAberto && !window._wa.msgs.some(x => x.id === m.id)) {
-    window._wa.msgs.push(m); waRenderThread();
-    if (!m.fromMe) { const cc = window._wa.chats.find(x => x.jid === m.jid); if (cc) cc.unread = 0; waApi('/messages?jid=' + encodeURIComponent(m.jid)).catch(() => {}); }
+  if (noGrupoAberto) {
+    const msgs = window._wa.msgs || (window._wa.msgs = []);
+    // Casa com uma mensagem otimista já exibida (id igual OU nossa msg com mesmo texto/horário próximo)
+    const existente = msgs.find(x => waMesmaMsg(x, m));
+    if (existente) {
+      // Atualiza os dados reais (id definitivo, mídia, caminho salvo) sem duplicar
+      existente.id = m.id || existente.id;
+      if (m.mediaUrl) existente.mediaUrl = m.mediaUrl;
+      if (m.mediaName) existente.mediaName = m.mediaName;
+      if (m.savedPath) existente.savedPath = m.savedPath;
+      if (m.reaction) existente.reaction = m.reaction;
+      waRenderThread();
+    } else {
+      msgs.push(m); waRenderThread();
+      if (!m.fromMe) { const cc = window._wa.chats.find(x => x.jid === m.jid); if (cc) cc.unread = 0; waApi('/messages?jid=' + encodeURIComponent(m.jid)).catch(() => {}); }
+    }
   }
 }
 
@@ -9225,8 +9280,43 @@ async function waEnviar() {
   const texto = (waDevePrefixarOperador() ? waPrefixoOperador() : '') + txt;
   try {
     const r = await waApi('/send', { method: 'POST', body: JSON.stringify({ jid: window._wa.jidAtivo, text: texto, quotedId }) });
-    if (r && r.message) waOnMessage(r.message);   // mostra imediatamente (deduplicado com o eco)
+    if (r && r.message) { waRegistrarEnviada(r.message); waOnMessage(r.message); }  // mostra imediatamente (deduplicado com o eco)
   } catch (e) { toast(e.message, 'error'); input.value = txt; waAutoGrow(input); }
+}
+
+// ---- Rede de segurança contra "mensagem enviada some" ----
+// Guarda as mensagens enviadas por esta página (últimos minutos) e as reinsere
+// em qualquer re-renderização, para não sumirem quando chega mensagem de outro aparelho.
+function waConvKey(jid) {
+  const chat = waGrupoDoJid(jid) || {};
+  const tel = chat.phone ? String(chat.phone).replace(/\D/g, '') : String(jid || '').split('@')[0].replace(/\D/g, '');
+  return tel.length >= 8 ? tel.slice(-8) : String(jid || '');
+}
+function waRegistrarEnviada(raw) {
+  window._wa.enviadas = window._wa.enviadas || [];
+  const m = waNorm(raw);
+  window._wa.enviadas.push({ key: waConvKey(window._wa.jidAtivo), t: Date.now(), m });
+  window._wa.enviadas = window._wa.enviadas.filter(x => Date.now() - x.t < 300000); // 5 min
+}
+// Confere se duas mensagens são "a mesma".
+// Mídia sempre casa pelo id (o mesmo arquivo tem o mesmo id); texto pode casar
+// pelo conteúdo (para reconciliar a versão otimista com o eco, que podem ter ids diferentes).
+function waMesmaMsg(a, b) {
+  if (a.id && b.id && a.id === b.id) return true;
+  return a.fromMe && b.fromMe
+    && (a.type || 'text') === 'text' && (b.type || 'text') === 'text'
+    && (a.body || '') === (b.body || '') && (a.body || '').length > 0
+    && Math.abs((a.ts || 0) - (b.ts || 0)) <= 120;
+}
+function waMesclarEnviadas() {
+  if (!window._wa.jidAtivo || !Array.isArray(window._wa.enviadas)) return;
+  const key = waConvKey(window._wa.jidAtivo);
+  const msgs = window._wa.msgs || (window._wa.msgs = []);
+  for (const e of window._wa.enviadas) {
+    if (e.key !== key) continue;
+    if (!msgs.some(x => waMesmaMsg(x, e.m))) msgs.push(e.m);
+  }
+  msgs.sort((a, b) => (a.ts || 0) - (b.ts || 0));
 }
 
 // Campo de mensagem que cresce até 8 linhas
@@ -9285,16 +9375,49 @@ function waIniciarResize(e) {
 async function waEnviarArquivo(inputEl) {
   const file = inputEl.files && inputEl.files[0];
   inputEl.value = '';
+  await waEnviarArquivoDireto(file);
+}
+
+// Envia um arquivo/imagem (usado pelo anexo e pelo colar Ctrl+V)
+async function waEnviarArquivoDireto(file, nomePadrao) {
   if (!file || !window._wa.jidAtivo) return;
   if (file.size > 25 * 1024 * 1024) { toast('Arquivo muito grande (máx. 25 MB).', 'warning'); return; }
+  const nome = (file.name && file.name !== 'image.png') ? file.name : (nomePadrao || `colado-${Date.now()}.png`);
   const legenda = (document.getElementById('wa-input')?.value || '').trim();
   const captionFinal = ((waDevePrefixarOperador() ? waPrefixoOperador() : '') + legenda).trim() || undefined;
   try {
     showLoading();
     const dataBase64 = await waFileParaBase64(file);
-    await waApi('/send-media', { method: 'POST', body: JSON.stringify({ jid: window._wa.jidAtivo, filename: file.name, mimetype: file.type || 'application/octet-stream', dataBase64, caption: captionFinal }) });
-    const inp = document.getElementById('wa-input'); if (inp) inp.value = '';
+    const r = await waApi('/send-media', { method: 'POST', body: JSON.stringify({ jid: window._wa.jidAtivo, filename: nome, mimetype: file.type || 'application/octet-stream', dataBase64, caption: captionFinal }) });
+    if (r && r.message) { waRegistrarEnviada(r.message); waOnMessage(r.message); }
+    const inp = document.getElementById('wa-input'); if (inp) { inp.value = ''; waAutoGrow(inp); }
   } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+// Colar (Ctrl+V) imagens/prints direto na conversa
+async function waColar(e) {
+  const items = (e.clipboardData || window.clipboardData)?.items;
+  if (!items || !window._wa.jidAtivo) return;
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (it && it.type && it.type.startsWith('image/')) {
+      const file = it.getAsFile();   // precisa ser chamado antes de qualquer await
+      if (file) { e.preventDefault(); await waEnviarArquivoDireto(file); return; }
+    }
+  }
+}
+
+// Baixar arquivo (foto, vídeo, áudio, documento) com o nome original
+async function waBaixarMidia(url, filename) {
+  try {
+    const res = await fetch(url);
+    const blob = await res.blob();
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objUrl; a.download = filename || 'arquivo';
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(objUrl); a.remove(); }, 1500);
+  } catch (e) { window.open(url, '_blank'); }
 }
 
 function waFileParaBase64(file) {
@@ -12349,6 +12472,13 @@ async function iniciarApp() {
   document.getElementById('setup-screen').style.display  = 'none';
   document.getElementById('app-shell').style.display     = 'flex';
   document.getElementById('user-name').textContent       = App.account?.name || '';
+
+  // Modo celular: link "?app=wa" abre SOMENTE a página do WhatsApp, adaptada ao celular
+  if (/(?:^|[?&])app=wa(?:&|$)/.test(location.search)) {
+    window._waMobile = true;
+    document.body.classList.add('wa-mobile-mode');
+    if ((location.hash.replace('#', '').split('?')[0] || '') !== 'whatsapp') location.hash = 'whatsapp';
+  }
 
   // Mostrar itens de menu restritos a Matheus e Simone
   if (isAdminUser()) {
