@@ -8389,11 +8389,14 @@ async function renderWhatsApp() {
       body.wa-mobile-mode .wa-status,body.wa-mobile-mode .wa-tabs,body.wa-mobile-mode .wa-search,
       body.wa-mobile-mode .wa-list,body.wa-mobile-mode .wa-thread,body.wa-mobile-mode .wa-composer{
         max-width:100vw!important;box-sizing:border-box!important;overflow-x:hidden}
-      body.wa-mobile-mode #main-content{margin:0!important;padding:0!important;width:100vw}
-      body.wa-mobile-mode .wa-shell{height:100vh;height:100dvh;width:100vw;border:none;border-radius:0;overflow:hidden}
-      body.wa-mobile-mode .wa-side{width:100vw!important;border-right:none}
+      body.wa-mobile-mode #main-content{margin:0!important;padding:0!important;width:100%}
+      /* IMPORTANTE: o #page-content tinha padding:24px que empurrava tudo p/ fora da tela
+         (isso fazia o navegador "diminuir tudo" para tentar encaixar o que vazava) */
+      body.wa-mobile-mode #page-content{padding:0!important;margin:0!important;width:100%;max-width:100vw;overflow:hidden}
+      body.wa-mobile-mode .wa-shell{height:100vh;height:100dvh;width:100%;border:none;border-radius:0;overflow:hidden}
+      body.wa-mobile-mode .wa-side{width:100%!important;border-right:none}
       body.wa-mobile-mode .wa-resizer{display:none}
-      body.wa-mobile-mode .wa-main{display:none;width:100vw}
+      body.wa-mobile-mode .wa-main{display:none;width:100%}
       body.wa-mobile-mode.wa-conv .wa-side{display:none}
       body.wa-mobile-mode.wa-conv .wa-main{display:flex}
       body.wa-mobile-mode .wa-voltar{display:inline-flex;align-items:center}
