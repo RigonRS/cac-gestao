@@ -8383,7 +8383,8 @@ async function renderWhatsApp() {
       /* Nada pode ultrapassar a largura da tela (senão corta tudo na direita) */
       html.wa-mobile-html,html.wa-mobile-html body{width:100%!important;max-width:100%!important;overflow-x:hidden!important}
       body.wa-mobile-mode{overflow:hidden}
-      body.wa-mobile-mode #sidebar,body.wa-mobile-mode #page-header{display:none}
+      body.wa-mobile-mode #sidebar{display:none}
+      body.wa-mobile-mode #page-header{display:none!important}
       body.wa-mobile-mode #app-shell,body.wa-mobile-mode #main-content,body.wa-mobile-mode .wa-shell,
       body.wa-mobile-mode .wa-side,body.wa-mobile-mode .wa-main,body.wa-mobile-mode .wa-header,
       body.wa-mobile-mode .wa-status,body.wa-mobile-mode .wa-tabs,body.wa-mobile-mode .wa-search,
@@ -11825,6 +11826,9 @@ async function renderOrcamentos() {
                           .sort((a,b) => (b.data||'').localeCompare(a.data||''));
 
     function linhaOrc(o, modo) {
+      // Cor do valor: verde=pago, vermelho=rejeitado, amarelo escuro=pendente de pagamento
+      const corTotal = (o.status === 'Rejeitado') ? '#dc2626'
+        : (statusPagamentoOrcamento(o) === 'pago' ? '#16a34a' : '#b45309');
       let acoesBtns = '';
       if (modo === 'pendente') {
         acoesBtns = `
@@ -11845,7 +11849,7 @@ async function renderOrcamentos() {
         <td style="white-space:nowrap">${fmtDate(o.data)}</td>
         <td>${esc(o.clienteNome||'—')}</td>
         <td style="font-size:12px">${(o.itens||[]).map(i => `${i.qtd>1?i.qtd+'× ':''}${esc(i.tipo)}`).join('<br>')}</td>
-        <td style="white-space:nowrap;font-weight:600">${fmtTotalOrc(o)}</td>
+        <td style="white-space:nowrap;font-weight:700;color:${corTotal}">${fmtTotalOrc(o)}</td>
         <td><span class="badge badge-blue">${esc(o.criadoPor||'—')}</span></td>
         <td style="white-space:nowrap">${acoesBtns}</td>
       </tr>`;
@@ -11876,7 +11880,7 @@ async function renderOrcamentos() {
           <td style="white-space:nowrap;font-weight:600">${esc(o.numero||'—')}</td>
           <td style="white-space:nowrap">${fmtDate(o.data)}</td>
           <td>${esc(o.clienteNome||'—')}</td>
-          <td style="white-space:nowrap;font-weight:600">${fmtMoeda(o.total)}</td>
+          <td style="white-space:nowrap;font-weight:700;color:#b45309">${fmtMoeda(o.total)}</td>
           <td><span class="badge ${lbl.c}">${lbl.t}</span></td>
           <td style="white-space:nowrap"><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();abrirPagamentoOrcamento('${o.id}')" title="Registrar/ver pagamento"><i class="bi bi-cash-coin" style="color:var(--accent)"></i></button></td>
         </tr>`;
@@ -12631,7 +12635,8 @@ async function iniciarApp() {
   renderPage();
 
   // Notificações: gera automáticas, atualiza o sino e avisa se houver novas (uma vez por sessão do navegador)
-  (async () => {
+  // No modo celular (só WhatsApp) não mostramos o sino nem o popup de notificações.
+  if (!window._waMobile) (async () => {
     await autoParadoProcessos();
     await gerarNotificacoesAutomaticas();
     const naoLidas = await atualizarBadgeNotificacoes();
