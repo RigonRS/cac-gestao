@@ -617,6 +617,7 @@ async function renderDashboard() {
             <div style="text-align:right;flex-shrink:0">
               <span class="badge badge-green">Deferido</span>
               <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${fmtDate(dataDef)}</div>
+              ${p.DataProtocoloSistema ? `<div style="font-size:11px;color:var(--text-muted)"><i class="bi bi-stopwatch"></i> ${tempoDecorridoProcesso(p)}</div>` : ''}
               ${deferidoPor ? `<div style="font-size:11px;color:var(--text-muted)"><i class="bi bi-person-fill"></i> ${esc(deferidoPor)}</div>` : ''}
             </div>
           </div>`).join('')}
@@ -2265,6 +2266,21 @@ async function deletarDocumento(id, clienteId) {
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
+// Tempo decorrido do processo: da Data de Protocolo até o Deferimento (ou até hoje, se não deferido).
+// Até 30 dias mostra "XD"; acima disso mostra "XM + XXD" (mês = 30 dias).
+function tempoDecorridoProcesso(p) {
+  const ini = p.DataProtocoloSistema ? p.DataProtocoloSistema.split('T')[0] : '';
+  if (!ini) return '—';
+  const fim = getDataDeferido(p) || new Date().toISOString().split('T')[0];
+  let dias = Math.floor((new Date(fim + 'T00:00:00') - new Date(ini + 'T00:00:00')) / 86400000);
+  if (!Number.isFinite(dias)) return '—';
+  if (dias < 0) dias = 0;
+  if (dias <= 30) return `${dias}D`;
+  const meses = Math.floor(dias / 30);
+  const rest = dias % 30;
+  return `${meses}M + ${String(rest).padStart(2, '0')}D`;
+}
+
 function renderPerfilProcessos(processos, clienteId) {
   return `
     <div class="toolbar">
@@ -2274,16 +2290,17 @@ function renderPerfilProcessos(processos, clienteId) {
     <div class="card">
       <div class="table-wrapper">
         <table>
-          <thead><tr><th>Tipo</th><th>Protocolo</th><th>Abertura</th><th>Prazo</th><th>Status</th><th>Ações</th></tr></thead>
+          <thead><tr><th>Tipo</th><th>Protocolo</th><th>Data de Protocolo</th><th>Abertura</th><th>Decorrido</th><th>Status</th><th>Ações</th></tr></thead>
           <tbody>${processos.length === 0
-            ? `<tr><td colspan="6"><div class="empty-state"><i class="bi bi-folder-x"></i><p>Nenhum processo.</p></div></td></tr>`
+            ? `<tr><td colspan="7"><div class="empty-state"><i class="bi bi-folder-x"></i><p>Nenhum processo.</p></div></td></tr>`
             : processos.sort((a,b) => (b.DataAbertura||'').localeCompare(a.DataAbertura||'')).map(p => {
                 const b = statusBadge(p.Status);
                 return `<tr style="cursor:pointer" onclick="navigate('processos/detalhe',{id:'${p.id}'})">
                   <td><strong>${esc(p.TipoProcesso||'—')}</strong></td>
                   <td>${esc(p.NumeroProtocolo||'—')}</td>
+                  <td>${fmtDate(p.DataProtocoloSistema ? p.DataProtocoloSistema.split('T')[0] : '')}</td>
                   <td>${fmtDate(p.DataAbertura ? p.DataAbertura.split('T')[0] : '')}</td>
-                  <td>${fmtDate(p.DataPrazo ? p.DataPrazo.split('T')[0] : '')}</td>
+                  <td><span style="font-weight:600">${tempoDecorridoProcesso(p)}</span></td>
                   <td><span class="badge ${b.cls}">${b.txt}</span></td>
                   <td><div class="btn-group">
                     <button class="btn btn-outline btn-sm" onclick="event.stopPropagation();navigate('processos/detalhe',{id:'${p.id}'})"><i class="bi bi-eye"></i></button>
