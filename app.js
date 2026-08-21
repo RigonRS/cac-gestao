@@ -392,6 +392,7 @@ async function renderPage() {
       case 'clientes/perfil':      await renderClientePerfil(params.id, params.tab || 'dados'); break;
       case 'armas/novo':           await renderArmaForm(params.clienteId); break;
       case 'armas/editar':         await renderArmaForm(params.clienteId, params.id); break;
+      case 'armas/importar':       await renderArmaImportacao(params); break;
       case 'documentos/novo':      await renderDocumentoForm(params.clienteId); break;
       case 'documentos/editar':    await renderDocumentoForm(params.clienteId, params.id); break;
       case 'processos':            await renderProcessosList(); break;
@@ -2161,8 +2162,13 @@ function renderPerfilArmas(armas, clienteId, cliente) {
   return `
     <div class="toolbar">
       <span style="font-size:13px;color:var(--text-muted)">${armas.length} arma(s) cadastrada(s)</span>
-      ${!isClienteInativo(cliente) ? `<button class="btn btn-primary" onclick="navigate('armas/novo',{clienteId:'${clienteId}'})"><i class="bi bi-plus-lg"></i> Adicionar Arma</button>` : ''}
+      ${!isClienteInativo(cliente) ? `
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${isExtrasUser() ? `<button class="btn btn-outline" onclick="abrirImportSinarm('${clienteId}')"><i class="bi bi-download"></i> Importar do SINARM</button>` : ''}
+        <button class="btn btn-primary" onclick="navigate('armas/novo',{clienteId:'${clienteId}'})"><i class="bi bi-plus-lg"></i> Adicionar Arma</button>
+      </div>` : ''}
     </div>
+    <div id="painel-sinarm-armas" style="display:none;margin-bottom:14px"></div>
     ${resumoBlock}
     <div class="card">
       <div class="table-wrapper">
@@ -12945,4 +12951,372 @@ function togglePainelCertidoes() {
   } else {
     painel.style.display = 'none';
   }
+}
+
+// ============================================================
+// IMPORTAÇÃO DE ACERVO (ARMAS) DO SINARM CAC
+// ============================================================
+
+// Opções fixas dos campos de arma (mesmos valores do formulário renderArmaForm)
+const ARMA_ENUMS = {
+  Especie:            ['Pistola', 'Espingarda', 'Revólver', 'Carabina/Fuzil'],
+  GrupoCalibre:       ['Permitido', 'Restrito'],
+  StatusArma:         ['Ativa', 'Furtada', 'Extraviada'],
+  NumeroCanos:        ['1', '2', '3', '4'],
+  AlmaCano:           ['Raiada', 'Lisa'],
+  SentidoRaias:       ['Não tem', 'Direita', 'Esquerda'],
+  Acabamento:         ['Oxidado', 'Aço Inox', 'Niquelado', 'Outros'],
+  Funcionamento:      ['Semi-Automático', 'Tiro-Simples', 'Repetição'],
+  AtividadeCadastrada:['Colecionador', 'Atirador', 'Caçador'],
+  PaisFabricacao:     PAISES_FABRICACAO,
+};
+
+function _armaSemAcento(s) { return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, ''); }
+function _armaUp(s) { return _armaSemAcento(s).toUpperCase().trim(); }
+
+// Converte um objeto "cru" raspado do SINARM nos campos internos da arma.
+// Aceita chaves flexíveis (numeroSerie, especie, calibre, grupoCalibre, ...).
+function mapearArmaSinarm(raw) {
+  const r = raw || {};
+  const val = (...ks) => { for (const k of ks) { if (r[k] != null && String(r[k]).trim() !== '') return String(r[k]).trim(); } return ''; };
+
+  // Espécie
+  const espKey = _armaUp(val('especie', 'Espécie')).replace(/\s*\/\s*/g, '/');
+  let Especie = { 'PISTOLA': 'Pistola', 'ESPINGARDA': 'Espingarda', 'REVOLVER': 'Revólver', 'CARABINA/FUZIL': 'Carabina/Fuzil' }[espKey] || '';
+  if (!Especie && (espKey.includes('CARABINA') || espKey.includes('FUZIL'))) Especie = 'Carabina/Fuzil';
+
+  // Calibre + Grupo
+  let Calibre = val('calibre', 'Calibre').replace(/\s*\((permitido|restrito)\)\s*/i, '').trim();
+  const grpRaw = _armaUp(val('grupoCalibre', 'Grupo Calibre') || val('calibre', 'Calibre'));
+  const GrupoCalibre = grpRaw.includes('RESTRITO') ? 'Restrito' : (grpRaw.includes('PERMITIDO') ? 'Permitido' : '');
+
+  // País (casa contra a lista, ignorando acentos/caixa)
+  const paisRaw = val('paisFabricacao', 'País Fabricação', 'País de Fabricação');
+  const PaisFabricacao = PAISES_FABRICACAO.find(p => _armaUp(p) === _armaUp(paisRaw)) || '';
+
+  const alma = _armaUp(val('almaCano', 'Alma do Cano'));
+  const AlmaCano = alma.includes('RAIAD') ? 'Raiada' : (alma.includes('LISA') ? 'Lisa' : '');
+
+  const sent = _armaUp(val('sentidoRaias', 'Sentido da Raia'));
+  const SentidoRaias = sent.includes('DIREITA') ? 'Direita' : (sent.includes('ESQUERDA') ? 'Esquerda' : (val('sentidoRaias', 'Sentido da Raia') ? 'Não tem' : ''));
+
+  const acb = _armaUp(val('acabamento', 'Acabamento'));
+  const Acabamento = acb.includes('OXIDAD') ? 'Oxidado' : (acb.includes('INOX') ? 'Aço Inox' : (acb.includes('NIQUELAD') ? 'Niquelado' : (acb ? 'Outros' : '')));
+
+  const fun = _armaUp(val('funcionamento', 'Funcionamento'));
+  const Funcionamento = fun.includes('REPETIC') ? 'Repetição' : (fun.includes('SEMI') ? 'Semi-Automático' : (fun.includes('SIMPLES') ? 'Tiro-Simples' : ''));
+
+  const ati = _armaUp(val('atividade', 'Atividade'));
+  const AtividadeCadastrada = ati.includes('CACADOR') ? 'Caçador' : (ati.includes('ATIRADOR') ? 'Atirador' : (ati.includes('COLECIONADOR') ? 'Colecionador' : ''));
+
+  const st = _armaUp(val('status', 'Status'));
+  const StatusArma = st.includes('FURTAD') ? 'Furtada' : (st.includes('EXTRAVIAD') ? 'Extraviada' : 'Ativa');
+
+  const nc = val('numeroCanos', 'Nº de Canos').replace(/\D/g, '');
+  const NumeroCanos = ['1', '2', '3', '4'].includes(nc) ? nc : '';
+
+  // Data de aquisição dd/mm/aaaa -> aaaa-mm-dd
+  let DataAquisicao = null;
+  const mAq = val('dataAquisicao', 'Aquisição').match(/(\d{2})\/(\d{2})\/(\d{4})/);
+  if (mAq) DataAquisicao = `${mAq[3]}-${mAq[2]}-${mAq[1]}`;
+
+  return {
+    NumeroSerie:    val('numeroSerie', 'Nº da arma', 'N° da arma', 'Nº Ordem', 'N° Ordem'),
+    DataAquisicao,
+    StatusArma,
+    OrgaoCadastro:  'PF - Exército',
+    NumeroSIGMA:    null, NumeroSINARM: null, NumeroRegistro: null,
+    AtividadeCadastrada,
+    Modelo:         val('modelo', 'Modelo'),
+    Calibre,
+    Especie,
+    Marca:          val('marca', 'Marca'),
+    GrupoCalibre,
+    PaisFabricacao,
+    CapacidadeTiro: val('capacidadeTiro', 'Quant. Capacidade Cartucho'),
+    NumeroCanos,
+    ComprimentoCano: null,
+    AlmaCano,
+    NumeroRaias:    val('numeroRaias', 'Nº de Raias').replace(/\D/g, ''),
+    SentidoRaias,
+    Acabamento,
+    Funcionamento,
+    Observacoes:    '',
+  };
+}
+
+// Campos importantes que ficaram sem valor (mostrados como aviso na prévia)
+function _importCamposFaltando(a) {
+  const req = { Especie: 'Espécie', Calibre: 'Calibre', GrupoCalibre: 'Grupo', PaisFabricacao: 'País', AtividadeCadastrada: 'Atividade', AlmaCano: 'Alma', Acabamento: 'Acabamento', Funcionamento: 'Funcionamento', NumeroCanos: 'Canos' };
+  return Object.keys(req).filter(k => !a[k]).map(k => req[k]);
+}
+
+async function renderArmaImportacao(params) {
+  document.getElementById('page-title').textContent = 'Importar Armas do SINARM';
+  window._importArmas = [];
+  window._importArmasCliente = [];
+  window._importClientes = await App.getClientes();
+  window._importCliente = null;
+  if (params.clienteId) window._importCliente = window._importClientes.find(c => String(c.id) === String(params.clienteId)) || null;
+  else if (params.clienteCpf) { const alvo = String(params.clienteCpf).replace(/\D/g, ''); if (alvo) window._importCliente = window._importClientes.find(c => String(c.CPF || '').replace(/\D/g, '') === alvo) || null; }
+  await _importAtualizarSeriesCliente();
+  if (params.dados) { try { const arr = JSON.parse(params.dados); window._importArmas = (Array.isArray(arr) ? arr : []).map(a => ({ ...mapearArmaSinarm(a), _incluir: true })); } catch (e) {} }
+  _importRender();
+}
+
+async function _importAtualizarSeriesCliente() {
+  if (!window._importCliente) { window._importArmasCliente = []; return; }
+  try {
+    const todas = await App.getArmas();
+    window._importArmasCliente = todas.filter(a => String(a.ClienteId) === String(window._importCliente.id)).map(a => String(a.NumeroSerie || '').trim().toLowerCase()).filter(Boolean);
+  } catch (e) { window._importArmasCliente = []; }
+}
+
+function _importRender() {
+  const el = document.getElementById('page-content'); if (!el) return;
+  const cli = window._importCliente;
+  const armas = window._importArmas || [];
+  el.innerHTML = `
+    <div class="card" style="margin-bottom:16px"><div class="card-body">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <div style="flex:1;min-width:200px">
+          <div style="font-size:12px;color:var(--text-muted)">Cliente destino</div>
+          <div style="font-size:15px;font-weight:600">${cli ? esc(cli.Title) : '<span style="color:var(--danger)">Não identificado — busque abaixo</span>'}</div>
+        </div>
+        ${cli ? `<button class="btn btn-outline btn-sm" onclick="_importTrocarCliente()">Trocar cliente</button>` : ''}
+      </div>
+      ${!cli ? `<div style="margin-top:10px"><input id="imp-busca-cli" placeholder="Buscar cliente por nome ou CPF..." oninput="_importBuscarCliente()" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--border);border-radius:8px" /><div id="imp-cli-res" style="margin-top:6px"></div></div>` : ''}
+    </div></div>
+    ${!armas.length ? `
+    <div class="card"><div class="card-body" style="text-align:center;padding:28px">
+      <i class="bi bi-clipboard-data" style="font-size:32px;color:var(--text-muted)"></i>
+      <p style="margin:10px 0 4px;font-weight:600">Cole os dados capturados do SINARM</p>
+      <p style="font-size:13px;color:var(--text-muted);margin:0 0 14px">Use o favorito na tela "Meu Acervo" do SINARM; ele copia as armas. Depois clique abaixo.</p>
+      <button class="btn btn-primary" onclick="_importColar()"><i class="bi bi-clipboard-check me-1"></i>Colar do SINARM</button>
+      <div style="margin-top:14px;max-width:520px;margin-left:auto;margin-right:auto">
+        <textarea id="imp-textarea" placeholder="...ou cole aqui manualmente (Ctrl+V) e clique em Processar" style="width:100%;box-sizing:border-box;height:70px;border:1px solid var(--border);border-radius:8px;padding:8px"></textarea>
+        <button class="btn btn-outline btn-sm" style="margin-top:6px" onclick="_importProcessarTextarea()">Processar dados colados</button>
+      </div>
+    </div></div>` : _importTabelaHtml()}
+  `;
+}
+
+function _importTabelaHtml() {
+  const armas = window._importArmas || [];
+  const cli = window._importCliente;
+  const jaTem = new Set(window._importArmasCliente || []);
+  const ehDup = a => a.NumeroSerie && jaTem.has(String(a.NumeroSerie).trim().toLowerCase());
+  const rows = armas.map((a, i) => {
+    const dup = ehDup(a);
+    const faltando = _importCamposFaltando(a);
+    return `<tr>
+      <td style="text-align:center"><input type="checkbox" ${a._incluir && !dup ? 'checked' : ''} ${dup ? 'disabled' : ''} onchange="_importToggle(${i},this.checked)" /></td>
+      <td>${esc(a.NumeroSerie || '—')}${dup ? ' <span class="badge badge-orange" style="font-size:10px">já cadastrada</span>' : ''}</td>
+      <td>${esc((a.Marca || '') + ' ' + (a.Modelo || '')).trim() || '—'}</td>
+      <td>${esc(a.Especie || '—')}</td>
+      <td>${esc(a.Calibre || '—')}</td>
+      <td>${esc(a.AtividadeCadastrada || '—')}</td>
+      <td>${esc(a.StatusArma || '—')}</td>
+      <td style="text-align:center">${faltando.length ? `<span class="badge badge-red" style="font-size:10px" title="Faltam: ${esc(faltando.join(', '))}">faltam ${faltando.length}</span>` : '<i class="bi bi-check-circle-fill" style="color:var(--success)" title="Completo"></i>'}</td>
+      <td style="text-align:center"><button class="btn btn-outline btn-sm" onclick="_importEditar(${i})" title="Revisar/editar"><i class="bi bi-pencil"></i></button></td>
+    </tr>`;
+  }).join('');
+  const nSel = armas.filter(a => a._incluir && !ehDup(a)).length;
+  return `<div class="card">
+    <div class="table-wrapper"><table>
+      <thead><tr><th style="text-align:center">Importar</th><th>Nº Série</th><th>Marca/Modelo</th><th>Espécie</th><th>Calibre</th><th>Atividade</th><th>Status</th><th style="text-align:center">Dados</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    <div class="card-body" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+      <span style="font-size:13px;color:var(--text-muted)">${nSel} de ${armas.length} arma(s) marcada(s)${!cli ? ' · selecione o cliente destino acima' : ''}</span>
+      <button class="btn btn-primary" ${(!cli || !nSel) ? 'disabled' : ''} onclick="_importConfirmar()"><i class="bi bi-download me-1"></i>Importar ${nSel} arma(s)</button>
+    </div></div>`;
+}
+
+async function _importColar() {
+  let raw = '';
+  try { raw = await navigator.clipboard.readText(); } catch (e) {}
+  if (!raw) { const ta = document.getElementById('imp-textarea'); raw = ta ? ta.value : ''; }
+  _importAplicarPayload(raw);
+}
+function _importProcessarTextarea() { const ta = document.getElementById('imp-textarea'); _importAplicarPayload(ta ? ta.value : ''); }
+async function _importAplicarPayload(raw) {
+  let payload;
+  try { payload = JSON.parse(String(raw || '').trim()); } catch (e) { toast('Não consegui ler os dados. Copie novamente pelo favorito e tente colar.', 'error'); return; }
+  const lista = Array.isArray(payload) ? payload : (payload.armas || []);
+  if (!lista.length) { toast('Nenhuma arma encontrada nos dados colados.', 'warning'); return; }
+  window._importArmas = lista.map(a => ({ ...mapearArmaSinarm(a), _incluir: true }));
+  if (!window._importCliente && payload && payload.cpf) {
+    const alvo = String(payload.cpf).replace(/\D/g, '');
+    if (alvo) window._importCliente = (window._importClientes || []).find(c => String(c.CPF || '').replace(/\D/g, '') === alvo) || null;
+    await _importAtualizarSeriesCliente();
+  }
+  _importRender();
+}
+
+function _importToggle(i, ch) { if (window._importArmas[i]) window._importArmas[i]._incluir = ch; _importRender(); }
+async function _importTrocarCliente() { window._importCliente = null; window._importArmasCliente = []; _importRender(); }
+
+function _importBuscarCliente() {
+  const cont = document.getElementById('imp-cli-res'); if (!cont) return;
+  const termo = (document.getElementById('imp-busca-cli')?.value || '').trim().toLowerCase();
+  if (termo.length < 2) { cont.innerHTML = ''; return; }
+  const termoDig = termo.replace(/\D/g, '');
+  const res = (window._importClientes || []).filter(c => (c.Title || '').toLowerCase().includes(termo) || (termoDig && String(c.CPF || '').replace(/\D/g, '').includes(termoDig))).slice(0, 8);
+  cont.innerHTML = res.length ? res.map(c => `<div style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;margin-top:4px;cursor:pointer;display:flex;justify-content:space-between;gap:8px" onclick="_importSelecionarCliente('${esc(String(c.id))}')"><span>${esc(c.Title)}</span><span style="color:var(--text-muted);font-size:12px">${esc(c.CPF || '')}</span></div>`).join('') : '<div style="font-size:12px;color:var(--text-muted);padding:6px">Nenhum cliente encontrado.</div>';
+}
+async function _importSelecionarCliente(id) {
+  window._importCliente = (window._importClientes || []).find(c => String(c.id) === String(id)) || null;
+  await _importAtualizarSeriesCliente();
+  _importRender();
+}
+
+// Modal de edição completa de uma arma antes de importar
+function _importEditar(i) {
+  const a = (window._importArmas || [])[i]; if (!a) return;
+  const sel = (name, val) => `<select data-imp="${name}" style="width:100%;box-sizing:border-box;padding:7px;border:1px solid var(--border);border-radius:6px"><option value="">Selecione...</option>${(ARMA_ENUMS[name] || []).map(o => `<option value="${esc(o)}" ${o === val ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+  const inp = (name, val, tipo) => `<input data-imp="${name}" type="${tipo || 'text'}" value="${esc(val || '')}" style="width:100%;box-sizing:border-box;padding:7px;border:1px solid var(--border);border-radius:6px" />`;
+  const campo = (lbl, html) => `<div style="margin-bottom:10px"><label style="font-size:12px;font-weight:600;display:block;margin-bottom:3px">${lbl}</label>${html}</div>`;
+  const modal = document.createElement('div');
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+  modal.onclick = e => { if (e.target === modal) modal.remove(); };
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;padding:22px;max-width:720px;width:100%;max-height:88vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <h3 style="margin:0;font-size:16px"><i class="bi bi-pencil me-2"></i>Revisar arma</h3>
+        <button onclick="this.closest('[style*=fixed]').remove()" style="background:none;border:none;font-size:22px;color:#666;cursor:pointer;line-height:1">×</button>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 14px">
+        ${campo('Nº de Série', inp('NumeroSerie', a.NumeroSerie))}
+        ${campo('Marca', inp('Marca', a.Marca))}
+        ${campo('Modelo', inp('Modelo', a.Modelo))}
+        ${campo('Espécie', sel('Especie', a.Especie))}
+        ${campo('Calibre', inp('Calibre', a.Calibre))}
+        ${campo('Grupo do Calibre', sel('GrupoCalibre', a.GrupoCalibre))}
+        ${campo('Atividade', sel('AtividadeCadastrada', a.AtividadeCadastrada))}
+        ${campo('Status', sel('StatusArma', a.StatusArma))}
+        ${campo('Data de Aquisição', inp('DataAquisicao', a.DataAquisicao, 'date'))}
+        ${campo('País de Fabricação', sel('PaisFabricacao', a.PaisFabricacao))}
+        ${campo('Capac. Cartucho', inp('CapacidadeTiro', a.CapacidadeTiro))}
+        ${campo('Nº de Canos', sel('NumeroCanos', a.NumeroCanos))}
+        ${campo('Alma do Cano', sel('AlmaCano', a.AlmaCano))}
+        ${campo('Nº de Raias', inp('NumeroRaias', a.NumeroRaias))}
+        ${campo('Sentido da Raia', sel('SentidoRaias', a.SentidoRaias))}
+        ${campo('Acabamento', sel('Acabamento', a.Acabamento))}
+        ${campo('Funcionamento', sel('Funcionamento', a.Funcionamento))}
+      </div>
+      <div style="margin-top:8px;text-align:right">
+        <button onclick="this.closest('[style*=fixed]').remove()" class="btn btn-outline btn-sm">Cancelar</button>
+        <button onclick="_importSalvarEdicao(${i}, this)" class="btn btn-primary btn-sm"><i class="bi bi-check-lg me-1"></i>Aplicar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+}
+function _importSalvarEdicao(i, btn) {
+  const a = (window._importArmas || [])[i]; if (!a) return;
+  const box = btn.closest('[style*=fixed]');
+  box.querySelectorAll('[data-imp]').forEach(el => { a[el.getAttribute('data-imp')] = el.value || (el.type === 'date' ? null : ''); });
+  box.remove();
+  _importRender();
+}
+
+async function _importConfirmar() {
+  const cli = window._importCliente; if (!cli) { toast('Selecione o cliente destino.', 'warning'); return; }
+  const jaTem = new Set(window._importArmasCliente || []);
+  const sel = (window._importArmas || []).filter(a => a._incluir && !(a.NumeroSerie && jaTem.has(String(a.NumeroSerie).trim().toLowerCase())));
+  if (!sel.length) { toast('Nenhuma arma marcada para importar.', 'warning'); return; }
+  showLoading();
+  let ok = 0, err = 0;
+  for (const a of sel) {
+    const fields = { ...a, ClienteId: cli.id, ClienteNome: cli.Title, Title: `${a.Marca || ''} ${a.Modelo || ''} - ${a.NumeroSerie || ''}`.trim() };
+    delete fields._incluir;
+    try { await App.graph.createItem(CONFIG.listas.armas, fields); ok++; } catch (e) { err++; }
+  }
+  App.invalidateCache('armas');
+  try { registrarMovimentacao('Importar Armas', `${ok} arma(s) para ${cli.Title}`); } catch (e) {}
+  hideLoading();
+  toast(`${ok} arma(s) importada(s)${err ? `, ${err} com erro` : ''}.`, err ? 'warning' : 'success');
+  navigate('clientes/perfil', { id: cli.id, tab: 'armas' });
+}
+
+// ---- Bookmarklet do acervo (raspagem no site do SINARM) ----
+const _BM_ARMAS = `(function(){
+var H='__CAC_URL__';
+if(!location.host.includes('pf.gov.br')){alert('Use este favorito na pagina do SINARM CAC (servicos.pf.gov.br), na tela "Meu Acervo".');return;}
+function up(s){return (s||'').normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').toUpperCase().trim();}
+function tx(el){return el?(el.textContent||'').replace(/\\s+/g,' ').trim():'';}
+function idxDe(hs,alvo){for(var i=0;i<hs.length;i++){if(hs[i].indexOf(alvo)>=0)return i;}return -1;}
+var armas=[];
+var tabs=Array.from(document.querySelectorAll('table'));
+var tab=null;
+for(var t=0;t<tabs.length;t++){var h=Array.from(tabs[t].querySelectorAll('th')).map(function(x){return up(tx(x));});if(h.some(function(v){return v.indexOf('ORDEM')>=0;})&&h.some(function(v){return v.indexOf('ESPECIE')>=0||v.indexOf('NOMENCLATURA')>=0;})){tab=tabs[t];break;}}
+if(tab){
+  var hs=Array.from(tab.querySelectorAll('th')).map(function(x){return up(tx(x));});
+  var iOrd=idxDe(hs,'ORDEM'),iDesc=idxDe(hs,'DESCRICAO'),iEsp=idxDe(hs,'ESPECIE'),iMar=idxDe(hs,'MARCA'),iMod=idxDe(hs,'MODELO'),iPais=idxDe(hs,'PAIS'),iAq=idxDe(hs,'AQUISICAO'),iAt=idxDe(hs,'ATIVIDADE');
+  Array.from(tab.querySelectorAll('tbody tr')).forEach(function(tr){
+    var c=Array.from(tr.querySelectorAll('td')).map(function(x){return tx(x);});
+    if(c.length<2)return;
+    var desc=iDesc>=0?(c[iDesc]||''):'';
+    var mS=desc.match(/Arma:\\s*([A-Za-z0-9.\\-\\/]+)/i);
+    var serie=(mS?mS[1]:'').trim()||(iOrd>=0?(c[iOrd]||''):'').trim();
+    var mC=desc.match(/Calibre\\(s\\):\\s*([^\\(\\n]+)/i);
+    var cal=(mC?mC[1]:'').trim();
+    var grp=/RESTRITO/i.test(desc)?'Restrito':(/PERMITIDO/i.test(desc)?'Permitido':'');
+    armas.push({numeroSerie:serie,calibre:cal,grupoCalibre:grp,especie:iEsp>=0?c[iEsp]:'',marca:iMar>=0?c[iMar]:'',modelo:iMod>=0?c[iMod]:'',paisFabricacao:iPais>=0?c[iPais]:'',dataAquisicao:iAq>=0?c[iAq]:'',atividade:iAt>=0?c[iAt]:''});
+  });
+}
+function campo(lbl){
+  var nodes=Array.from(document.querySelectorAll('label,mat-label,span,div,p,th,dt,strong'));
+  for(var i=0;i<nodes.length;i++){var nd=nodes[i];if(nd.childElementCount>0)continue;var t=tx(nd).replace(/:$/,'');if(up(t)!==up(lbl))continue;
+    var wrap=nd.closest('mat-form-field,[class*="form-field"],[class*="field"],[class*="group"],tr,li');
+    if(wrap){var inp=wrap.querySelector('input,textarea');if(inp&&inp.value&&inp.value.trim())return inp.value.trim();var cands=Array.from(wrap.querySelectorAll('*')).filter(function(x){return x.childElementCount===0;}).map(tx).filter(function(v){return v&&up(v)!==up(t)&&v.length<120;});if(cands[0])return cands[0];}
+    var sib=nd.nextElementSibling;if(sib){var v2=tx(sib);if(v2&&up(v2)!==up(t))return v2;var i2=sib.querySelector&&sib.querySelector('input');if(i2&&i2.value)return i2.value.trim();}
+  }
+  return '';
+}
+var det={numeroSerie:campo('Nº da arma')||campo('N° da arma')||campo('Nº da Arma'),modelo:campo('Modelo'),calibre:campo('Calibre'),especie:campo('Espécie'),marca:campo('Marca'),grupoCalibre:campo('Grupo Calibre'),capacidadeTiro:campo('Quant. Capacidade Cartucho'),paisFabricacao:campo('País Fabricação')||campo('País de Fabricação'),numeroCanos:campo('Nº de Canos'),almaCano:campo('Alma do Cano'),numeroRaias:campo('Nº de Raias'),sentidoRaias:campo('Sentido da Raia'),acabamento:campo('Acabamento'),funcionamento:campo('Funcionamento'),atividade:campo('Atividade'),status:campo('Status')};
+if(det.numeroSerie){var achou=false;for(var i=0;i<armas.length;i++){if(up(armas[i].numeroSerie)===up(det.numeroSerie)){Object.keys(det).forEach(function(k){if(det[k])armas[i][k]=det[k];});achou=true;break;}}if(!achou)armas.push(det);}
+if(!armas.length){alert('Nao encontrei o acervo. Abra a tela "Meu Acervo" (ou o detalhe de uma arma) e clique o favorito novamente.');return;}
+var cpf='';var mc=(document.body.innerText||'').match(/(\\d{3}\\.\\d{3}\\.\\d{3}-\\d{2})/);if(mc)cpf=mc[1];
+try{navigator.clipboard.writeText(JSON.stringify({cpf:cpf,armas:armas}));}catch(e){}
+if(!confirm(armas.length+' arma(s) capturada(s) e copiada(s).\\n\\nAbrir o CAC Gestao para revisar e importar?'))return;
+window.open(H+'#armas/importar?clienteCpf='+encodeURIComponent(cpf.replace(/\\D/g,'')),'_blank');
+})()`;
+
+function getBookmarkletArmasHref() {
+  const cacUrl = window.location.origin + window.location.pathname;
+  const code = _BM_ARMAS.replace('__CAC_URL__', cacUrl.replace(/'/g, "\\'"));
+  return 'javascript:' + encodeURIComponent(code);
+}
+
+// Painel de instruções (aba Armas do cliente)
+function abrirImportSinarm(clienteId) {
+  const painel = document.getElementById('painel-sinarm-armas');
+  if (!painel) return;
+  if (painel.style.display !== 'none') { painel.style.display = 'none'; return; }
+  painel.innerHTML = `
+    <div class="card" style="border-color:#86efac;background:#f0fdf4">
+      <div class="card-header" style="background:#dcfce7;border-bottom-color:#86efac">
+        <h3 style="color:#166534"><i class="bi bi-download me-2"></i>Importar acervo do SINARM CAC</h3>
+        <button type="button" onclick="document.getElementById('painel-sinarm-armas').style.display='none'" class="btn btn-ghost btn-sm"><i class="bi bi-x-lg"></i></button>
+      </div>
+      <div class="card-body">
+        <p style="font-size:13px;margin-bottom:10px"><strong>1° uso:</strong> arraste o botão abaixo para a barra de favoritos (<kbd>Ctrl+Shift+B</kbd> para exibi-la).</p>
+        <div style="text-align:center;margin:14px 0">
+          <a id="bm-armas-link" class="btn btn-primary" style="cursor:grab;font-size:15px;padding:10px 24px"><i class="bi bi-download"></i> Importar Acervo p/ Gestão</a>
+          <p style="font-size:11px;color:var(--text-muted);margin-top:8px">Arraste este botão para os favoritos</p>
+        </div>
+        <ol style="font-size:13px;line-height:1.9;color:var(--text);margin:0;padding-left:20px">
+          <li>Acesse o SINARM CAC (<em>servicos.pf.gov.br</em>) e faça login</li>
+          <li>Abra a tela <em>"Meu Acervo"</em> (ou o detalhe de uma arma)</li>
+          <li>Clique no favorito <strong>"Importar Acervo p/ Gestão"</strong> — ele copia as armas e abre esta página</li>
+          <li>Revise a lista e clique em <strong>Importar</strong></li>
+        </ol>
+        <div style="margin-top:12px;text-align:center">
+          <button class="btn btn-outline btn-sm" onclick="navigate('armas/importar',{clienteId:'${clienteId}'})"><i class="bi bi-clipboard-check me-1"></i>Já copiei — abrir tela de importação</button>
+        </div>
+      </div>
+    </div>`;
+  const link = document.getElementById('bm-armas-link');
+  if (link) link.href = getBookmarkletArmasHref();
+  painel.style.display = '';
 }
