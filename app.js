@@ -13267,7 +13267,7 @@ var lista=linhas.map(function(tr){
 // 2) Localiza os botoes "olho" (ver detalhe) e "Fechar"
 function clsDe(el){var c=el.className;return String(c&&c.baseVal!==undefined?c.baseVal:(c||''));}
 function realClick(el){if(!el)return;var r=el.getBoundingClientRect?el.getBoundingClientRect():{left:0,top:0,width:0,height:0};var o={bubbles:true,cancelable:true,view:window,clientX:r.left+r.width/2,clientY:r.top+r.height/2};['pointerover','mouseover','pointerdown','mousedown','focus','pointerup','mouseup','click'].forEach(function(t){try{el.dispatchEvent(t==='focus'?new FocusEvent(t,{bubbles:true}):new MouseEvent(t,o));}catch(e){}});}
-function acharOlho(){var els=Array.from(document.querySelectorAll('button,a,[role=button],span,i,em,mat-icon'));for(var i=0;i<els.length;i++){var el=els[i];var cls=clsDe(el);var s=(cls+' '+((el.getAttribute&&el.getAttribute('title'))||'')+' '+((el.getAttribute&&el.getAttribute('aria-label'))||'')+' '+((el.tagName==='MAT-ICON'||/icon/i.test(cls))?tx(el):'')).toLowerCase();if(/eye|olho|detalh|visualiz|visibility/.test(s))return el;}return null;}
+function acharOlho(){var p=document.querySelector('button[name="btnView"],button.btnView,[class*="remove-red-eye"],[class*="pi-eye"],[class*="fa-eye"],button[title="Visualizar"]');if(p)return p.closest('button,a,[role=button]')||p;var els=Array.from(document.querySelectorAll('button,a,[role=button],span,i,em,mat-icon'));for(var i=0;i<els.length;i++){var el=els[i];var cls=clsDe(el);var s=(cls+' '+((el.getAttribute&&el.getAttribute('title'))||'')+' '+((el.getAttribute&&el.getAttribute('aria-label'))||'')+' '+((el.tagName==='MAT-ICON'||/icon/i.test(cls))?tx(el):'')).toLowerCase();if(/eye|olho|detalh|visualiz|visibility/.test(s))return el;}return null;}
 function clicarOlho(){var el=acharOlho();if(!el)return false;var btn=el.closest('button,a,[role=button]');realClick(btn||el);if(!btn&&el.parentElement)realClick(el.parentElement);return true;}
 function acharFechar(){var bs=Array.from(document.querySelectorAll('button,a'));for(var i=0;i<bs.length;i++){if(up(tx(bs[i]))==='FECHAR')return bs[i];}return null;}
 var ov=document.createElement('div');ov.style.cssText='position:fixed;top:12px;right:12px;z-index:2147483647;background:#166534;color:#fff;padding:10px 16px;border-radius:8px;font:14px Arial;box-shadow:0 6px 20px rgba(0,0,0,.35);max-width:340px';document.body.appendChild(ov);
@@ -13279,7 +13279,7 @@ for(var i=0;i<lista.length;i++){
   var opened=false;
   try{
     L.tr.scrollIntoView({block:'center'});realClick(L.tr);var td0=L.tr.querySelector('td');if(td0)realClick(td0);
-    await sleep(250);
+    await sleep(450);
     if(clicarOlho()){
       var okOpen=await waitFor(function(){var e=document.getElementById('nrOrdem');return e&&e.value&&up(e.value)!==up(lastSerie)?e:null;},7000);
       if(okOpen){
