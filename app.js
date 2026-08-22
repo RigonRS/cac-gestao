@@ -12980,19 +12980,23 @@ function mapearArmaSinarm(raw) {
   const r = raw || {};
   const val = (...ks) => { for (const k of ks) { if (r[k] != null && String(r[k]).trim() !== '') return String(r[k]).trim(); } return ''; };
 
-  // Espécie
-  const espKey = _armaUp(val('especie', 'Espécie')).replace(/\s*\/\s*/g, '/');
-  let Especie = { 'PISTOLA': 'Pistola', 'ESPINGARDA': 'Espingarda', 'REVOLVER': 'Revólver', 'CARABINA/FUZIL': 'Carabina/Fuzil' }[espKey] || '';
-  if (!Especie && (espKey.includes('CARABINA') || espKey.includes('FUZIL'))) Especie = 'Carabina/Fuzil';
+  // Espécie (por "contém", tolerante a prefixos/rótulos)
+  const espU = _armaUp(val('especie', 'Espécie'));
+  let Especie = '';
+  if (espU.includes('PISTOLA')) Especie = 'Pistola';
+  else if (espU.includes('ESPINGARDA')) Especie = 'Espingarda';
+  else if (espU.includes('REVOLVER')) Especie = 'Revólver';
+  else if (espU.includes('CARABINA') || espU.includes('FUZIL')) Especie = 'Carabina/Fuzil';
 
   // Calibre + Grupo
   let Calibre = val('calibre', 'Calibre').replace(/\s*\((permitido|restrito)\)\s*/i, '').trim();
   const grpRaw = _armaUp(val('grupoCalibre', 'Grupo Calibre') || val('calibre', 'Calibre'));
   const GrupoCalibre = grpRaw.includes('RESTRITO') ? 'Restrito' : (grpRaw.includes('PERMITIDO') ? 'Permitido' : '');
 
-  // País (casa contra a lista, ignorando acentos/caixa)
-  const paisRaw = val('paisFabricacao', 'País Fabricação', 'País de Fabricação');
-  const PaisFabricacao = PAISES_FABRICACAO.find(p => _armaUp(p) === _armaUp(paisRaw)) || '';
+  // País (igualdade e, se falhar, por "contém")
+  const paisRaw = _armaUp(val('paisFabricacao', 'País Fabricação', 'País de Fabricação'));
+  let PaisFabricacao = PAISES_FABRICACAO.find(p => _armaUp(p) === paisRaw) || '';
+  if (!PaisFabricacao && paisRaw) PaisFabricacao = PAISES_FABRICACAO.filter(p => paisRaw.includes(_armaUp(p))).sort((a, b) => b.length - a.length)[0] || '';
 
   const alma = _armaUp(val('almaCano', 'Alma do Cano'));
   const AlmaCano = alma.includes('RAIAD') ? 'Raiada' : (alma.includes('LISA') ? 'Lisa' : '');
@@ -13250,8 +13254,9 @@ async function waitFor(fn,ms){var t=Date.now();while(Date.now()-t<(ms||6000)){va
 // 1) Lista do acervo: pega serial + data de aquisicao (e campos principais como reserva)
 var linhas=Array.from(document.querySelectorAll('tr')).filter(function(tr){return /Calibre\\(s\\)/i.test(tr.textContent||'');});
 if(!linhas.length){alert('Nao encontrei as armas. Abra a aba "Acervo" (a LISTA de armas) e clique o favorito novamente.');return;}
+function cellText(x){var c=x.cloneNode(true);Array.from(c.querySelectorAll('[class*="column-title"],[class*="columnTitle"],.p-column-title,.ui-column-title')).forEach(function(e){e.remove();});return tx(c);}
 var lista=linhas.map(function(tr){
-  var cel=Array.from(tr.querySelectorAll('td')).map(function(x){return tx(x);});
+  var cel=Array.from(tr.querySelectorAll('td')).map(cellText);
   var di=-1;for(var k=0;k<cel.length;k++){if(/Calibre\\(s\\)/i.test(cel[k])){di=k;break;}}
   var desc=di>=0?cel[di]:'';
   var mS=desc.match(/Arma:\\s*([A-Za-z0-9.\\-\\/]+)/i);
