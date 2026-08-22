@@ -13260,7 +13260,10 @@ var lista=linhas.map(function(tr){
   return {tr:tr,serie:serie,dataAquisicao:g(5),especie:g(1),marca:g(2),modelo:g(3),paisFabricacao:g(4),atividade:g(6),calibre:((desc.match(/Calibre\\(s\\):\\s*([^\\(\\n]+)/i)||[])[1]||'').trim(),grupoCalibre:/RESTRITO/i.test(desc)?'Restrito':(/PERMITIDO/i.test(desc)?'Permitido':'')};
 });
 // 2) Localiza os botoes "olho" (ver detalhe) e "Fechar"
-function acharOlho(){var els=Array.from(document.querySelectorAll('button,a,[role=button],span,i,em'));for(var i=0;i<els.length;i++){var el=els[i];var s=(String(el.className||'')+' '+((el.getAttribute&&el.getAttribute('title'))||'')+' '+((el.getAttribute&&el.getAttribute('aria-label'))||'')).toLowerCase();if(/eye|olho|detalh|visualiz/.test(s))return el.closest('button,a,[role=button]')||el;}return null;}
+function clsDe(el){var c=el.className;return String(c&&c.baseVal!==undefined?c.baseVal:(c||''));}
+function realClick(el){if(!el)return;var r=el.getBoundingClientRect?el.getBoundingClientRect():{left:0,top:0,width:0,height:0};var o={bubbles:true,cancelable:true,view:window,clientX:r.left+r.width/2,clientY:r.top+r.height/2};['pointerover','mouseover','pointerdown','mousedown','focus','pointerup','mouseup','click'].forEach(function(t){try{el.dispatchEvent(t==='focus'?new FocusEvent(t,{bubbles:true}):new MouseEvent(t,o));}catch(e){}});}
+function acharOlho(){var els=Array.from(document.querySelectorAll('button,a,[role=button],span,i,em,mat-icon'));for(var i=0;i<els.length;i++){var el=els[i];var cls=clsDe(el);var s=(cls+' '+((el.getAttribute&&el.getAttribute('title'))||'')+' '+((el.getAttribute&&el.getAttribute('aria-label'))||'')+' '+((el.tagName==='MAT-ICON'||/icon/i.test(cls))?tx(el):'')).toLowerCase();if(/eye|olho|detalh|visualiz|visibility/.test(s))return el;}return null;}
+function clicarOlho(){var el=acharOlho();if(!el)return false;var btn=el.closest('button,a,[role=button]');realClick(btn||el);if(!btn&&el.parentElement)realClick(el.parentElement);return true;}
 function acharFechar(){var bs=Array.from(document.querySelectorAll('button,a'));for(var i=0;i<bs.length;i++){if(up(tx(bs[i]))==='FECHAR')return bs[i];}return null;}
 var ov=document.createElement('div');ov.style.cssText='position:fixed;top:12px;right:12px;z-index:2147483647;background:#166534;color:#fff;padding:10px 16px;border-radius:8px;font:14px Arial;box-shadow:0 6px 20px rgba(0,0,0,.35);max-width:340px';document.body.appendChild(ov);
 function prog(t){ov.textContent=t;}
@@ -13270,23 +13273,21 @@ for(var i=0;i<lista.length;i++){
   var L=lista[i];prog('Capturando '+(i+1)+' de '+lista.length+' \\u2014 '+L.serie);
   var opened=false;
   try{
-    L.tr.scrollIntoView({block:'center'});L.tr.click();var td0=L.tr.querySelector('td');if(td0)td0.click();
-    await sleep(150);
-    var olho=acharOlho();
-    if(olho){
-      olho.click();
-      var okOpen=await waitFor(function(){var e=document.getElementById('nrOrdem');return e&&e.value&&up(e.value)!==up(lastSerie)?e:null;},6000);
+    L.tr.scrollIntoView({block:'center'});realClick(L.tr);var td0=L.tr.querySelector('td');if(td0)realClick(td0);
+    await sleep(250);
+    if(clicarOlho()){
+      var okOpen=await waitFor(function(){var e=document.getElementById('nrOrdem');return e&&e.value&&up(e.value)!==up(lastSerie)?e:null;},7000);
       if(okOpen){
         await sleep(250);
         var s=v('nrOrdem')||v('numArma')||L.serie;lastSerie=s;opened=true;
         armas.push({numeroSerie:s,status:v('status'),atividade:v('atividade')||L.atividade,modelo:v('modelo')||L.modelo,calibre:v('calibre')||L.calibre,especie:v('especie')||L.especie,marca:v('marca')||L.marca,grupoCalibre:v('grupoCalibre')||L.grupoCalibre,capacidadeTiro:v('capacidade'),paisFabricacao:v('pais')||L.paisFabricacao,numeroCanos:v('numCanos'),almaCano:v('canoAlma'),numeroRaias:v('numRaias'),sentidoRaias:v('sentRaia'),acabamento:v('acabamento'),funcionamento:v('funcionamento'),dataAquisicao:L.dataAquisicao});
-        var f=acharFechar();if(f)f.click();
+        var f=acharFechar();if(f)realClick(f);
         await waitFor(function(){return !document.getElementById('nrOrdem');},4000);
-        await sleep(300);
+        await sleep(350);
       }
     }
   }catch(e){}
-  if(!opened){falhas++;var f2=acharFechar();if(f2)f2.click();await sleep(200);armas.push({numeroSerie:L.serie,dataAquisicao:L.dataAquisicao,especie:L.especie,marca:L.marca,modelo:L.modelo,paisFabricacao:L.paisFabricacao,atividade:L.atividade,calibre:L.calibre,grupoCalibre:L.grupoCalibre});}
+  if(!opened){falhas++;var f2=acharFechar();if(f2)realClick(f2);await sleep(250);armas.push({numeroSerie:L.serie,dataAquisicao:L.dataAquisicao,especie:L.especie,marca:L.marca,modelo:L.modelo,paisFabricacao:L.paisFabricacao,atividade:L.atividade,calibre:L.calibre,grupoCalibre:L.grupoCalibre});}
 }
 var cpf='';var mc=(document.body.innerText||'').match(/(\\d{3}\\.\\d{3}\\.\\d{3}-\\d{2})/);if(mc)cpf=mc[1];
 try{await navigator.clipboard.writeText(JSON.stringify({cpf:cpf,armas:armas}));}catch(e){}
