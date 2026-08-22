@@ -13239,33 +13239,63 @@ async function _importConfirmar() {
 }
 
 // ---- Bookmarklet do acervo (raspagem no site do SINARM) ----
-const _BM_ARMAS = `(function(){
+const _BM_ARMAS = `(async function(){
 var H='__CAC_URL__';
-if(!location.host.includes('pf.gov.br')){alert('Use este favorito na pagina do SINARM CAC (servicos.pf.gov.br), na tela "Meu Acervo".');return;}
+if(!location.host.includes('pf.gov.br')){alert('Use este favorito na pagina do SINARM CAC (servicos.pf.gov.br), na aba Acervo.');return;}
 function up(s){return (s||'').normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').toUpperCase().trim();}
 function tx(el){return el?(el.textContent||'').replace(/\\s+/g,' ').trim():'';}
-var armas=[];
-// Acha as linhas do acervo pelo conteudo ("Calibre(s):"), sem depender do cabecalho (PrimeNG separa header/body)
+function v(id){var e=document.getElementById(id);return e?(e.value||'').trim():'';}
+function sleep(ms){return new Promise(function(r){setTimeout(r,ms);});}
+async function waitFor(fn,ms){var t=Date.now();while(Date.now()-t<(ms||6000)){var r=fn();if(r)return r;await sleep(150);}return null;}
+// 1) Lista do acervo: pega serial + data de aquisicao (e campos principais como reserva)
 var linhas=Array.from(document.querySelectorAll('tr')).filter(function(tr){return /Calibre\\(s\\)/i.test(tr.textContent||'');});
-linhas.forEach(function(tr){
+if(!linhas.length){alert('Nao encontrei as armas. Abra a aba "Acervo" (a LISTA de armas) e clique o favorito novamente.');return;}
+var lista=linhas.map(function(tr){
   var cel=Array.from(tr.querySelectorAll('td')).map(function(x){return tx(x);});
-  if(!cel.length)return;
   var di=-1;for(var k=0;k<cel.length;k++){if(/Calibre\\(s\\)/i.test(cel[k])){di=k;break;}}
-  if(di<0)return;
-  var desc=cel[di]||'';
+  var desc=di>=0?cel[di]:'';
   var mS=desc.match(/Arma:\\s*([A-Za-z0-9.\\-\\/]+)/i);
   var serie=(mS?mS[1]:'').trim()||(cel[0]||'').trim();
-  var mC=desc.match(/Calibre\\(s\\):\\s*([^\\(\\n]+)/i);
-  var cal=(mC?mC[1]:'').trim();
-  var grp=/RESTRITO/i.test(desc)?'Restrito':(/PERMITIDO/i.test(desc)?'Permitido':'');
-  function g(off){return (cel[di+off]||'').trim();}
-  armas.push({numeroSerie:serie,calibre:cal,grupoCalibre:grp,especie:g(1),marca:g(2),modelo:g(3),paisFabricacao:g(4),dataAquisicao:g(5),atividade:g(6)});
+  function g(o){return di>=0?((cel[di+o]||'').trim()):'';}
+  return {tr:tr,serie:serie,dataAquisicao:g(5),especie:g(1),marca:g(2),modelo:g(3),paisFabricacao:g(4),atividade:g(6),calibre:((desc.match(/Calibre\\(s\\):\\s*([^\\(\\n]+)/i)||[])[1]||'').trim(),grupoCalibre:/RESTRITO/i.test(desc)?'Restrito':(/PERMITIDO/i.test(desc)?'Permitido':'')};
 });
-if(!armas.length){alert('Nao encontrei as armas. Abra a aba "Acervo" / "Meu Acervo" (a LISTA de armas, nao o detalhe) e clique o favorito novamente.');return;}
+// 2) Localiza os botoes "olho" (ver detalhe) e "Fechar"
+function acharOlho(){var els=Array.from(document.querySelectorAll('button,a,[role=button],span,i,em'));for(var i=0;i<els.length;i++){var el=els[i];var s=(String(el.className||'')+' '+((el.getAttribute&&el.getAttribute('title'))||'')+' '+((el.getAttribute&&el.getAttribute('aria-label'))||'')).toLowerCase();if(/eye|olho|detalh|visualiz/.test(s))return el.closest('button,a,[role=button]')||el;}return null;}
+function acharFechar(){var bs=Array.from(document.querySelectorAll('button,a'));for(var i=0;i<bs.length;i++){if(up(tx(bs[i]))==='FECHAR')return bs[i];}return null;}
+var ov=document.createElement('div');ov.style.cssText='position:fixed;top:12px;right:12px;z-index:2147483647;background:#166534;color:#fff;padding:10px 16px;border-radius:8px;font:14px Arial;box-shadow:0 6px 20px rgba(0,0,0,.35);max-width:340px';document.body.appendChild(ov);
+function prog(t){ov.textContent=t;}
+// 3) Abre cada arma, le os campos do detalhe pelos ids, fecha e passa para a proxima
+var armas=[],falhas=0,lastSerie='';
+for(var i=0;i<lista.length;i++){
+  var L=lista[i];prog('Capturando '+(i+1)+' de '+lista.length+' \\u2014 '+L.serie);
+  var opened=false;
+  try{
+    L.tr.scrollIntoView({block:'center'});L.tr.click();var td0=L.tr.querySelector('td');if(td0)td0.click();
+    await sleep(150);
+    var olho=acharOlho();
+    if(olho){
+      olho.click();
+      var okOpen=await waitFor(function(){var e=document.getElementById('nrOrdem');return e&&e.value&&up(e.value)!==up(lastSerie)?e:null;},6000);
+      if(okOpen){
+        await sleep(250);
+        var s=v('nrOrdem')||v('numArma')||L.serie;lastSerie=s;opened=true;
+        armas.push({numeroSerie:s,status:v('status'),atividade:v('atividade')||L.atividade,modelo:v('modelo')||L.modelo,calibre:v('calibre')||L.calibre,especie:v('especie')||L.especie,marca:v('marca')||L.marca,grupoCalibre:v('grupoCalibre')||L.grupoCalibre,capacidadeTiro:v('capacidade'),paisFabricacao:v('pais')||L.paisFabricacao,numeroCanos:v('numCanos'),almaCano:v('canoAlma'),numeroRaias:v('numRaias'),sentidoRaias:v('sentRaia'),acabamento:v('acabamento'),funcionamento:v('funcionamento'),dataAquisicao:L.dataAquisicao});
+        var f=acharFechar();if(f)f.click();
+        await waitFor(function(){return !document.getElementById('nrOrdem');},4000);
+        await sleep(300);
+      }
+    }
+  }catch(e){}
+  if(!opened){falhas++;var f2=acharFechar();if(f2)f2.click();await sleep(200);armas.push({numeroSerie:L.serie,dataAquisicao:L.dataAquisicao,especie:L.especie,marca:L.marca,modelo:L.modelo,paisFabricacao:L.paisFabricacao,atividade:L.atividade,calibre:L.calibre,grupoCalibre:L.grupoCalibre});}
+}
 var cpf='';var mc=(document.body.innerText||'').match(/(\\d{3}\\.\\d{3}\\.\\d{3}-\\d{2})/);if(mc)cpf=mc[1];
-try{navigator.clipboard.writeText(JSON.stringify({cpf:cpf,armas:armas}));}catch(e){}
-if(!confirm(armas.length+' arma(s) capturada(s) e copiada(s).\\n\\nAbrir o CAC Gestao para revisar e importar?'))return;
-window.open(H+'#armas/importar?clienteCpf='+encodeURIComponent(cpf.replace(/\\D/g,'')),'_blank');
+try{await navigator.clipboard.writeText(JSON.stringify({cpf:cpf,armas:armas}));}catch(e){}
+var url=H+'#armas/importar?clienteCpf='+encodeURIComponent(cpf.replace(/\\D/g,''))+'&dados='+encodeURIComponent(JSON.stringify(armas));
+ov.style.background='#0f766e';ov.innerHTML='';
+var msg=document.createElement('div');msg.style.marginBottom='8px';msg.textContent=armas.length+' arma(s) capturada(s)'+(falhas?(' ('+falhas+' so com dados da lista)'):'')+'.';
+var a=document.createElement('a');a.href=url;a.target='_blank';a.textContent='Abrir CAC Gestao e importar \\u00bb';a.style.cssText='display:inline-block;background:#fff;color:#0f766e;padding:7px 14px;border-radius:6px;text-decoration:none;font-weight:700';
+var x=document.createElement('span');x.textContent=' \\u2715';x.style.cssText='cursor:pointer;margin-left:10px';x.onclick=function(){ov.remove();};
+ov.appendChild(msg);ov.appendChild(a);ov.appendChild(x);
 })()`;
 
 function getBookmarkletArmasHref() {
@@ -13295,8 +13325,9 @@ function abrirImportSinarm(clienteId) {
           <li>Acesse o SINARM CAC (<em>servicos.pf.gov.br</em>) e faça login</li>
           <li>Abra a aba <em>"Acervo" / "Meu Acervo"</em> — a <strong>lista</strong> de armas (não o detalhe)</li>
           <li>Se tiver muitas armas, aumente o <em>itens por página</em> (ex.: de 20 para 100) para pegar todas de uma vez</li>
-          <li>Clique no favorito <strong>"Importar Acervo p/ Gestão"</strong> — ele copia as armas e abre esta página</li>
-          <li>Revise a lista e clique em <strong>Importar</strong></li>
+          <li>Clique no favorito <strong>"Importar Acervo p/ Gestão"</strong> — ele vai <strong>abrir cada arma sozinho</strong> e capturar os detalhes (aguarde alguns segundos; aparece um contador no canto)</li>
+          <li>Ao terminar, clique em <strong>"Abrir CAC Gestão e importar"</strong> no aviso verde — a lista abre aqui já preenchida</li>
+          <li>Revise e clique em <strong>Importar</strong>. <em>Não mexa no mouse enquanto ele captura.</em></li>
         </ol>
         <div style="margin-top:12px;text-align:center">
           <button class="btn btn-outline btn-sm" onclick="navigate('armas/importar',{clienteId:'${clienteId}'})"><i class="bi bi-clipboard-check me-1"></i>Já copiei — abrir tela de importação</button>
