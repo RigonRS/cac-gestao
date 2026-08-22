@@ -13244,38 +13244,24 @@ var H='__CAC_URL__';
 if(!location.host.includes('pf.gov.br')){alert('Use este favorito na pagina do SINARM CAC (servicos.pf.gov.br), na tela "Meu Acervo".');return;}
 function up(s){return (s||'').normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').toUpperCase().trim();}
 function tx(el){return el?(el.textContent||'').replace(/\\s+/g,' ').trim():'';}
-function idxDe(hs,alvo){for(var i=0;i<hs.length;i++){if(hs[i].indexOf(alvo)>=0)return i;}return -1;}
 var armas=[];
-var tabs=Array.from(document.querySelectorAll('table'));
-var tab=null;
-for(var t=0;t<tabs.length;t++){var h=Array.from(tabs[t].querySelectorAll('th')).map(function(x){return up(tx(x));});if(h.some(function(v){return v.indexOf('ORDEM')>=0;})&&h.some(function(v){return v.indexOf('ESPECIE')>=0||v.indexOf('NOMENCLATURA')>=0;})){tab=tabs[t];break;}}
-if(tab){
-  var hs=Array.from(tab.querySelectorAll('th')).map(function(x){return up(tx(x));});
-  var iOrd=idxDe(hs,'ORDEM'),iDesc=idxDe(hs,'DESCRICAO'),iEsp=idxDe(hs,'ESPECIE'),iMar=idxDe(hs,'MARCA'),iMod=idxDe(hs,'MODELO'),iPais=idxDe(hs,'PAIS'),iAq=idxDe(hs,'AQUISICAO'),iAt=idxDe(hs,'ATIVIDADE');
-  Array.from(tab.querySelectorAll('tbody tr')).forEach(function(tr){
-    var c=Array.from(tr.querySelectorAll('td')).map(function(x){return tx(x);});
-    if(c.length<2)return;
-    var desc=iDesc>=0?(c[iDesc]||''):'';
-    var mS=desc.match(/Arma:\\s*([A-Za-z0-9.\\-\\/]+)/i);
-    var serie=(mS?mS[1]:'').trim()||(iOrd>=0?(c[iOrd]||''):'').trim();
-    var mC=desc.match(/Calibre\\(s\\):\\s*([^\\(\\n]+)/i);
-    var cal=(mC?mC[1]:'').trim();
-    var grp=/RESTRITO/i.test(desc)?'Restrito':(/PERMITIDO/i.test(desc)?'Permitido':'');
-    armas.push({numeroSerie:serie,calibre:cal,grupoCalibre:grp,especie:iEsp>=0?c[iEsp]:'',marca:iMar>=0?c[iMar]:'',modelo:iMod>=0?c[iMod]:'',paisFabricacao:iPais>=0?c[iPais]:'',dataAquisicao:iAq>=0?c[iAq]:'',atividade:iAt>=0?c[iAt]:''});
-  });
-}
-function campo(lbl){
-  var nodes=Array.from(document.querySelectorAll('label,mat-label,span,div,p,th,dt,strong'));
-  for(var i=0;i<nodes.length;i++){var nd=nodes[i];if(nd.childElementCount>0)continue;var t=tx(nd).replace(/:$/,'');if(up(t)!==up(lbl))continue;
-    var wrap=nd.closest('mat-form-field,[class*="form-field"],[class*="field"],[class*="group"],tr,li');
-    if(wrap){var inp=wrap.querySelector('input,textarea');if(inp&&inp.value&&inp.value.trim())return inp.value.trim();var cands=Array.from(wrap.querySelectorAll('*')).filter(function(x){return x.childElementCount===0;}).map(tx).filter(function(v){return v&&up(v)!==up(t)&&v.length<120;});if(cands[0])return cands[0];}
-    var sib=nd.nextElementSibling;if(sib){var v2=tx(sib);if(v2&&up(v2)!==up(t))return v2;var i2=sib.querySelector&&sib.querySelector('input');if(i2&&i2.value)return i2.value.trim();}
-  }
-  return '';
-}
-var det={numeroSerie:campo('Nº da arma')||campo('N° da arma')||campo('Nº da Arma'),modelo:campo('Modelo'),calibre:campo('Calibre'),especie:campo('Espécie'),marca:campo('Marca'),grupoCalibre:campo('Grupo Calibre'),capacidadeTiro:campo('Quant. Capacidade Cartucho'),paisFabricacao:campo('País Fabricação')||campo('País de Fabricação'),numeroCanos:campo('Nº de Canos'),almaCano:campo('Alma do Cano'),numeroRaias:campo('Nº de Raias'),sentidoRaias:campo('Sentido da Raia'),acabamento:campo('Acabamento'),funcionamento:campo('Funcionamento'),atividade:campo('Atividade'),status:campo('Status')};
-if(det.numeroSerie){var achou=false;for(var i=0;i<armas.length;i++){if(up(armas[i].numeroSerie)===up(det.numeroSerie)){Object.keys(det).forEach(function(k){if(det[k])armas[i][k]=det[k];});achou=true;break;}}if(!achou)armas.push(det);}
-if(!armas.length){alert('Nao encontrei o acervo. Abra a tela "Meu Acervo" (ou o detalhe de uma arma) e clique o favorito novamente.');return;}
+// Acha as linhas do acervo pelo conteudo ("Calibre(s):"), sem depender do cabecalho (PrimeNG separa header/body)
+var linhas=Array.from(document.querySelectorAll('tr')).filter(function(tr){return /Calibre\\(s\\)/i.test(tr.textContent||'');});
+linhas.forEach(function(tr){
+  var cel=Array.from(tr.querySelectorAll('td')).map(function(x){return tx(x);});
+  if(!cel.length)return;
+  var di=-1;for(var k=0;k<cel.length;k++){if(/Calibre\\(s\\)/i.test(cel[k])){di=k;break;}}
+  if(di<0)return;
+  var desc=cel[di]||'';
+  var mS=desc.match(/Arma:\\s*([A-Za-z0-9.\\-\\/]+)/i);
+  var serie=(mS?mS[1]:'').trim()||(cel[0]||'').trim();
+  var mC=desc.match(/Calibre\\(s\\):\\s*([^\\(\\n]+)/i);
+  var cal=(mC?mC[1]:'').trim();
+  var grp=/RESTRITO/i.test(desc)?'Restrito':(/PERMITIDO/i.test(desc)?'Permitido':'');
+  function g(off){return (cel[di+off]||'').trim();}
+  armas.push({numeroSerie:serie,calibre:cal,grupoCalibre:grp,especie:g(1),marca:g(2),modelo:g(3),paisFabricacao:g(4),dataAquisicao:g(5),atividade:g(6)});
+});
+if(!armas.length){alert('Nao encontrei as armas. Abra a aba "Acervo" / "Meu Acervo" (a LISTA de armas, nao o detalhe) e clique o favorito novamente.');return;}
 var cpf='';var mc=(document.body.innerText||'').match(/(\\d{3}\\.\\d{3}\\.\\d{3}-\\d{2})/);if(mc)cpf=mc[1];
 try{navigator.clipboard.writeText(JSON.stringify({cpf:cpf,armas:armas}));}catch(e){}
 if(!confirm(armas.length+' arma(s) capturada(s) e copiada(s).\\n\\nAbrir o CAC Gestao para revisar e importar?'))return;
@@ -13307,7 +13293,8 @@ function abrirImportSinarm(clienteId) {
         </div>
         <ol style="font-size:13px;line-height:1.9;color:var(--text);margin:0;padding-left:20px">
           <li>Acesse o SINARM CAC (<em>servicos.pf.gov.br</em>) e faça login</li>
-          <li>Abra a tela <em>"Meu Acervo"</em> (ou o detalhe de uma arma)</li>
+          <li>Abra a aba <em>"Acervo" / "Meu Acervo"</em> — a <strong>lista</strong> de armas (não o detalhe)</li>
+          <li>Se tiver muitas armas, aumente o <em>itens por página</em> (ex.: de 20 para 100) para pegar todas de uma vez</li>
           <li>Clique no favorito <strong>"Importar Acervo p/ Gestão"</strong> — ele copia as armas e abre esta página</li>
           <li>Revise a lista e clique em <strong>Importar</strong></li>
         </ol>
