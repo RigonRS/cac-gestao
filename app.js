@@ -1344,7 +1344,16 @@ async function renderClienteForm(id = null, importParams = {}) {
 
   if (!id && importParams.importar) {
     try { Object.assign(c, JSON.parse(importParams.importar)); } catch(e) {}
+    // Ao importar do SINARM: se veio a Data de Expedição (RG) mas não a validade,
+    // preenche por padrão a validade RG/CNH com Expedição + 10 anos.
+    const _exp = c.DataExpedicaoRG ? String(c.DataExpedicaoRG).split('T')[0] : '';
+    if (_exp && !c.DataValidadeRGouCNH) {
+      const [_y, _m, _d] = _exp.split('-').map(Number);
+      if (_y && _m && _d) c.DataValidadeRGouCNH = `${_y + 10}-${String(_m).padStart(2,'0')}-${String(_d).padStart(2,'0')}`;
+    }
   }
+  // Sexo padrão Masculino ao criar cliente novo (ou importar) quando não informado.
+  const sexoVal = c.Sexo || (!id ? 'Masculino' : '');
 
   const clubes = (await App.getClubes()).sort((a,b) => (a.Title||'').localeCompare(b.Title||'','pt-BR'));
 
@@ -1391,7 +1400,7 @@ async function renderClienteForm(id = null, importParams = {}) {
           <div><label>Naturalidade</label><input name="Naturalidade" value="${val('Naturalidade')}" /></div>
           <div><label>UF Naturalidade</label><input name="UFNaturalidade" value="${val('UFNaturalidade')}" maxlength="2" style="text-transform:uppercase" /></div>
           <div><label>Profissão</label><input name="Profissao" value="${val('Profissao')}" /></div>
-          <div><label>Sexo</label><select name="Sexo"><option value="">Selecione...</option><option ${c.Sexo==='Masculino'?'selected':''}>Masculino</option><option ${c.Sexo==='Feminino'?'selected':''}>Feminino</option></select></div>
+          <div><label>Sexo</label><select name="Sexo"><option value="">Selecione...</option><option ${sexoVal==='Masculino'?'selected':''}>Masculino</option><option ${sexoVal==='Feminino'?'selected':''}>Feminino</option></select></div>
           <div><label>Estado Civil</label><select name="EstadoCivil"><option value="">Selecione...</option>${['Solteiro','Casado','Divorciado','Viúvo','União Estável','Separado Jud.','Outros'].map(v=>`<option ${c.EstadoCivil===v?'selected':''}>${v}</option>`).join('')}</select></div>
         </div>
       </div>
@@ -7234,26 +7243,39 @@ async function renderPagamentosGRU() {
   });
   const gruGrupos = Object.values(porClienteGru).sort((a,b) => (a.nome||'').localeCompare(b.nome||''));
 
+  // Soma o valor de todas as taxas pendentes (usa a tabela TAXAS_PROCESSO por tipo de processo)
+  const taxaProcesso = p => TAXAS_PROCESSO[p.TipoProcesso] || 0;
+  const taxaTotal = gruPendentes.reduce((s, p) => s + taxaProcesso(p), 0);
+
   el.innerHTML = `
-    <div class="card" style="margin-bottom:16px;padding:16px">
-      <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">Total de Processos com GRU Pendente</div>
-      <div style="font-size:22px;font-weight:700;color:var(--accent)">${gruPendentes.length}</div>
+    <div class="card" style="margin-bottom:16px;padding:16px;display:flex;gap:32px;flex-wrap:wrap">
+      <div>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">Total de Processos com GRU Pendente</div>
+        <div style="font-size:22px;font-weight:700;color:var(--accent)">${gruPendentes.length}</div>
+      </div>
+      <div>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">Valor Total das Taxas</div>
+        <div style="font-size:22px;font-weight:700;color:#16a34a">${fmtMoeda(taxaTotal)}</div>
+      </div>
     </div>
     <div class="card">
       <div class="card-header">
         <h3><i class="bi bi-receipt me-2"></i>Pagamentos de GRU Pendentes</h3>
-        <span style="font-size:12px;color:var(--text-muted)">${gruPendentes.length} processo(s)</span>
+        <span style="font-size:12px;color:var(--text-muted)">${gruPendentes.length} processo(s) · ${fmtMoeda(taxaTotal)}</span>
       </div>
       <div class="card-body" style="padding:0">
         ${gruGrupos.map(g => `<div style="padding:12px 20px;border-bottom:1px solid var(--border)">
           <a style="font-size:14px;font-weight:700;cursor:pointer;color:var(--accent)" onclick="navigate('clientes/perfil',{id:'${g.clienteId}'})">${esc(g.nome)}</a>
           <div style="padding-left:12px;border-left:3px solid var(--border);margin-top:6px">
-            ${g.processos.map(p => `<div style="padding:5px 0;font-size:13px;display:flex;justify-content:space-between;align-items:center">
+            ${g.processos.map(p => `<div style="padding:5px 0;font-size:13px;display:flex;justify-content:space-between;align-items:center;gap:10px">
               <div>
                 <a style="cursor:pointer;color:var(--accent)" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.TipoProcesso||'—')}</a>
                 ${infoGRUProcesso(p) ? `<div style="font-size:11px;color:var(--text-muted);margin-top:1px">${esc(infoGRUProcesso(p))}</div>` : ''}
               </div>
-              <span class="badge badge-orange">GRU Pendente</span>
+              <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
+                <span style="font-size:13px;font-weight:600;color:#16a34a;white-space:nowrap">${fmtMoeda(taxaProcesso(p))}</span>
+                <span class="badge badge-orange">GRU Pendente</span>
+              </div>
             </div>`).join('')}
           </div>
         </div>`).join('')}
@@ -10771,6 +10793,14 @@ async function renderRegistroMovimentacoes() {
     'Editar Clube':      'bi-building-gear',
   };
 
+  // Uma cor fixa por operador (facilita distinguir quem fez cada movimentação)
+  const USUARIO_COR = {
+    'Andrieli': '#d97706',  // laranja
+    'Priscila': '#7c3aed',  // roxo
+    'Geison':   '#2563eb',  // azul
+    'Janaína':  '#db2777',  // rosa
+  };
+
   const el = document.getElementById('page-content');
   el.innerHTML = `
     <div class="card">
@@ -10786,7 +10816,7 @@ async function renderRegistroMovimentacoes() {
               <tbody>
                 ${filtrados.map(m => {
                   const icon = ACOES_ICONE[m.acao] || 'bi-dot';
-                  const userColor = m.usuario === 'Andrieli' ? '#d97706' : '#7c3aed';
+                  const userColor = USUARIO_COR[m.usuario] || '#475569';
                   return `<tr>
                     <td style="font-size:12px;white-space:nowrap;color:var(--text-muted)">${esc(m.data||'')} ${esc(m.hora||'')}</td>
                     <td><span style="font-weight:600;color:${userColor}">${esc(m.usuario||'—')}</span></td>
