@@ -752,6 +752,18 @@ function msgWhatsApp(chave, vars) {
   const template = MENSAGENS_WHATSAPP[chave] || '';
   return template.replace(/\{(\w+)\}/g, (m, k) => (vars && vars[k] != null ? String(vars[k]) : ''));
 }
+
+// Mensagem que é montada ao criar um orçamento (editável em Configurações).
+// Placeholders: {itens} (lista dos serviços), {desconto} (linha de desconto ou vazio),
+// {total} (valor total) e {avista} (valor à vista com 5% de desconto).
+const MENSAGEM_ORCAMENTO_PADRAO =
+`Segue valores de orçamento referente aos serviços solicitados:
+
+{itens}{desconto}
+
+Total: {total}
+Formas de pagamento: à vista com 5% de desconto ({avista}) ou cartão de crédito em até 10x com acréscimo dos juros da máquina.`;
+const MENSAGEM_ORCAMENTO = { texto: MENSAGEM_ORCAMENTO_PADRAO };
 const VALORES_EXTRA_RENOVACAO = { CTF: 15, SIMAF: 75 };
 
 function perguntarTipoRenovacao(titulo, onEscolha) {
@@ -7131,7 +7143,11 @@ async function renderRecebidos() {
   document.getElementById('page-title').textContent = 'Recebidos';
   showLoading();
   try {
-    const processos = await App.getProcessos();
+    const [processos, orcRaw] = await Promise.all([
+      App.getProcessos(),
+      App.graph._readFile('orcamentos').catch(() => []),
+    ]);
+    const orcamentos = Array.isArray(orcRaw) ? orcRaw : [];
     const lancamentos = [];
     processos.forEach(p => {
       let pagamentos = {};
@@ -7158,6 +7174,34 @@ async function renderRecebidos() {
           banco:        item.banco || '',
         });
       });
+    });
+
+    // Pagamentos registrados nos ORÇAMENTOS (modelo novo: o pagamento é lançado no
+    // orçamento, não no processo). Sem isso, esses valores não apareciam em Recebidos.
+    orcamentos.forEach(o => {
+      const pg = o.pagamento;
+      if (!pg || !pg.modalidade) return;
+      const dataBase = o.dataAprovacao ? o.dataAprovacao.split('T')[0] : (o.data ? o.data.split('T')[0] : null);
+      const push = (obj) => lancamentos.push({
+        clienteId: o.clienteId, clienteNome: o.clienteNome,
+        processoId: null, isOrcamento: true, orcId: o.id, orcNumero: o.numero,
+        tipoProcesso: `Orçamento ${o.numero || ''}`.trim(),
+        forma: pg.formaPagamento || '', banco: pg.banco || '',
+        ...obj,
+      });
+      if (pg.modalidade === 'avista') {
+        push({ data: (pg.dataPagamento || dataBase), label: 'À vista', valor: totalExibicaoOrcamento(o) });
+      } else if (pg.formaPagamento === 'Cartão') {
+        push({ data: (pg.dataPagamento || dataBase), label: `Cartão ${pg.vezes ? pg.vezes + 'x' : ''}`.trim(), valor: Number(o.total) || 0 });
+      } else if (Array.isArray(pg.parcelas)) {
+        if (pg.temEntrada && (Number(pg.valorEntrada) || 0) > 0) {
+          push({ data: dataBase, label: 'Entrada', valor: Number(pg.valorEntrada) || 0 });
+        }
+        pg.parcelas.forEach((pc, i) => {
+          if (!pc.pago) return;
+          push({ data: (pc.dataPagamento || dataBase), label: `Parcela ${i + 1}/${pg.parcelas.length}`, valor: Number(pc.valor) || 0 });
+        });
+      }
     });
 
     function mesLabel(ym) {
@@ -7203,7 +7247,7 @@ async function renderRecebidos() {
                 ${lista.map(l => `<tr>
                   <td style="white-space:nowrap">${l.data ? fmtDate(l.data) : '—'}</td>
                   <td><a style="cursor:pointer;color:var(--accent)" onclick="navigate('clientes/perfil',{id:'${l.clienteId}'})">${esc(l.clienteNome||'—')}</a></td>
-                  <td><a style="cursor:pointer;color:var(--accent)" onclick="navigate('processos/detalhe',{id:'${l.processoId}'})">${esc(l.tipoProcesso||'—')}</a></td>
+                  <td><a style="cursor:pointer;color:var(--accent)" onclick="navigate('${l.isOrcamento ? 'clientes/perfil' : 'processos/detalhe'}',${l.isOrcamento ? `{id:'${l.clienteId}',tab:'orcamentos'}` : `{id:'${l.processoId}'}`})">${esc(l.tipoProcesso||'—')}</a></td>
                   <td>${esc(l.label)}</td>
                   <td>${esc(l.forma||'—')}</td>
                   <td>${esc(l.banco||'—')}</td>
@@ -7273,7 +7317,10 @@ async function renderPagamentosGRU() {
                 ${infoGRUProcesso(p) ? `<div style="font-size:11px;color:var(--text-muted);margin-top:1px">${esc(infoGRUProcesso(p))}</div>` : ''}
               </div>
               <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
-                <span style="font-size:13px;font-weight:600;color:#16a34a;white-space:nowrap">${fmtMoeda(taxaProcesso(p))}</span>
+                <div style="text-align:right;white-space:nowrap">
+                  <span style="font-size:13px;font-weight:600;color:#16a34a">${fmtMoeda(taxaProcesso(p))}</span>
+                  ${p.DataProtocoloSistema ? `<div style="font-size:11px;color:var(--text-muted)"><i class="bi bi-calendar-check"></i> Protocolo: ${fmtDate(p.DataProtocoloSistema.split('T')[0])}</div>` : ''}
+                </div>
                 <span class="badge badge-orange">GRU Pendente</span>
               </div>
             </div>`).join('')}
@@ -7862,6 +7909,7 @@ async function renderConfiguracoes(view) {
   if (view === 'whatsapp')   return renderConfigWhatsApp();
   if (view === 'extras')     return renderConfigExtras();
   if (view === 'checklists') { window._chkEdit = null; return renderConfigChecklists(); }
+  if (view === 'msg-orcamento') return renderConfigMensagemOrcamento();
 
   const el = document.getElementById('page-content');
   el.innerHTML = `
@@ -7887,7 +7935,77 @@ async function renderConfiguracoes(view) {
           <p style="font-size:13px;color:var(--text-muted);margin:0">Organizar a ordem, adicionar e remover itens dos checklists dos processos.</p>
         </div>
       </div>
+      <div class="card" style="cursor:pointer" onclick="renderConfiguracoes('msg-orcamento')">
+        <div class="card-body" style="text-align:center;padding:28px 16px">
+          <i class="bi bi-chat-text" style="font-size:36px;color:#16a34a"></i>
+          <h3 style="margin:12px 0 6px;font-size:16px">Mensagem de Orçamento</h3>
+          <p style="font-size:13px;color:var(--text-muted);margin:0">Editar a mensagem gerada ao montar um orçamento para enviar ao cliente.</p>
+        </div>
+      </div>
     </div>`;
+}
+
+function renderConfigMensagemOrcamento() {
+  const el = document.getElementById('page-content');
+  // Prévia de exemplo para o usuário ver como fica com valores reais
+  const brl = v => v.toLocaleString('pt-BR', { style:'currency', currency:'BRL' });
+  const exemplo = (MENSAGEM_ORCAMENTO.texto || MENSAGEM_ORCAMENTO_PADRAO)
+    .replace(/\{itens\}/g, '• Concessão/Renovação de CR: ' + brl(100) + '\n• Guia de Tráfego (2x ' + brl(20) + '): ' + brl(40))
+    .replace(/\{desconto\}/g, '\nDesconto: − ' + brl(10))
+    .replace(/\{total\}/g, brl(130))
+    .replace(/\{avista\}/g, brl(123.5));
+  el.innerHTML = `
+    <button class="btn btn-ghost btn-sm" style="margin-bottom:12px" onclick="renderConfiguracoes('menu')"><i class="bi bi-arrow-left me-1"></i>Voltar</button>
+    <div class="card">
+      <div class="card-header">
+        <h3><i class="bi bi-chat-text me-2" style="color:#16a34a"></i>Mensagem de Orçamento</h3>
+        <button class="btn btn-primary" onclick="salvarMensagemOrcamento()"><i class="bi bi-floppy me-1"></i>Salvar Alterações</button>
+      </div>
+      <div class="card-body">
+        <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Esta é a mensagem montada automaticamente ao criar um orçamento. Use as chaves entre { } — elas são substituídas pelos dados reais na hora de enviar:</p>
+        <ul style="font-size:12px;color:var(--text-muted);margin:0 0 14px;padding-left:18px">
+          <li><strong>{itens}</strong> — a lista dos serviços com valores</li>
+          <li><strong>{desconto}</strong> — a linha de desconto (fica vazia se não houver)</li>
+          <li><strong>{total}</strong> — o valor total do orçamento</li>
+          <li><strong>{avista}</strong> — o valor à vista (total com 5% de desconto)</li>
+        </ul>
+        <textarea id="cfg-msg-orcamento" rows="10" style="width:100%;font-size:13px;font-family:inherit;box-sizing:border-box;border:1px solid var(--border);border-radius:8px;padding:10px" oninput="atualizarPreviewMsgOrcamento()">${esc(MENSAGEM_ORCAMENTO.texto || MENSAGEM_ORCAMENTO_PADRAO)}</textarea>
+        <div style="display:flex;justify-content:flex-end;margin-top:6px">
+          <button class="btn btn-ghost btn-sm" style="font-size:11px" onclick="restaurarMensagemOrcamentoPadrao()">Restaurar padrão</button>
+        </div>
+        <div style="margin-top:16px">
+          <label style="font-size:13px;font-weight:600">Prévia (exemplo)</label>
+          <pre id="cfg-msg-orcamento-preview" style="white-space:pre-wrap;font-family:inherit;font-size:13px;background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:4px">${esc(exemplo)}</pre>
+        </div>
+      </div>
+    </div>`;
+}
+
+function atualizarPreviewMsgOrcamento() {
+  const txt = document.getElementById('cfg-msg-orcamento')?.value || '';
+  const brl = v => v.toLocaleString('pt-BR', { style:'currency', currency:'BRL' });
+  const exemplo = txt
+    .replace(/\{itens\}/g, '• Concessão/Renovação de CR: ' + brl(100) + '\n• Guia de Tráfego (2x ' + brl(20) + '): ' + brl(40))
+    .replace(/\{desconto\}/g, '\nDesconto: − ' + brl(10))
+    .replace(/\{total\}/g, brl(130))
+    .replace(/\{avista\}/g, brl(123.5));
+  const el = document.getElementById('cfg-msg-orcamento-preview');
+  if (el) el.textContent = exemplo;
+}
+
+async function salvarMensagemOrcamento() {
+  const txt = document.getElementById('cfg-msg-orcamento')?.value || '';
+  showLoading();
+  try {
+    await App.graph._writeFile('mensagem_orcamento', { texto: txt });
+    MENSAGEM_ORCAMENTO.texto = txt;
+    toast('Mensagem de orçamento salva!', 'success');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+function restaurarMensagemOrcamentoPadrao() {
+  const ta = document.getElementById('cfg-msg-orcamento');
+  if (ta) { ta.value = MENSAGEM_ORCAMENTO_PADRAO; atualizarPreviewMsgOrcamento(); }
 }
 
 function renderConfigWhatsApp() {
@@ -11385,16 +11503,18 @@ function atualizarOrcamento() {
   }
 
   if (linhas.length > 0 && celularLimpo) {
-    const msg =
-      'Segue valores de orçamento referente aos serviços solicitados:\n\n' +
-      linhas.map(l => {
-        const unStr  = l.valor.toLocaleString('pt-BR', { style:'currency', currency:'BRL' });
-        const subStr = l.subtotal.toLocaleString('pt-BR', { style:'currency', currency:'BRL' });
-        return l.qtd > 1 ? `• ${l.tipo} (${l.qtd}x ${unStr}): ${subStr}` : `• ${l.tipo}: ${subStr}`;
-      }).join('\n') +
-      (desconto > 0 ? `\nDesconto: − ${desconto.toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}` : '') +
-      `\n\nTotal: ${totalComDesc.toLocaleString('pt-BR', { style:'currency', currency:'BRL' })}` +
-      `\nFormas de pagamento: à vista com 5% de desconto (${(totalComDesc*0.95).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}) ou cartão de crédito em até 10x com acréscimo dos juros da máquina.`;
+    const brl = v => v.toLocaleString('pt-BR', { style:'currency', currency:'BRL' });
+    const itensStr = linhas.map(l => {
+      const unStr  = brl(l.valor);
+      const subStr = brl(l.subtotal);
+      return l.qtd > 1 ? `• ${l.tipo} (${l.qtd}x ${unStr}): ${subStr}` : `• ${l.tipo}: ${subStr}`;
+    }).join('\n');
+    const descontoStr = desconto > 0 ? `\nDesconto: − ${brl(desconto)}` : '';
+    const msg = (MENSAGEM_ORCAMENTO.texto || MENSAGEM_ORCAMENTO_PADRAO)
+      .replace(/\{itens\}/g, itensStr)
+      .replace(/\{desconto\}/g, descontoStr)
+      .replace(/\{total\}/g, brl(totalComDesc))
+      .replace(/\{avista\}/g, brl(totalComDesc * 0.95));
     window._orcWa = { celular: celularLimpo, msg };
     [waBtn, document.getElementById('orc-vermsg-btn')].forEach(b => { if (b) { b.style.pointerEvents = ''; b.style.opacity = '1'; } });
   } else {
@@ -12130,6 +12250,7 @@ async function renderControleDemandas() {
     const demandas = Array.isArray(demandasRaw) ? demandasRaw : [];
     const orcamentos = Array.isArray(orcRaw) ? orcRaw : [];
     window._controleDemandasProcessos = processos;
+    window._controleDemandasLista = demandas;
 
     // Painel por operador
     const painelHtml = RESPONSAVEIS.map(op => {
@@ -12148,7 +12269,10 @@ async function renderControleDemandas() {
         <div style="font-size:14px;font-weight:700;margin-bottom:10px">${esc(op)}</div>
         <div style="display:flex;gap:14px;justify-content:center;flex-wrap:wrap">
           <div title="Demandas em aberto">
-            <div style="font-size:24px;font-weight:800;color:var(--accent)">${demandasOp}</div>
+            <div style="display:flex;align-items:center;gap:2px;justify-content:center">
+              <div style="font-size:24px;font-weight:800;color:var(--accent)">${demandasOp}</div>
+              <button class="btn btn-ghost btn-sm" style="padding:0 2px" onclick="abrirModalDemandasOperador('${esc(op)}')" title="Ver demandas em aberto de ${esc(op)}"><i class="bi bi-eye" style="font-size:12px"></i></button>
+            </div>
             <div style="font-size:10px;color:var(--text-muted)">demandas</div>
           </div>
           ${contador(aProtocolarOp, 'var(--warning,#f59e0b)', 'a protocolar', 'aprotocolar')}
@@ -12261,6 +12385,41 @@ function abrirModalProcessosOperador(operador, filtro) {
                     <td>${esc(p.TipoProcesso||'—')}</td>
                     <td style="font-size:12px;color:var(--text-muted)">${esc(info)||'—'}</td>
                     <td><span class="badge ${b.cls}">${b.txt}</span></td>
+                  </tr>`;
+                }).join('')}
+              </tbody>
+            </table></div>`}
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
+function abrirModalDemandasOperador(operador) {
+  const demandas = window._controleDemandasLista || [];
+  const lista = demandas.filter(d => d.operador === operador && d.status === 'Aberta');
+  document.getElementById('modal-demandas-operador')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modal-demandas-operador';
+  modal.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this) this.remove()">
+      <div style="background:#fff;border-radius:14px;padding:24px;max-width:720px;width:100%;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+          <h3 style="margin:0;font-size:16px"><i class="bi bi-list-task me-2"></i>Demandas em Aberto — ${esc(operador)}</h3>
+          <button onclick="document.getElementById('modal-demandas-operador').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:#666;line-height:1">×</button>
+        </div>
+        ${lista.length === 0
+          ? `<div class="empty-state" style="padding:24px"><i class="bi bi-check-circle"></i><p>Nenhuma demanda em aberto para ${esc(operador)}.</p></div>`
+          : `<div class="table-wrapper"><table>
+              <thead><tr><th>Nº</th><th>Cliente</th><th>Criado em</th><th>Serviços</th><th>Total</th></tr></thead>
+              <tbody>
+                ${lista.map(d => {
+                  const servicos = (d.itens||[]).map(item => `${item.qtd>1?item.qtd+'× ':''}${esc(item.tipo)}`).join('<br>') || '—';
+                  return `<tr>
+                    <td style="font-weight:700;white-space:nowrap">${esc(d.numero||'—')}</td>
+                    <td style="font-weight:600">${esc(d.clienteNome||'—')}</td>
+                    <td style="white-space:nowrap;font-size:12px">${fmtDate(d.dataCriacao)}</td>
+                    <td style="font-size:12px">${servicos}</td>
+                    <td style="white-space:nowrap;font-weight:600">${fmtMoeda(d.total||0)}</td>
                   </tr>`;
                 }).join('')}
               </tbody>
@@ -12651,6 +12810,12 @@ async function iniciarApp() {
   try {
     const mp = await App.graph._readFile('mensagens_whatsapp');
     if (mp && !Array.isArray(mp)) Object.assign(MENSAGENS_WHATSAPP, mp);
+  } catch(e) {}
+
+  // Carrega a mensagem de orçamento personalizada
+  try {
+    const mo = await App.graph._readFile('mensagem_orcamento');
+    if (mo && !Array.isArray(mo) && typeof mo.texto === 'string') MENSAGEM_ORCAMENTO.texto = mo.texto;
   } catch(e) {}
 
   // Carrega configuração de extras
