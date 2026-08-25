@@ -130,13 +130,15 @@ body {
 #page-content { padding: 24px; flex: 1; background: #eef4fd; }
 
 /* ---- CARDS / PAINEIS ---- */
+/* Contorno suave em tom latão, combinando com o dourado da logo PR */
 .card {
   background: white; border-radius: 10px;
-  border: 1px solid var(--border); overflow: hidden;
+  border: 1px solid #d1ba7d; overflow: hidden;
+  box-shadow: 0 1px 3px rgba(178,142,54,.10), 0 0 0 1px rgba(178,142,54,.05);
 }
 .card-header {
-  padding: 14px 20px; background: white;
-  border-bottom: 1px solid var(--border);
+  padding: 14px 20px; background: #f6f2e8;
+  border-bottom: 1px solid #e8dec6;
   display: flex; align-items: center; justify-content: space-between;
 }
 .card-header h3 { margin: 0; font-size: 14px; font-weight: 600; }
@@ -149,7 +151,8 @@ body {
 }
 .stat-card {
   background: white; border-radius: 10px;
-  border: 1px solid var(--border); padding: 20px;
+  border: 1px solid #d1ba7d; padding: 20px;
+  box-shadow: 0 1px 3px rgba(178,142,54,.10), 0 0 0 1px rgba(178,142,54,.05);
   display: flex; align-items: center; gap: 16px;
 }
 .stat-icon {
