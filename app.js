@@ -9270,6 +9270,16 @@ async function waAbrirPerfil() {
 }
 
 async function waAbrir(jid) {
+  const jidAnterior = window._wa.jidAtivo;
+  // Reabrindo a MESMA conversa (mesmo grupo de jids)? Então preservamos o que já
+  // está na tela para que NADA suma — mesmo que o servidor ainda não tenha devolvido
+  // uma mensagem recém-enviada (ex.: eco ainda não persistido, ou jid @lid x @s.whatsapp.net).
+  const mesmaConversa = !!jidAnterior && (
+    jidAnterior === jid ||
+    waJidsDoGrupo(jidAnterior).includes(jid) ||
+    waJidsDoGrupo(jid).includes(jidAnterior)
+  );
+  const preservar = mesmaConversa ? (window._wa.msgs || []).slice() : [];
   window._wa.jidAtivo = jid;
   window._wa.respondendo = null; waRenderRespondendo();
   if (window._wa.anexoPendente) waCancelarAnexo();
@@ -9282,12 +9292,21 @@ async function waAbrir(jid) {
   try {
     const arrays = await Promise.all(jids.map(j => waApi('/messages?jid=' + encodeURIComponent(j)).then(r => r.messages || []).catch(() => [])));
     const vistos = new Set();
-    window._wa.msgs = arrays.flat().map(waNorm)
-      .filter(m => { if (vistos.has(m.id)) return false; vistos.add(m.id); return true; })
+    const msgs = arrays.flat().map(waNorm)
+      .filter(m => { if (m.id && vistos.has(m.id)) return false; if (m.id) vistos.add(m.id); return true; })
       .sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    // Reinsere o que já estava visível e o servidor ainda não devolveu (nunca perde mensagem)
+    for (const pm of preservar) {
+      if (!msgs.some(x => (x.id && pm.id && x.id === pm.id) || waMesmaMsg(x, pm))) msgs.push(pm);
+    }
+    window._wa.msgs = msgs.sort((a, b) => (a.ts || 0) - (b.ts || 0));
     waMesclarEnviadas(); // reinsere mensagens recém-enviadas que o servidor ainda não devolveu
     waRenderThread();
-  } catch (e) { document.getElementById('wa-thread').innerHTML = `<div style="color:var(--danger);font-size:13px;margin:auto">${esc(e.message)}</div>`; }
+  } catch (e) {
+    // Em caso de erro na busca, não descarta o que já estava na tela
+    if (preservar.length) { window._wa.msgs = preservar; waMesclarEnviadas(); waRenderThread(); }
+    else document.getElementById('wa-thread').innerHTML = `<div style="color:var(--danger);font-size:13px;margin:auto">${esc(e.message)}</div>`;
+  }
   jids.forEach(j => { const c = window._wa.chats.find(x => x.jid === j); if (c) c.unread = 0; });
   waRenderLista();
 }
@@ -9582,8 +9601,9 @@ function waConvKey(jid) {
 function waRegistrarEnviada(raw) {
   window._wa.enviadas = window._wa.enviadas || [];
   const m = waNorm(raw);
-  window._wa.enviadas.push({ key: waConvKey(window._wa.jidAtivo), t: Date.now(), m });
-  window._wa.enviadas = window._wa.enviadas.filter(x => Date.now() - x.t < 300000); // 5 min
+  // Guarda a chave por telefone E o jid/grupo, para casar mesmo com variações de jid (@lid x @s.whatsapp.net)
+  window._wa.enviadas.push({ key: waConvKey(window._wa.jidAtivo), jid: window._wa.jidAtivo, t: Date.now(), m });
+  window._wa.enviadas = window._wa.enviadas.filter(x => Date.now() - x.t < 1800000); // 30 min
 }
 // Confere se duas mensagens são "a mesma".
 // Mídia sempre casa pelo id (o mesmo arquivo tem o mesmo id); texto pode casar
@@ -9598,10 +9618,14 @@ function waMesmaMsg(a, b) {
 function waMesclarEnviadas() {
   if (!window._wa.jidAtivo || !Array.isArray(window._wa.enviadas)) return;
   const key = waConvKey(window._wa.jidAtivo);
+  const jidsAtuais = waJidsDoGrupo(window._wa.jidAtivo);
   const msgs = window._wa.msgs || (window._wa.msgs = []);
   for (const e of window._wa.enviadas) {
-    if (e.key !== key) continue;
-    if (!msgs.some(x => waMesmaMsg(x, e.m))) msgs.push(e.m);
+    // Pertence à conversa aberta se: mesma chave de telefone, OU o jid de origem/da
+    // mensagem está no grupo de jids atual (cobre @lid x @s.whatsapp.net).
+    const pertence = (e.key && e.key === key) || jidsAtuais.includes(e.jid) || jidsAtuais.includes(e.m && e.m.jid);
+    if (!pertence) continue;
+    if (!msgs.some(x => (x.id && e.m.id && x.id === e.m.id) || waMesmaMsg(x, e.m))) msgs.push(e.m);
   }
   msgs.sort((a, b) => (a.ts || 0) - (b.ts || 0));
 }
