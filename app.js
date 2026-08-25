@@ -7910,6 +7910,7 @@ async function renderConfiguracoes(view) {
   if (view === 'extras')     return renderConfigExtras();
   if (view === 'checklists') { window._chkEdit = null; return renderConfigChecklists(); }
   if (view === 'msg-orcamento') return renderConfigMensagemOrcamento();
+  if (view === 'info-portal') return renderConfigInfoPortal();
 
   const el = document.getElementById('page-content');
   el.innerHTML = `
@@ -7942,7 +7943,89 @@ async function renderConfiguracoes(view) {
           <p style="font-size:13px;color:var(--text-muted);margin:0">Editar a mensagem gerada ao montar um orçamento para enviar ao cliente.</p>
         </div>
       </div>
+      <div class="card" style="cursor:pointer" onclick="renderConfiguracoes('info-portal')">
+        <div class="card-body" style="text-align:center;padding:28px 16px">
+          <i class="bi bi-info-circle" style="font-size:36px;color:#0891b2"></i>
+          <h3 style="margin:12px 0 6px;font-size:16px">Informações do Portal</h3>
+          <p style="font-size:13px;color:var(--text-muted);margin:0">Editar os cards de "Informações importantes" exibidos no Portal do Cliente.</p>
+        </div>
+      </div>
     </div>`;
+}
+
+async function renderConfigInfoPortal() {
+  const el = document.getElementById('page-content');
+  el.innerHTML = `<div class="empty-state" style="padding:40px"><div class="spinner"></div></div>`;
+  let lista = [];
+  try {
+    const raw = await App.graph._readFile('informacoes_portal');
+    if (Array.isArray(raw)) lista = raw;
+  } catch(e) {}
+  // Estado editável em memória (salvo em bloco ao clicar em "Salvar")
+  window._infoPortalCards = lista.map(c => ({ titulo: c.titulo || '', conteudo: c.conteudo || '' }));
+  _renderInfoPortalEditor();
+}
+
+function _renderInfoPortalEditor() {
+  const el = document.getElementById('page-content');
+  const cards = window._infoPortalCards || [];
+  el.innerHTML = `
+    <button class="btn btn-ghost btn-sm" style="margin-bottom:12px" onclick="renderConfiguracoes('menu')"><i class="bi bi-arrow-left me-1"></i>Voltar</button>
+    <div class="card">
+      <div class="card-header">
+        <h3><i class="bi bi-info-circle me-2" style="color:#0891b2"></i>Informações do Portal do Cliente</h3>
+        <button class="btn btn-primary" onclick="salvarInfoPortal()"><i class="bi bi-floppy me-1"></i>Salvar Alterações</button>
+      </div>
+      <div class="card-body">
+        <p style="font-size:12px;color:var(--text-muted);margin-bottom:14px">Cada card aparece na seção <strong>Informações importantes</strong> do Portal. O cliente vê a lista de títulos e, ao clicar em um, lê o conteúdo. As alterações valem para todos os clientes.</p>
+        <div id="info-portal-lista">
+          ${cards.length ? cards.map((c, i) => _infoPortalCardHtml(c, i)).join('') : '<div class="empty-state" style="padding:20px">Nenhum card ainda. Clique em "Adicionar card".</div>'}
+        </div>
+        <button class="btn btn-outline btn-sm" style="margin-top:12px" onclick="adicionarInfoPortalCard()"><i class="bi bi-plus-lg me-1"></i>Adicionar card</button>
+      </div>
+    </div>`;
+}
+
+function _infoPortalCardHtml(c, i) {
+  const total = (window._infoPortalCards || []).length;
+  return `<div style="border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:12px;background:#f8fafc">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+      <span style="font-size:12px;font-weight:700;color:var(--text-muted);flex-shrink:0">#${i+1}</span>
+      <input type="text" value="${esc(c.titulo)}" placeholder="Título do card" oninput="window._infoPortalCards[${i}].titulo=this.value" style="flex:1;font-weight:600;font-size:14px;padding:8px 10px;border:1px solid var(--border);border-radius:8px" />
+      <button class="btn btn-ghost btn-sm" style="padding:2px 6px" onclick="moverInfoPortalCard(${i},-1)" ${i===0?'disabled':''} title="Subir"><i class="bi bi-arrow-up"></i></button>
+      <button class="btn btn-ghost btn-sm" style="padding:2px 6px" onclick="moverInfoPortalCard(${i},1)" ${i===total-1?'disabled':''} title="Descer"><i class="bi bi-arrow-down"></i></button>
+      <button class="btn btn-ghost btn-sm" style="padding:2px 6px" onclick="removerInfoPortalCard(${i})" title="Remover"><i class="bi bi-trash" style="color:var(--danger)"></i></button>
+    </div>
+    <textarea rows="4" placeholder="Conteúdo (texto exibido ao abrir o card)" oninput="window._infoPortalCards[${i}].conteudo=this.value" style="width:100%;box-sizing:border-box;font-size:13px;font-family:inherit;padding:10px;border:1px solid var(--border);border-radius:8px;resize:vertical">${esc(c.conteudo)}</textarea>
+  </div>`;
+}
+
+function adicionarInfoPortalCard() {
+  window._infoPortalCards = window._infoPortalCards || [];
+  window._infoPortalCards.push({ titulo: '', conteudo: '' });
+  _renderInfoPortalEditor();
+}
+function removerInfoPortalCard(i) {
+  window._infoPortalCards.splice(i, 1);
+  _renderInfoPortalEditor();
+}
+function moverInfoPortalCard(i, dir) {
+  const arr = window._infoPortalCards;
+  const j = i + dir;
+  if (j < 0 || j >= arr.length) return;
+  [arr[i], arr[j]] = [arr[j], arr[i]];
+  _renderInfoPortalEditor();
+}
+async function salvarInfoPortal() {
+  const arr = (window._infoPortalCards || [])
+    .map(c => ({ titulo: (c.titulo||'').trim(), conteudo: (c.conteudo||'').trim() }))
+    .filter(c => c.titulo || c.conteudo);
+  showLoading();
+  try {
+    await App.graph._writeFile('informacoes_portal', arr);
+    window._infoPortalCards = arr;
+    toast('Informações do Portal salvas!', 'success');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 function renderConfigMensagemOrcamento() {
