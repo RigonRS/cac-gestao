@@ -8512,6 +8512,7 @@ async function renderWhatsApp() {
   window._wa.avatars = prev.avatars || {};          // mantém as fotos já baixadas entre navegações
   window._wa.estado = prev.estado || { conectado: false, qr: null, numero: null };
   window._wa.aba = 'tudo';
+  if (!Array.isArray(window._wa.enviadas)) waCarregarEnviadas(); // rede de segurança contra "mensagem enviada some"
   if (!window._wa.clientesIdx) {
     try {
       const cs = await App.getClientes();
@@ -9295,6 +9296,8 @@ async function waAbrir(jid) {
     const msgs = arrays.flat().map(waNorm)
       .filter(m => { if (m.id && vistos.has(m.id)) return false; if (m.id) vistos.add(m.id); return true; })
       .sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    // O servidor confirmou (persistiu) estas mensagens: pode soltá-las do buffer de segurança
+    waConfirmarEnviadas(msgs);
     // Reinsere o que já estava visível e o servidor ainda não devolveu (nunca perde mensagem)
     for (const pm of preservar) {
       if (!msgs.some(x => (x.id && pm.id && x.id === pm.id) || waMesmaMsg(x, pm))) msgs.push(pm);
@@ -9598,12 +9601,46 @@ function waConvKey(jid) {
   const tel = chat.phone ? String(chat.phone).replace(/\D/g, '') : String(jid || '').split('@')[0].replace(/\D/g, '');
   return tel.length >= 8 ? tel.slice(-8) : String(jid || '');
 }
+// Conjunto de "chaves" (telefone e jids) de TODAS as conversas do mesmo contato.
+// Usado para casar mensagens enviadas mesmo quando o contato aparece com jids diferentes.
+function waTelsGrupo(jid) {
+  const tels = new Set();
+  for (const j of waJidsDoGrupo(jid)) {
+    const chat = (window._wa.chats || []).find(x => x.jid === j) || {};
+    const tel = chat.phone ? String(chat.phone).replace(/\D/g, '') : String(j || '').split('@')[0].replace(/\D/g, '');
+    if (tel.length >= 8) tels.add(tel.slice(-8)); else if (tel) tels.add(tel);
+    tels.add(String(j));
+  }
+  return tels;
+}
+// Persistência do buffer (sobrevive a recarregar a página / trocar de página)
+function waSalvarEnviadas() {
+  try { localStorage.setItem('wa_enviadas', JSON.stringify(window._wa.enviadas || [])); } catch (e) {}
+}
+function waCarregarEnviadas() {
+  try {
+    const s = localStorage.getItem('wa_enviadas');
+    const a = s ? JSON.parse(s) : [];
+    window._wa.enviadas = (Array.isArray(a) ? a : []).filter(x => x && (Date.now() - (x.t || 0) < 86400000)); // 24h de segurança
+  } catch (e) { window._wa.enviadas = []; }
+}
 function waRegistrarEnviada(raw) {
   window._wa.enviadas = window._wa.enviadas || [];
   const m = waNorm(raw);
-  // Guarda a chave por telefone E o jid/grupo, para casar mesmo com variações de jid (@lid x @s.whatsapp.net)
-  window._wa.enviadas.push({ key: waConvKey(window._wa.jidAtivo), jid: window._wa.jidAtivo, t: Date.now(), m });
-  window._wa.enviadas = window._wa.enviadas.filter(x => Date.now() - x.t < 1800000); // 30 min
+  // Guarda telefone, jid de destino E o grupo de jids — para casar mesmo com variações (@lid x @s.whatsapp.net)
+  window._wa.enviadas.push({ key: waConvKey(window._wa.jidAtivo), jid: window._wa.jidAtivo, jids: waJidsDoGrupo(window._wa.jidAtivo), t: Date.now(), m });
+  window._wa.enviadas = window._wa.enviadas.filter(x => Date.now() - x.t < 86400000); // limpeza de 24h (segurança)
+  waSalvarEnviadas();
+}
+// Quando o servidor devolve as mensagens de uma conversa, tira do buffer as que ele
+// já persistiu (o mesmo id apareceu) — assim o buffer só guarda o que ainda não foi confirmado.
+function waConfirmarEnviadas(msgsServidor) {
+  if (!Array.isArray(window._wa.enviadas) || !window._wa.enviadas.length) return;
+  const ids = new Set((msgsServidor || []).filter(x => x && x.id).map(x => x.id));
+  if (!ids.size) return;
+  const antes = window._wa.enviadas.length;
+  window._wa.enviadas = window._wa.enviadas.filter(e => !(e.m && e.m.id && ids.has(e.m.id)));
+  if (window._wa.enviadas.length !== antes) waSalvarEnviadas();
 }
 // Confere se duas mensagens são "a mesma".
 // Mídia sempre casa pelo id (o mesmo arquivo tem o mesmo id); texto pode casar
@@ -9617,13 +9654,12 @@ function waMesmaMsg(a, b) {
 }
 function waMesclarEnviadas() {
   if (!window._wa.jidAtivo || !Array.isArray(window._wa.enviadas)) return;
-  const key = waConvKey(window._wa.jidAtivo);
-  const jidsAtuais = waJidsDoGrupo(window._wa.jidAtivo);
+  const tels = waTelsGrupo(window._wa.jidAtivo); // telefones + jids de todo o grupo do contato
   const msgs = window._wa.msgs || (window._wa.msgs = []);
   for (const e of window._wa.enviadas) {
-    // Pertence à conversa aberta se: mesma chave de telefone, OU o jid de origem/da
-    // mensagem está no grupo de jids atual (cobre @lid x @s.whatsapp.net).
-    const pertence = (e.key && e.key === key) || jidsAtuais.includes(e.jid) || jidsAtuais.includes(e.m && e.m.jid);
+    // Pertence à conversa aberta se qualquer chave (telefone/jid) do envio bater com o grupo atual.
+    const pertence = tels.has(e.key) || tels.has(e.jid) || tels.has(e.m && e.m.jid) ||
+      (Array.isArray(e.jids) && e.jids.some(j => tels.has(String(j))));
     if (!pertence) continue;
     if (!msgs.some(x => (x.id && e.m.id && x.id === e.m.id) || waMesmaMsg(x, e.m))) msgs.push(e.m);
   }
