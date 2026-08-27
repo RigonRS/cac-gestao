@@ -264,6 +264,40 @@ async function _carregarOrcamentosDemandas() {
   };
 }
 
+// ------------------------------------------------------------
+// CRÉDITO EM HAVER (saldo por cliente, usado para abater orçamentos)
+// Arquivo: creditos_haver.json = { [clienteId]: { saldo, historico: [...] } }
+// ------------------------------------------------------------
+async function _carregarCreditos() {
+  const raw = await App.graph._readFile('creditos_haver').catch(() => ({}));
+  return (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
+}
+function saldoCreditoHaver(mapa, clienteId) {
+  const e = mapa && mapa[String(clienteId)];
+  const s = e ? Number(e.saldo) : 0;
+  return Number.isFinite(s) && s > 0 ? s : 0;
+}
+// Aplica um ajuste (delta, positivo = adiciona / negativo = usa) ao saldo do cliente,
+// registra no histórico e persiste. Nunca deixa o saldo ficar negativo.
+async function salvarCreditoHaver(clienteId, delta, descricao) {
+  const mapa = await _carregarCreditos();
+  const key  = String(clienteId);
+  const atual = (mapa[key] && Number(mapa[key].saldo)) || 0;
+  let novo = Math.round((atual + delta) * 100) / 100;
+  if (novo < 0) novo = 0;
+  const historico = (mapa[key] && Array.isArray(mapa[key].historico)) ? mapa[key].historico : [];
+  historico.push({
+    data:      new Date().toISOString(),
+    delta:     Math.round(delta * 100) / 100,
+    saldo:     novo,
+    descricao: descricao || '',
+    por:       getCurrentUserName(),
+  });
+  mapa[key] = { saldo: novo, historico };
+  await App.graph._writeFile('creditos_haver', mapa);
+  return novo;
+}
+
 // Dado um processo com demandaId, encontra o orçamento de origem
 function orcamentoDoProcesso(processo, orcamentos, demandas) {
   if (!processo || !processo.demandaId) return null;
@@ -1683,7 +1717,7 @@ async function renderClientePerfil(id, tab = 'dados') {
   else if (tab === 'ibama')      tabContent = renderPerfilIBAMA(cliente);
   else if (tab === 'documentos') tabContent = renderPerfilDocumentos(documentos, id, cliente);
   else if (tab === 'processos')  tabContent = renderPerfilProcessos(processos, id);
-  else if (tab === 'pagamentos') { const _od = await _carregarOrcamentosDemandas(); tabContent = renderPerfilPagamentos(processos, id, _od.orcamentos, _od.demandas); }
+  else if (tab === 'pagamentos') { const _od = await _carregarOrcamentosDemandas(); const _cred = await _carregarCreditos(); tabContent = renderPerfilPagamentos(processos, id, _od.orcamentos, _od.demandas, _cred); }
   else if (tab === 'orcamentos') tabContent = await renderPerfilOrcamentos(id);
 
   const inativo = isClienteInativo(cliente);
@@ -2317,13 +2351,18 @@ function renderPerfilProcessos(processos, clienteId) {
     <div class="card">
       <div class="table-wrapper">
         <table>
-          <thead><tr><th>Tipo</th><th>Protocolo</th><th>Data de Protocolo</th><th>Abertura</th><th>Decorrido</th><th>Status</th><th>Ações</th></tr></thead>
+          <thead><tr><th>Tipo</th><th>Informação</th><th>Responsável</th><th>Protocolo</th><th>Data de Protocolo</th><th>Abertura</th><th>Decorrido</th><th>Status</th><th>Ações</th></tr></thead>
           <tbody>${processos.length === 0
-            ? `<tr><td colspan="7"><div class="empty-state"><i class="bi bi-folder-x"></i><p>Nenhum processo.</p></div></td></tr>`
+            ? `<tr><td colspan="9"><div class="empty-state"><i class="bi bi-folder-x"></i><p>Nenhum processo.</p></div></td></tr>`
             : processos.sort((a,b) => (b.DataAbertura||'').localeCompare(a.DataAbertura||'')).map(p => {
                 const b = statusBadge(p.Status);
+                let _de = {}; try { _de = p.DadosEspecificosJSON ? JSON.parse(p.DadosEspecificosJSON) : {}; } catch(e) {}
+                const _tipoGuia = (p.TipoProcesso === 'Guia de Tráfego' && _de.tipoGuia) ? _de.tipoGuia : '';
+                const _infoProc = [infoArmaLocalProcesso(p), _tipoGuia].filter(Boolean).join(' · ');
                 return `<tr style="cursor:pointer" onclick="navigate('processos/detalhe',{id:'${p.id}'})">
                   <td><strong>${esc(p.TipoProcesso||'—')}</strong></td>
+                  <td style="font-size:12px;color:var(--text-muted)">${_infoProc ? esc(_infoProc) : '—'}</td>
+                  <td>${p.Responsavel ? `<span class="badge badge-blue">${esc(p.Responsavel)}</span>` : '<span style="color:var(--text-muted)">—</span>'}</td>
                   <td>${esc(p.NumeroProtocolo||'—')}</td>
                   <td>${fmtDate(p.DataProtocoloSistema ? p.DataProtocoloSistema.split('T')[0] : '')}</td>
                   <td>${fmtDate(p.DataAbertura ? p.DataAbertura.split('T')[0] : '')}</td>
@@ -2354,8 +2393,49 @@ async function excluirProcessoDoCliente(procId, clienteId) {
   } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
-function renderPerfilPagamentos(processos, clienteId, orcamentos, demandas) {
+function renderPerfilPagamentos(processos, clienteId, orcamentos, demandas, creditos) {
   const comValor = processos.filter(p => Number(p.ValorProcesso) > 0);
+  const podeEditarCredito = isAdminUser() || isExtrasUser();
+  const credEntry   = creditos && creditos[String(clienteId)];
+  const credSaldo   = saldoCreditoHaver(creditos, clienteId);
+  const credHist    = (credEntry && Array.isArray(credEntry.historico)) ? credEntry.historico.slice().reverse() : [];
+  const cardCreditoHtml = `
+    <div class="card" style="margin-bottom:20px;border:1px solid ${credSaldo > 0 ? '#bbf7d0' : 'var(--border)'}">
+      <div class="card-header" style="${credSaldo > 0 ? 'background:#f0fdf4' : ''}">
+        <h3><i class="bi bi-wallet2 me-2" style="color:#16a34a"></i>Crédito em haver</h3>
+        <span style="font-size:20px;font-weight:700;color:${credSaldo > 0 ? '#16a34a' : 'var(--text-muted)'}">${fmtMoeda(credSaldo)}</span>
+      </div>
+      <div class="card-body">
+        <p style="font-size:12px;color:var(--text-muted);margin:0 0 12px">Saldo de crédito deste cliente. Fica disponível como opção para abater o valor de novos orçamentos.</p>
+        ${podeEditarCredito ? `
+          <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:${credHist.length ? '14px' : '0'}">
+            <div>
+              <label style="font-size:12px;font-weight:600">Valor (R$)</label>
+              <input id="credito-valor" type="number" step="0.01" min="0" placeholder="0,00" style="width:130px;display:block;margin-top:4px" />
+            </div>
+            <div style="flex:1;min-width:180px">
+              <label style="font-size:12px;font-weight:600">Descrição (opcional)</label>
+              <input id="credito-desc" type="text" placeholder="Ex.: devolução, adiantamento..." style="width:100%;display:block;margin-top:4px" />
+            </div>
+            <button class="btn btn-primary btn-sm" style="white-space:nowrap" onclick="registrarCreditoHaver('${clienteId}',1)"><i class="bi bi-plus-lg me-1"></i>Adicionar</button>
+            <button class="btn btn-outline btn-sm" style="white-space:nowrap;color:#dc2626" onclick="registrarCreditoHaver('${clienteId}',-1)"><i class="bi bi-dash-lg me-1"></i>Retirar</button>
+          </div>` : ''}
+        ${credHist.length ? `
+          <div style="border-top:1px solid var(--border);padding-top:10px">
+            <div style="font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:6px">Histórico</div>
+            ${credHist.slice(0, 20).map(h => `
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:12px;padding:4px 0;border-bottom:1px solid var(--border)">
+                <span style="color:var(--text-muted)">${fmtDate((h.data||'').split('T')[0])}${h.por ? ' · '+esc(h.por) : ''}${h.descricao ? ' · '+esc(h.descricao) : ''}</span>
+                <span style="font-weight:600;color:${Number(h.delta) >= 0 ? '#16a34a' : '#dc2626'}">${Number(h.delta) >= 0 ? '+' : '−'} ${fmtMoeda(Math.abs(Number(h.delta)||0))}</span>
+              </div>`).join('')}
+          </div>` : ''}
+      </div>
+    </div>`;
+
+  return cardCreditoHtml + renderPerfilPagamentosCorpo(comValor, orcamentos, demandas);
+}
+
+function renderPerfilPagamentosCorpo(comValor, orcamentos, demandas) {
   let totalPendente = 0, totalRecebido = 0;
   comValor.forEach(p => { const c = calcPagamentoCliente(p, orcamentos, demandas); totalRecebido += c.recebido; totalPendente += c.pendente; });
 
@@ -2411,6 +2491,23 @@ function renderPerfilPagamentos(processos, clienteId, orcamentos, demandas) {
         <tbody>${comValor.map(renderLinha).join('')}</tbody>
       </table></div>
     </div>` : '<div class="empty-state"><i class="bi bi-cash-coin"></i><p>Nenhum dado de pagamento encontrado nos processos.</p></div>'}`;
+}
+
+// Registra (adiciona/retira) crédito em haver do cliente a partir da aba Pagamentos.
+async function registrarCreditoHaver(clienteId, sinal) {
+  if (!(isAdminUser() || isExtrasUser())) { toast('Sem permissão para alterar o crédito.', 'error'); return; }
+  const valEl  = document.getElementById('credito-valor');
+  const descEl = document.getElementById('credito-desc');
+  const valor  = Math.abs(parseFloat(String(valEl?.value || '').replace(',', '.')) || 0);
+  if (!(valor > 0)) { toast('Informe um valor válido.', 'warning'); return; }
+  const desc = (descEl?.value || '').trim();
+  if (sinal < 0 && !confirm(`Retirar ${fmtMoeda(valor)} do crédito em haver deste cliente?`)) return;
+  showLoading();
+  try {
+    await salvarCreditoHaver(clienteId, sinal * valor, desc || (sinal > 0 ? 'Crédito adicionado' : 'Crédito retirado'));
+    toast(sinal > 0 ? 'Crédito adicionado.' : 'Crédito retirado.', 'success');
+    await renderClientePerfil(clienteId, 'pagamentos');
+  } catch (e) { toast('Erro: ' + e.message, 'error'); } finally { hideLoading(); }
 }
 
 // ============================================================
@@ -3287,9 +3384,11 @@ async function renderMeusProcessos(tab = 'aprotocolar') {
   const processos = await App.getProcessos();
   const doUsuario = processos.filter(p => p.Responsavel === currentUser);
 
-  // Processos com GRU já paga saem de "A Protocolar" e passam para "Protocolados"
-  const isAProtocolar = p => STATUS_A_PROTOCOLAR.includes(p.Status) && !p.GruPaga;
-  const isProtocolado = p => STATUS_PROTOCOLADOS.includes(p.Status) || (p.GruPaga && STATUS_A_PROTOCOLAR.includes(p.Status));
+  // Processos com GRU já paga OU com número de protocolo salvo saem de "A Protocolar"
+  // e passam para "Protocolados"
+  const temProtocolo  = p => !!(p.NumeroProtocolo && String(p.NumeroProtocolo).trim());
+  const isAProtocolar = p => STATUS_A_PROTOCOLAR.includes(p.Status) && !p.GruPaga && !temProtocolo(p);
+  const isProtocolado = p => STATUS_PROTOCOLADOS.includes(p.Status) || ((p.GruPaga || temProtocolo(p)) && STATUS_A_PROTOCOLAR.includes(p.Status));
 
   let meus;
   if (tab === 'protocolados') {
@@ -8373,7 +8472,19 @@ async function salvarConfigChecklists() {
 // Aplica os checklists personalizados sobre o objeto CHECKLISTS em memória.
 function aplicarOverrideChecklists(cfg) {
   if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return;
-  Object.keys(cfg).forEach(tipo => { CHECKLISTS[tipo] = cfg[tipo]; });
+  Object.keys(cfg).forEach(tipo => {
+    const salvo  = cfg[tipo];
+    const padrao = CHECKLISTS_DEFAULT[tipo];
+    // Checklists com subtipos (ex.: Guia de Tráfego): mescla mantendo os subtipos
+    // do padrão do sistema que ainda não existem no config salvo — assim subtipos
+    // novos (ex.: "Mudança de Local de Acervo") aparecem mesmo com config antigo salvo.
+    if (salvo && typeof salvo === 'object' && !Array.isArray(salvo) &&
+        padrao && typeof padrao === 'object' && !Array.isArray(padrao)) {
+      CHECKLISTS[tipo] = { ...padrao, ...salvo };
+    } else {
+      CHECKLISTS[tipo] = salvo;
+    }
+  });
 }
 
 // ============================================================
@@ -11399,6 +11510,11 @@ async function renderOrcamentoForm(clienteId = null, orcId = null) {
     window._orcamentoEditando = null;
   }
 
+  // Estado do crédito em haver para este orçamento
+  window._orcCreditoDisponivel   = 0;                                  // saldo disponível p/ este orçamento
+  window._orcCreditoAplicadoAntigo = Number(orcExistente?.creditoHaver) || 0; // crédito já usado por este orçamento (edição)
+  window._orcCreditoPrefilled    = false;
+
   if (clienteId) {
     const clienteSel = clientes.find(c => String(c.id) === String(clienteId));
     if (clienteSel && isClienteInativo(clienteSel)) {
@@ -11458,6 +11574,14 @@ async function renderOrcamentoForm(clienteId = null, orcId = null) {
           <label style="font-size:13px;font-weight:600;white-space:nowrap">Desconto (R$)</label>
           <input id="orc-desconto" type="number" step="0.01" min="0" placeholder="0,00" style="width:130px" oninput="atualizarOrcamento()" />
         </div>
+        <div id="orc-credito-row" style="display:none;margin-bottom:12px;align-items:center;gap:12px;flex-wrap:wrap;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px 14px">
+          <label class="checkbox-item" style="margin:0;font-weight:600;white-space:nowrap"><input type="checkbox" id="orc-credito-chk" onchange="onOrcCreditoChange()"> <i class="bi bi-wallet2 me-1" style="color:#16a34a"></i>Abater crédito em haver</label>
+          <span style="font-size:12px;color:var(--text-muted)">Disponível: <strong id="orc-credito-disp" style="color:#16a34a">R$ 0,00</strong></span>
+          <span id="orc-credito-input-wrap" style="display:none;align-items:center;gap:6px">
+            <span style="font-size:12px">Abater R$</span>
+            <input id="orc-credito-valor" type="number" step="0.01" min="0" style="width:110px" oninput="atualizarOrcamento()" />
+          </span>
+        </div>
         <div id="orc-total-div" style="display:none;background:#f9fafb;border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:16px">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
             <span style="font-size:13px;color:var(--text-muted)">Subtotal</span>
@@ -11466,6 +11590,10 @@ async function renderOrcamentoForm(clienteId = null, orcId = null) {
           <div id="orc-desconto-row" style="display:none;justify-content:space-between;align-items:center;margin-bottom:4px">
             <span style="font-size:13px;color:#dc2626">Desconto</span>
             <span id="orc-desconto-val" style="font-size:14px;color:#dc2626"></span>
+          </div>
+          <div id="orc-credito-detalhe-row" style="display:none;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <span style="font-size:13px;color:#16a34a">Crédito em haver</span>
+            <span id="orc-credito-detalhe-val" style="font-size:14px;color:#16a34a"></span>
           </div>
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;padding-top:6px;border-top:1px solid var(--border)">
             <span style="font-weight:700;font-size:15px">Total</span>
@@ -11545,8 +11673,53 @@ function onOrcItemChange(i) {
   atualizarOrcamento();
 }
 
+// Mostra/esconde o campo de valor do crédito e recalcula o total
+function onOrcCreditoChange() {
+  const chk = document.getElementById('orc-credito-chk')?.checked;
+  const wrap = document.getElementById('orc-credito-input-wrap');
+  if (wrap) wrap.style.display = chk ? 'inline-flex' : 'none';
+  const inp = document.getElementById('orc-credito-valor');
+  if (chk && inp && !inp.value) {
+    const saldo = window._orcCreditoDisponivel || 0;
+    const alvo  = Math.min(saldo, window._orcTotalSemCredito || saldo);
+    inp.value = (alvo > 0 ? alvo : saldo).toFixed(2);
+  }
+  atualizarOrcamento();
+}
+
+// Carrega o saldo de crédito em haver do cliente e prepara o campo de abatimento
+async function _orcCarregarCredito(clienteId) {
+  const row  = document.getElementById('orc-credito-row');
+  const disp = document.getElementById('orc-credito-disp');
+  const chk  = document.getElementById('orc-credito-chk');
+  const wrap = document.getElementById('orc-credito-input-wrap');
+  try {
+    if (!clienteId) { window._orcCreditoDisponivel = 0; if (row) row.style.display = 'none'; if (chk) chk.checked = false; if (wrap) wrap.style.display = 'none'; return; }
+    const mapa  = await _carregarCreditos();
+    const saldo = saldoCreditoHaver(mapa, clienteId);
+    // Em edição do mesmo cliente, o crédito já usado por este orçamento volta a ficar disponível
+    const editandoMesmoCliente = window._orcamentoEditando && String(window._orcamentoEditando.clienteId) === String(clienteId);
+    const aplicadoAntes = editandoMesmoCliente ? (window._orcCreditoAplicadoAntigo || 0) : 0;
+    const disponivel = Math.round((saldo + aplicadoAntes) * 100) / 100;
+    window._orcCreditoDisponivel = disponivel;
+    if (disp) disp.textContent = fmtMoeda(disponivel);
+    if (row)  row.style.display = disponivel > 0 ? 'flex' : 'none';
+    if (disponivel <= 0) { if (chk) chk.checked = false; if (wrap) wrap.style.display = 'none'; }
+    // Pré-marca o crédito uma única vez ao abrir uma edição que já o utilizava
+    if (!window._orcCreditoPrefilled && aplicadoAntes > 0 && disponivel > 0) {
+      if (chk) chk.checked = true;
+      const inp = document.getElementById('orc-credito-valor');
+      if (inp) inp.value = aplicadoAntes.toFixed(2);
+      onOrcCreditoChange();
+    }
+    window._orcCreditoPrefilled = true;
+    atualizarOrcamento();
+  } catch (e) { window._orcCreditoDisponivel = 0; if (row) row.style.display = 'none'; }
+}
+
 async function onOrcClienteChange(value) {
   const clienteId = (value || '').split('|')[0];
+  _orcCarregarCredito(clienteId);
   const encPanel = document.getElementById('orc-endereco-panel');
   const panel = document.getElementById('orc-armas-panel');
   if (encPanel) {
@@ -11616,15 +11789,28 @@ function atualizarOrcamento() {
     linhas.push({ tipo, qtd, valor, subtotal });
   });
 
-  const desconto     = Math.max(0, parseFloat(document.getElementById('orc-desconto')?.value) || 0);
-  const totalComDesc = Math.max(0, total - desconto);
-  window._orcTotalAtual = totalComDesc;
+  const desconto        = Math.max(0, parseFloat(document.getElementById('orc-desconto')?.value) || 0);
+  const totalSemCredito = Math.max(0, total - desconto);
+  window._orcTotalSemCredito = totalSemCredito;
+
+  // Crédito em haver: nunca abate mais que o saldo disponível nem que o total
+  let credito = 0;
+  if (document.getElementById('orc-credito-chk')?.checked) {
+    const saldo = window._orcCreditoDisponivel || 0;
+    credito = Math.max(0, parseFloat(document.getElementById('orc-credito-valor')?.value) || 0);
+    credito = Math.min(credito, saldo, totalSemCredito);
+  }
+  const totalComDesc = Math.max(0, totalSemCredito - credito);
+  window._orcTotalAtual   = totalComDesc;
+  window._orcCreditoAplicado = credito;
   if (document.getElementById('orc-pago-panel')?.style.display !== 'none') recalcPagOrc('orc');
 
   const totalDiv       = document.getElementById('orc-total-div');
   const subtotalVal    = document.getElementById('orc-subtotal-val');
   const descontoRow    = document.getElementById('orc-desconto-row');
   const descontoVal    = document.getElementById('orc-desconto-val');
+  const creditoRow     = document.getElementById('orc-credito-detalhe-row');
+  const creditoValEl   = document.getElementById('orc-credito-detalhe-val');
   const totalVal       = document.getElementById('orc-total-val');
   const avistaVal      = document.getElementById('orc-avista-val');
   const waBtn          = document.getElementById('orc-wa-btn');
@@ -11634,6 +11820,8 @@ function atualizarOrcamento() {
     if (subtotalVal) subtotalVal.textContent = fmtMoeda(total);
     if (descontoRow) descontoRow.style.display = desconto > 0 ? 'flex' : 'none';
     if (descontoVal) descontoVal.textContent = '− ' + fmtMoeda(desconto);
+    if (creditoRow)  creditoRow.style.display = credito > 0 ? 'flex' : 'none';
+    if (creditoValEl) creditoValEl.textContent = '− ' + fmtMoeda(credito);
     if (totalVal)    totalVal.textContent   = fmtMoeda(totalComDesc);
     if (avistaVal)   avistaVal.textContent  = fmtMoeda(totalComDesc * 0.95);
   } else {
@@ -11655,7 +11843,7 @@ function atualizarOrcamento() {
       const subStr = brl(l.subtotal);
       return l.qtd > 1 ? `• ${l.tipo} (${l.qtd}x ${unStr}): ${subStr}` : `• ${l.tipo}: ${subStr}`;
     }).join('\n');
-    const descontoStr = desconto > 0 ? `\nDesconto: − ${brl(desconto)}` : '';
+    const descontoStr = (desconto > 0 ? `\nDesconto: − ${brl(desconto)}` : '') + (credito > 0 ? `\nCrédito em haver: − ${brl(credito)}` : '');
     const msg = (MENSAGEM_ORCAMENTO.texto || MENSAGEM_ORCAMENTO_PADRAO)
       .replace(/\{itens\}/g, itensStr)
       .replace(/\{desconto\}/g, descontoStr)
@@ -11854,7 +12042,17 @@ async function salvarOrcamento() {
   });
   if (!linhas.length) { toast('Selecione ao menos um serviço.', 'warning'); return; }
   const desconto = Math.max(0, parseFloat(document.getElementById('orc-desconto')?.value) || 0);
-  const totalFinal = Math.max(0, total - desconto);
+
+  // Crédito em haver a abater (limitado ao saldo disponível e ao total após desconto)
+  let creditoAplicado = 0;
+  if (document.getElementById('orc-credito-chk')?.checked) {
+    const saldoDisp = window._orcCreditoDisponivel || 0;
+    creditoAplicado = Math.max(0, parseFloat(document.getElementById('orc-credito-valor')?.value) || 0);
+    creditoAplicado = Math.min(creditoAplicado, saldoDisp, Math.max(0, total - desconto));
+    creditoAplicado = Math.round(creditoAplicado * 100) / 100;
+  }
+
+  const totalFinal = Math.max(0, total - desconto - creditoAplicado);
 
   // Pagamento (opcional): só quando "Pago?" está marcado
   let pagamento;
@@ -11889,12 +12087,18 @@ async function salvarOrcamento() {
           data:    dataOrc,
           itens:   linhas,
           desconto: desconto || undefined,
+          creditoHaver: creditoAplicado || undefined,
           total:   totalFinal,
           pagamento: pagamento || lista[idx].pagamento || undefined,
           ...statusPatch,
         };
         await App.graph._writeFile('orcamentos', lista);
-        if (desconto > 0) await aplicarDescontoProcessosOrcamento(orcId, linhas, total, totalFinal);
+        // Ajusta o saldo de crédito do cliente pela diferença em relação ao que este orçamento já usava
+        const aplicadoAntes = (String(window._orcamentoEditando?.clienteId) === String(clienteId)) ? (window._orcCreditoAplicadoAntigo || 0) : 0;
+        if (creditoAplicado !== aplicadoAntes) {
+          await salvarCreditoHaver(clienteId, aplicadoAntes - creditoAplicado, `Orçamento ${lista[idx].numero || ''}`.trim());
+        }
+        if (desconto > 0 || creditoAplicado > 0) await aplicarDescontoProcessosOrcamento(orcId, linhas, total, totalFinal);
         toast('Orçamento atualizado!', 'success');
         window._orcamentoEditando = null;
         navigate('clientes/perfil', { id: clienteId, tab: 'orcamentos' });
@@ -11911,6 +12115,7 @@ async function salvarOrcamento() {
         data:         dataOrc,
         itens:        linhas,
         desconto:     desconto || undefined,
+        creditoHaver: creditoAplicado || undefined,
         total:        totalFinal,
         pagamento:    pagamento || undefined,
         criadoPor:    getCurrentUserName(),
@@ -11920,6 +12125,10 @@ async function salvarOrcamento() {
       };
       lista.push(novo);
       await App.graph._writeFile('orcamentos', lista);
+      // Abate o crédito usado do saldo do cliente
+      if (creditoAplicado > 0) {
+        await salvarCreditoHaver(clienteId, -creditoAplicado, `Orçamento ${numero}`);
+      }
       toast('Orçamento salvo com sucesso!', 'success');
       if (clienteId) navigate('clientes/perfil', { id: clienteId, tab: 'orcamentos' });
     }
@@ -12044,6 +12253,10 @@ async function excluirOrcamento(orcId, clienteId, source) {
     }
     const lista = arr.filter(o => o.id !== orcId);
     await App.graph._writeFile('orcamentos', lista);
+    // Devolve ao cliente o crédito em haver que este orçamento havia abatido
+    if (orc && Number(orc.creditoHaver) > 0) {
+      await salvarCreditoHaver(orc.clienteId, Number(orc.creditoHaver), `Estorno do orçamento ${orc.numero || ''}`.trim());
+    }
     toast('Orçamento excluído.', 'success');
     if (source === 'global') await renderOrcamentos();
     else await renderClientePerfil(clienteId, 'orcamentos');

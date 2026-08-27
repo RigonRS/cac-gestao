@@ -137,9 +137,10 @@ const CHECKLISTS = {
   'Atualização de Documento de Identificação': [],
   'Concessão/Renovação de CR':                CHECKLIST_CR_INCLUSAO_RENOVCRAF,
   'Guia de Tráfego': {
-    'Caça':                  ['Declaração de Filiação','CTF + SIMAF'],
-    'Caça-Treinamento Tiro': ['Documento de Identificação'],
-    'Tiro Esportivo':        ['Documento de Identificação']
+    'Caça':                       ['Declaração de Filiação','CTF + SIMAF'],
+    'Caça-Treinamento Tiro':      ['Documento de Identificação'],
+    'Tiro Esportivo':             ['Documento de Identificação'],
+    'Mudança de Local de Acervo': ['Documento de Identificação']
   },
   'Alteração de Endereço':  ['Comprovante de Residência', 'Declaração de Residência'],
   'Inclusão de Atividade':  CHECKLIST_CR_INCLUSAO_RENOVCRAF,
