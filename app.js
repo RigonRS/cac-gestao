@@ -2460,11 +2460,25 @@ function renderPerfilPagamentos(processos, clienteId, orcamentos, demandas, cred
       </div>
     </div>` : '';
 
-  return cardCreditoHtml + cardParcelasHtml + renderPerfilPagamentosCorpo(comValor, orcamentos, demandas);
+  // Recebido/pendente dos orçamentos do cliente que já têm forma de pagamento definida
+  // mas AINDA não geraram processo (senão o valor já entra pela tabela de processos).
+  const orcIdsComProcesso = new Set();
+  comValor.forEach(p => { const orc = orcamentoDoProcesso(p, orcamentos, demandas); if (orc) orcIdsComProcesso.add(String(orc.id)); });
+  let extraRecebido = 0, extraPendente = 0;
+  orcsCliente.forEach(o => {
+    if (!o.pagamento || !o.pagamento.modalidade) return;      // sem forma de pagamento definida
+    if (orcIdsComProcesso.has(String(o.id))) return;           // já contabilizado via processo
+    const totalOrc = totalExibicaoOrcamento(o);
+    const rec = Math.round(totalOrc * fracaoPagaOrcamento(o) * 100) / 100;
+    extraRecebido += rec;
+    extraPendente += Math.max(0, totalOrc - rec);
+  });
+
+  return cardCreditoHtml + cardParcelasHtml + renderPerfilPagamentosCorpo(comValor, orcamentos, demandas, extraRecebido, extraPendente);
 }
 
-function renderPerfilPagamentosCorpo(comValor, orcamentos, demandas) {
-  let totalPendente = 0, totalRecebido = 0;
+function renderPerfilPagamentosCorpo(comValor, orcamentos, demandas, extraRecebido = 0, extraPendente = 0) {
+  let totalPendente = extraPendente, totalRecebido = extraRecebido;
   comValor.forEach(p => { const c = calcPagamentoCliente(p, orcamentos, demandas); totalRecebido += c.recebido; totalPendente += c.pendente; });
 
   function renderLinha(p) {
