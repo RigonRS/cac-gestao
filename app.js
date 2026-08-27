@@ -2432,7 +2432,35 @@ function renderPerfilPagamentos(processos, clienteId, orcamentos, demandas, cred
       </div>
     </div>`;
 
-  return cardCreditoHtml + renderPerfilPagamentosCorpo(comValor, orcamentos, demandas);
+  // Parcelas de orçamentos parcelados (Pix/Dinheiro) deste cliente — com checkbox de "Pago" e data
+  const orcsCliente = (Array.isArray(orcamentos) ? orcamentos : []).filter(o => String(o.clienteId) === String(clienteId));
+  const orcsParcelados = orcsCliente.filter(o => o.pagamento && o.pagamento.modalidade === 'parcelado' && Array.isArray(o.pagamento.parcelas) && o.pagamento.parcelas.length);
+  const badgeStatusOrc = st => ({
+    pago:         { cls:'badge-green',  txt:'Quitado' },
+    pago_parcial: { cls:'badge-orange', txt:'Pagamento parcial' },
+    devedor:      { cls:'badge-red',    txt:'Parcela em atraso' },
+    aberto:       { cls:'badge-gray',   txt:'Em aberto' },
+  }[st] || { cls:'badge-gray', txt:'Em aberto' });
+  const cardParcelasHtml = orcsParcelados.length ? `
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header"><h3><i class="bi bi-calendar2-week me-2"></i>Parcelas de Orçamentos</h3></div>
+      <div class="card-body">
+        <p style="font-size:12px;color:var(--text-muted);margin:0 0 14px">Marque cada parcela como paga e informe a data. As alterações ficam vinculadas ao orçamento.</p>
+        ${orcsParcelados.map(o => {
+          const st = statusPagamentoOrcamento(o);
+          const bd = badgeStatusOrc(st);
+          return `<div style="border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:14px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
+              <div style="font-weight:700">Orçamento ${esc(o.numero||'—')} <span style="font-weight:400;color:var(--text-muted);font-size:12px">· ${fmtDate((o.data||'').split('T')[0])} · Total ${fmtMoeda(o.total)}</span></div>
+              <span class="badge ${bd.cls}">${bd.txt}</span>
+            </div>
+            ${renderParcelasEditor(o.id, o.pagamento)}
+          </div>`;
+        }).join('')}
+      </div>
+    </div>` : '';
+
+  return cardCreditoHtml + cardParcelasHtml + renderPerfilPagamentosCorpo(comValor, orcamentos, demandas);
 }
 
 function renderPerfilPagamentosCorpo(comValor, orcamentos, demandas) {
