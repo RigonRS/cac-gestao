@@ -7639,10 +7639,12 @@ async function renderPagamentosExtras() {
     Priscila: ['#ede9fe', '#7c3aed'],
     Geison:   ['#dbeafe', '#2563eb'],
     'Janaína': ['#fce7f3', '#db2777'],
+    Matheus:  ['#dcfce7', '#16a34a'],
   };
   const usuarioAtual = getCurrentUserName();
   const soMeu = !isAdminUser() && EXTRAS_USERS.includes(usuarioAtual);
-  const usuariosMostrar = soMeu ? [usuarioAtual] : EXTRAS_USERS;
+  // Admins também veem o quadro do Matheus (10% em todos os processos)
+  const usuariosMostrar = soMeu ? [usuarioAtual] : (isAdminUser() ? EXTRAS_USERS.concat('Matheus') : EXTRAS_USERS);
   const cards = usuariosMostrar.map(u => cardExtra(u, CORES_EXTRA[u][0], CORES_EXTRA[u][1])).join('');
   const colTemplate = usuariosMostrar.length === 1 ? '1fr' : 'repeat(auto-fit,minmax(320px,1fr))';
 
@@ -8200,6 +8202,7 @@ async function salvarConfigExtras() {
 
 // Fração de extra (0 a 1) para um processo/usuário, conforme configuração (padrão 10%)
 function fracaoExtraProcesso(tipo, usuario) {
+  if (usuario === 'Matheus') return 0.10; // Matheus recebe 10% em todos os processos
   const cfg = CONFIG_EXTRAS[tipo];
   if (cfg) {
     if (cfg.pcts && cfg.pcts[usuario] != null) return (Number(cfg.pcts[usuario]) || 0) / 100;
