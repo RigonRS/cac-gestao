@@ -806,6 +806,12 @@ function processoTemProtocolo(p) {
   } catch(e) { return false; }
 }
 
+// Armas furtadas/extraviadas não aparecem nas listas de seleção (CRAF, Guia de Tráfego, processos)
+function armaForaDeUso(a) {
+  const s = a && a.StatusArma;
+  return s === 'Furtada' || s === 'Extraviada';
+}
+
 // Tipos que, ao registrar o número de protocolo, passam automaticamente para "Em Análise (Email)"
 const TIPOS_STATUS_EMAIL_AO_PROTOCOLAR = [
   'Mudança de Acervo',
@@ -1460,7 +1466,12 @@ async function renderClienteForm(id = null, importParams = {}) {
     }
   }
   // Sexo padrão Masculino ao criar cliente novo (ou importar) quando não informado.
-  const sexoVal = c.Sexo || (!id ? 'Masculino' : '');
+  // Normaliza valores vindos do SINARM (ex.: "MASCULINO", "M") para casar com as opções.
+  let sexoVal = c.Sexo || (!id ? 'Masculino' : '');
+  const _sx = String(sexoVal).trim().toLowerCase();
+  if (_sx.startsWith('m'))      sexoVal = 'Masculino';
+  else if (_sx.startsWith('f')) sexoVal = 'Feminino';
+  else                          sexoVal = !id ? 'Masculino' : '';
 
   const clubes = (await App.getClubes()).sort((a,b) => (a.Title||'').localeCompare(b.Title||'','pt-BR'));
 
@@ -2904,7 +2915,7 @@ async function renderDocumentoForm(clienteId, id = null) {
   let d = {};
   if (id) d = await App.graph.getItem(CONFIG.listas.documentos, id);
 
-  const todasArmas = (await App.getArmas()).filter(a => String(a.ClienteId) === String(clienteId));
+  const todasArmas = (await App.getArmas()).filter(a => String(a.ClienteId) === String(clienteId) && !armaForaDeUso(a));
   const todosClientes = await App.getClientes();
   const clubesCadastrados = await App.getClubes();
   window._clubesCadastrados = clubesCadastrados;
@@ -3887,7 +3898,7 @@ let _processoClienteObj = null;
 
 async function onClienteProcessoChange(clienteId) {
   if (!clienteId) return;
-  _processoArmasCache = (await App.getArmas()).filter(a => String(a.ClienteId) === String(clienteId));
+  _processoArmasCache = (await App.getArmas()).filter(a => String(a.ClienteId) === String(clienteId) && !armaForaDeUso(a));
   const clientes = await App.getClientes();
   const cliente = clientes.find(c => String(c.id) === String(clienteId));
   _processoClienteCategoria = cliente ? (cliente.Categoria || '').split(',').map(s => s.trim()).filter(Boolean) : [];
@@ -4594,7 +4605,7 @@ async function carregarArmasSelector(clienteId, selectorId) {
   if (!clienteId) { sel.innerHTML = '<option value="">Selecione o vendedor primeiro...</option>'; return; }
   try {
     const todasArmas = await App.getArmas();
-    const armas = todasArmas.filter(a => String(a.ClienteId) === String(clienteId));
+    const armas = todasArmas.filter(a => String(a.ClienteId) === String(clienteId) && !armaForaDeUso(a));
     sel.innerHTML = '<option value="">Selecione...</option>' +
       armas.map(a => `<option value="${a.id}|${a.ClienteId}|${esc(a.Especie||'')}|${esc(a.Calibre||'')}">${esc(a.Especie||'')} ${esc(a.Calibre||'')} ${esc(a.Marca||'')} — Série: ${esc(a.NumeroSerie||'')}</option>`).join('');
   } catch(e) { sel.innerHTML = '<option value="">Erro ao carregar</option>'; }
@@ -5447,7 +5458,10 @@ async function renderProcessoDetalhe(id) {
         <div class="card" style="margin-bottom:20px">
           <div class="card-header">
             <h3><i class="bi bi-list-check me-2"></i>Checklist</h3>
-            ${temCertidoes ? `<button class="btn btn-sm" onclick="togglePainelCertidoes()" title="Instalar bookmarklet de certidões" style="background:#b45309;color:#fff;border-color:#b45309"><i class="bi bi-bookmark-plus me-1"></i>Certidões</button>` : ''}
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="btn btn-outline btn-sm" onclick="marcarTodosChecklist('${id}')" title="Marcar ou desmarcar todos os itens do checklist"><i class="bi bi-check2-all me-1"></i>${(progTotal > 0 && progConcluido >= progTotal) ? 'Desmarcar todos' : 'Marcar todos'}</button>
+              ${temCertidoes ? `<button class="btn btn-sm" onclick="togglePainelCertidoes()" title="Instalar bookmarklet de certidões" style="background:#b45309;color:#fff;border-color:#b45309"><i class="bi bi-bookmark-plus me-1"></i>Certidões</button>` : ''}
+            </div>
           </div>
           ${temCertidoes ? `<div id="painel-certidoes" style="display:none;border-top:1px solid var(--border)"></div>` : ''}
           <div class="card-body">
@@ -6347,6 +6361,25 @@ async function atualizarChecklistItem(processoId, index, concluido, observacao) 
     if (txt) txt.textContent = `${concluidos}/${checklist.length}`;
     App.invalidateCache('processos');
   } catch(e) { toast(e.message, 'error'); }
+}
+
+// Marca (ou desmarca) todos os itens do checklist de uma só vez
+async function marcarTodosChecklist(processoId) {
+  showLoading();
+  try {
+    const processo = await App.graph.getItem(CONFIG.listas.processos, processoId);
+    const checklist = JSON.parse(processo.ChecklistJSON || '[]');
+    if (!checklist.length) { hideLoading(); return; }
+    // Se todos já estão marcados, desmarca; senão, marca todos (preserva as observações)
+    const todosMarcados = checklist.every(i => i.concluido);
+    checklist.forEach(i => { i.concluido = !todosMarcados; });
+    await App.graph.updateItem(CONFIG.listas.processos, processoId, { ChecklistJSON: JSON.stringify(checklist) });
+    App.invalidateCache('processos');
+    if (window._processoDetalhe && String(window._processoDetalhe.id) === String(processoId)) {
+      window._processoDetalhe.ChecklistJSON = JSON.stringify(checklist);
+    }
+    await renderProcessoDetalhe(processoId);
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 async function salvarDatasProcesso(e, id) {
@@ -10397,6 +10430,11 @@ function abrirPopupNotificacoes() {
             `}
           </div>
         </div>
+        ${isAdminUser() && !modoSelecao ? `
+          <label style="display:flex;align-items:center;gap:7px;font-size:12.5px;color:#374151;margin-bottom:14px;cursor:pointer;background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:8px 10px">
+            <input type="checkbox" ${!(window._notifConfig && window._notifConfig.popupDesativado) ? 'checked' : ''} onchange="toggleNotifPopup(this.checked)" />
+            Mostrar aviso automático (popup) de novas notificações ao abrir o sistema
+          </label>` : ''}
         ${lista.length === 0
           ? `<div class="empty-state" style="padding:24px"><i class="bi bi-bell-slash"></i><p>Nenhuma notificação.</p></div>`
           : lista.map(n => {
@@ -10422,6 +10460,17 @@ function toggleModoSelecaoNotificacoes(on) {
   window._notifModoSelecao = on;
   window._notifSelecionadas = new Set();
   abrirPopupNotificacoes();
+}
+
+// Liga/desliga o popup automático de notificações (apenas administradores)
+async function toggleNotifPopup(mostrar) {
+  if (!isAdminUser()) return;
+  window._notifConfig = window._notifConfig || {};
+  window._notifConfig.popupDesativado = !mostrar;
+  try {
+    await App.graph._writeFile('notificacoes_config', window._notifConfig);
+    toast(mostrar ? 'Popup de notificações ativado.' : 'Popup de notificações desativado.', 'success');
+  } catch (e) { toast('Erro ao salvar: ' + e.message, 'error'); }
 }
 
 function toggleSelecaoNotificacao(id, checked) {
@@ -10520,7 +10569,7 @@ async function renderProcessoEditar(id) {
   const processo = await App.graph.getItem(CONFIG.listas.processos, id);
 
   // Load client data so tipo-specific field builders work correctly
-  _processoArmasCache = (await App.getArmas()).filter(a => String(a.ClienteId) === String(processo.ClienteId));
+  _processoArmasCache = (await App.getArmas()).filter(a => String(a.ClienteId) === String(processo.ClienteId) && !armaForaDeUso(a));
   const clientes = await App.getClientes();
   const clienteObj = clientes.find(c => String(c.id) === String(processo.ClienteId));
   _processoClienteCategoria = clienteObj ? (clienteObj.Categoria || '').split(',').map(s => s.trim()).filter(Boolean) : [];
@@ -13454,6 +13503,12 @@ async function iniciarApp() {
     if (ce && !Array.isArray(ce)) Object.assign(CONFIG_EXTRAS, ce);
   } catch(e) {}
 
+  // Carrega configuração de notificações (ex.: popup automático ligado/desligado)
+  try {
+    const nc = await App.graph._readFile('notificacoes_config');
+    if (nc && !Array.isArray(nc) && typeof nc === 'object') window._notifConfig = nc;
+  } catch(e) {}
+
   // Carrega checklists personalizados
   try {
     const cc = await App.graph._readFile('checklists_config');
@@ -13488,7 +13543,8 @@ async function iniciarApp() {
     await autoParadoProcessos();
     await gerarNotificacoesAutomaticas();
     const naoLidas = await atualizarBadgeNotificacoes();
-    if (naoLidas > 0 && !sessionStorage.getItem('notif_popup_mostrado')) {
+    const popupDesativado = !!(window._notifConfig && window._notifConfig.popupDesativado);
+    if (naoLidas > 0 && !popupDesativado && !sessionStorage.getItem('notif_popup_mostrado')) {
       sessionStorage.setItem('notif_popup_mostrado', '1');
       setTimeout(() => alertaNovasNotificacoes(naoLidas), 800);
     }
