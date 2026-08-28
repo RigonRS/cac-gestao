@@ -306,12 +306,19 @@ function orcamentoDoProcesso(processo, orcamentos, demandas) {
   return orcamentos.find(o => String(o.id) === String(demanda.orcamentoId)) || null;
 }
 
+// Total do orçamento considerando SOMENTE o desconto real de preço. O crédito em haver
+// é forma de pagamento (o cliente usa saldo que já pagou antes), não desconto do serviço,
+// portanto não deve reduzir a base de cálculo do extra nem o valor do item.
+function _totalOrcSemCredito(orc) {
+  return (Number(orc && orc.total) || 0) + (Number(orc && orc.creditoHaver) || 0);
+}
+
 // Razão de desconto do orçamento (desconto manual + 5% à vista) sobre o valor bruto dos serviços
 function ratioDescontoOrcamento(orc) {
   if (!orc) return 1;
   const itens = orc.itens || [];
   const grossSubtotal = itens.reduce((s, i) => s + (Number(i.subtotal != null ? i.subtotal : (i.qtd * i.valor)) || 0), 0);
-  const total = Number(orc.total);
+  const total = _totalOrcSemCredito(orc);
   const fator5 = (orc.pagamento && orc.pagamento.modalidade === 'avista' && orc.pagamento.desconto5) ? 0.95 : 1;
   if (grossSubtotal > 0 && Number.isFinite(total)) return (total * fator5) / grossSubtotal;
   return fator5;
@@ -326,7 +333,7 @@ function valorProcessoParaExtras(p, orcamentos, demandas) {
   if (!orc) return bruto;
   const itens = orc.itens || [];
   const grossSubtotal = itens.reduce((s, i) => s + (Number(i.subtotal != null ? i.subtotal : (i.qtd * i.valor)) || 0), 0);
-  const totalComManual = Number(orc.total);
+  const totalComManual = _totalOrcSemCredito(orc); // exclui crédito em haver (não é desconto de preço)
   const fator5 = (orc.pagamento && orc.pagamento.modalidade === 'avista' && orc.pagamento.desconto5) ? 0.95 : 1;
   const item = itens.find(i => i.tipo === p.TipoProcesso);
   if (item && grossSubtotal > 0 && Number.isFinite(totalComManual)) {
@@ -12140,7 +12147,9 @@ async function salvarOrcamento() {
         if (creditoAplicado !== aplicadoAntes) {
           await salvarCreditoHaver(clienteId, aplicadoAntes - creditoAplicado, `Orçamento ${lista[idx].numero || ''}`.trim());
         }
-        if (desconto > 0 || creditoAplicado > 0) await aplicarDescontoProcessosOrcamento(orcId, linhas, total, totalFinal);
+        // Redistribui apenas o DESCONTO real aos processos (o crédito em haver é pagamento,
+        // não reduz o valor/serviço do processo).
+        if (desconto > 0) await aplicarDescontoProcessosOrcamento(orcId, linhas, total, Math.max(0, total - desconto));
         toast('Orçamento atualizado!', 'success');
         window._orcamentoEditando = null;
         navigate('clientes/perfil', { id: clienteId, tab: 'orcamentos' });
