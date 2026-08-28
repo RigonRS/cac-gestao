@@ -345,6 +345,39 @@ function valorProcessoParaExtras(p, orcamentos, demandas) {
   return bruto * fator5;
 }
 
+// Valor CHEIO do processo (sem desconto) para o cálculo do extra
+function valorCheioProcessoExtras(p, orcamentos, demandas) {
+  const bruto = Number(p.ValorProcesso) || 0;
+  if (!p.demandaId) return bruto;
+  const orc = orcamentoDoProcesso(p, orcamentos, demandas);
+  if (!orc) return bruto;
+  const item = (orc.itens || []).find(i => i.tipo === p.TipoProcesso);
+  return item ? (Number(item.valor) || 0) : bruto;
+}
+
+// Razão de desconto (desconto manual + 5% à vista) que incide sobre este processo (1 = sem desconto)
+function ratioExtraProcesso(p, orcamentos, demandas) {
+  const orc = p.demandaId ? orcamentoDoProcesso(p, orcamentos, demandas) : null;
+  if (!orc) return 1;
+  const itens = orc.itens || [];
+  const grossSubtotal = itens.reduce((s, i) => s + (Number(i.subtotal != null ? i.subtotal : (i.qtd * i.valor)) || 0), 0);
+  const totalComManual = _totalOrcSemCredito(orc);
+  const fator5 = (orc.pagamento && orc.pagamento.modalidade === 'avista' && orc.pagamento.desconto5) ? 0.95 : 1;
+  const item = itens.find(i => i.tipo === p.TipoProcesso);
+  if (item && grossSubtotal > 0 && Number.isFinite(totalComManual)) return (totalComManual * fator5) / grossSubtotal;
+  return fator5;
+}
+
+// Extra (comissão) de um processo. O desconto do orçamento é aplicado de forma
+// PROPORCIONAL sobre (valor cheio − taxa), para que a comissão caia na mesma
+// proporção do desconto (e não seja penalizada a mais pela taxa fixa).
+function extraProcesso(p, orcamentos, demandas, responsavel) {
+  const taxa  = TAXAS_PROCESSO[p.TipoProcesso] || 0;
+  const cheio = valorCheioProcessoExtras(p, orcamentos, demandas);
+  const ratio = ratioExtraProcesso(p, orcamentos, demandas);
+  return Math.max(0, cheio - taxa) * ratio * fracaoExtraProcesso(p.TipoProcesso, responsavel);
+}
+
 function fmtMoeda(v) {
   if (v === null || v === undefined || v === '') return '—';
   return Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -7677,13 +7710,13 @@ function imprimirExtras(responsavel) {
 
   const totalExtra = meusDeferidos.reduce((s, p) => {
     const taxa = TAXAS_PROCESSO[p.TipoProcesso] || 0;
-    return s + Math.max(0, valorProcessoParaExtras(p, _orcExtras, _demExtras) - taxa) * fracaoExtraProcesso(p.TipoProcesso, responsavel);
+    return s + extraProcesso(p, _orcExtras, _demExtras, responsavel);
   }, 0) + meusAvulsos.reduce((s, a) => s + (Number(a.valor)||0), 0);
 
   const itensHtml = meusDeferidos.map(p => {
     const valor = Number(p.ValorProcesso) || 0;
     const taxa = TAXAS_PROCESSO[p.TipoProcesso] || 0;
-    const extra = Math.max(0, valorProcessoParaExtras(p, _orcExtras, _demExtras) - taxa) * fracaoExtraProcesso(p.TipoProcesso, responsavel);
+    const extra = extraProcesso(p, _orcExtras, _demExtras, responsavel);
     const desc = getProcessoDescExtra(p);
     return `<tr>
       <td>${esc(p.ClienteNome||'—')}</td>
@@ -7765,7 +7798,7 @@ async function renderPagamentosExtras() {
 
     const totalProcessos = meusDeferidos.reduce((s, p) => {
       const taxa = TAXAS_PROCESSO[p.TipoProcesso] || 0;
-      return s + Math.max(0, valorProcessoParaExtras(p, _orcExtras, _demExtras) - taxa) * fracaoExtraProcesso(p.TipoProcesso, responsavel);
+      return s + extraProcesso(p, _orcExtras, _demExtras, responsavel);
     }, 0);
     const totalAvulsos = meusAvulsos.reduce((s, a) => s + (Number(a.valor)||0), 0);
     const totalExtra = totalProcessos + totalAvulsos;
@@ -7776,7 +7809,7 @@ async function renderPagamentosExtras() {
         const taxa = TAXAS_PROCESSO[p.TipoProcesso] || 0;
         const valorExtraBase = valorProcessoParaExtras(p, _orcExtras, _demExtras);
         const temDescExtra = Math.abs(valorExtraBase - valor) > 0.005;
-        const extra = Math.max(0, valorExtraBase - taxa) * fracaoExtraProcesso(p.TipoProcesso, responsavel);
+        const extra = extraProcesso(p, _orcExtras, _demExtras, responsavel);
         const desc = getProcessoDescExtra(p);
         const infoPag = infoPagamentoProcessoTxt(p);
         // Situação de pagamento via orçamento vinculado (modelo novo); legado usa PagamentosJSON
@@ -12364,21 +12397,24 @@ async function renderPerfilOrcamentos(clienteId) {
                 : isRejeitado
                   ? `<span class="badge badge-red">Rejeitado</span>`
                   : `<span class="badge badge-green">Aprovado</span>`;
-              let acoes = '';
+              // Olho para ver as informações do orçamento aprovado (observações dos processos + pagamento)
+              let acoes = isAprovado
+                ? `<button class="btn btn-ghost btn-sm" onclick="verInfoOrcamento('${o.id}')" title="Ver informações (observações e pagamento)"><i class="bi bi-eye" style="color:var(--accent)"></i></button>`
+                : '';
               if (admin && isPendente) {
-                acoes = `
+                acoes += `
                 <button class="btn btn-ghost btn-sm" onclick="editarOrcamento('${o.id}','${clienteId}')" title="Editar"><i class="bi bi-pencil" style="color:var(--accent)"></i></button>
                 <button class="btn btn-ghost btn-sm" onclick="aprovarOrcamento('${o.id}','${clienteId}')" title="Aprovar"><i class="bi bi-check-circle" style="color:var(--success)"></i></button>
                 <button class="btn btn-ghost btn-sm" onclick="rejeitarOrcamento('${o.id}','${clienteId}')" title="Rejeitar"><i class="bi bi-x-circle" style="color:var(--danger)"></i></button>
                 <button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${clienteId}')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>`;
               } else if (admin && isRejeitado) {
-                acoes = `<button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${clienteId}')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>`;
+                acoes += `<button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${clienteId}')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>`;
               } else if (admin && isAprovado && !temDemanda) {
-                acoes = `
+                acoes += `
                 <button class="btn btn-ghost btn-sm" onclick="editarOrcamento('${o.id}','${clienteId}')" title="Editar (volta para Pendente)"><i class="bi bi-pencil" style="color:var(--accent)"></i></button>
                 <button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${clienteId}')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>`;
               } else if (admin && isAprovado && temDemanda) {
-                acoes = `<span style="font-size:11px;color:var(--text-muted)" title="Exclua a demanda vinculada em Controle de Demandas para poder excluir este orçamento">Demanda ativa</span>`;
+                acoes += ` <span style="font-size:11px;color:var(--text-muted)" title="Exclua a demanda vinculada em Controle de Demandas para poder excluir este orçamento">Demanda ativa</span>`;
               }
               return `<tr>
                 <td style="white-space:nowrap;font-weight:600">${esc(o.numero||'—')}</td>
@@ -12395,6 +12431,78 @@ async function renderPerfilOrcamentos(clienteId) {
       </div>
     </div>
   </div>`;
+}
+
+// Mostra as informações de um orçamento aprovado: observações de cada serviço + pagamento
+async function verInfoOrcamento(orcId) {
+  showLoading();
+  let orc;
+  try {
+    const lista = await App.graph._readFile('orcamentos').catch(() => []);
+    orc = (Array.isArray(lista) ? lista : []).find(o => String(o.id) === String(orcId));
+  } catch (e) {}
+  hideLoading();
+  if (!orc) { toast('Orçamento não encontrado.', 'error'); return; }
+
+  const itensHtml = (orc.itens || []).map(i => {
+    const nome = `${i.qtd > 1 ? i.qtd + '× ' : ''}${esc(i.tipo)}`;
+    const val  = fmtMoeda(i.subtotal != null ? i.subtotal : (i.qtd * i.valor));
+    return `<div style="padding:8px 0;border-bottom:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;gap:10px"><span style="font-weight:600;font-size:13px">${nome}</span><span style="font-size:13px">${val}</span></div>
+      ${i.obs ? `<div style="font-size:12px;color:#374151;margin-top:3px"><i class="bi bi-chat-left-text me-1" style="color:var(--accent)"></i>${esc(i.obs)}</div>`
+              : `<div style="font-size:11px;color:var(--text-muted);margin-top:2px;font-style:italic">Sem observação</div>`}
+    </div>`;
+  }).join('') || `<div style="font-size:13px;color:var(--text-muted)">Nenhum serviço.</div>`;
+
+  const pg = orc.pagamento;
+  let pagHtml;
+  if (!pg || !pg.modalidade) {
+    pagHtml = `<div style="font-size:13px;color:var(--text-muted)">Pagamento ainda não registrado.</div>`;
+  } else if (pg.modalidade === 'avista') {
+    pagHtml = `<div style="font-size:13px;line-height:1.7">
+      <strong>À vista</strong>${pg.desconto5 ? ' · 5% de desconto' : ''}<br>
+      Forma: ${esc(pg.formaPagamento || '—')}${pg.banco ? ' · ' + esc(pg.banco) : ''}<br>
+      ${pg.dataPagamento ? 'Data: ' + fmtDate(pg.dataPagamento) + '<br>' : ''}
+      ${pg.valorPago != null ? `Valor pago: <strong>${fmtMoeda(pg.valorPago)}</strong>` : ''}
+    </div>`;
+  } else {
+    const parcelas = Array.isArray(pg.parcelas) ? pg.parcelas : [];
+    const pagas = parcelas.filter(x => x.pago).length;
+    const linhasParc = parcelas.map((x, i) => `
+      <div style="display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:4px 0;border-bottom:1px solid var(--border)">
+        <span>Parcela ${i + 1}/${parcelas.length} · venc. ${fmtDate(x.dataVencimento)}</span>
+        <span style="color:${x.pago ? '#16a34a' : '#b45309'};font-weight:600">${fmtMoeda(x.valor)}${x.pago ? ' · pago' + (x.dataPagamento ? ' ' + fmtDate(x.dataPagamento) : '') : ''}</span>
+      </div>`).join('');
+    pagHtml = `<div style="font-size:13px;line-height:1.7">
+      <strong>Parcelado</strong> · ${esc(pg.formaPagamento || '—')} · ${pg.vezes}x de ${fmtMoeda(pg.valorParcela)}${pg.temEntrada ? ` · Entrada ${fmtMoeda(pg.valorEntrada || 0)}` : ''}
+      ${parcelas.length ? `<div style="margin:6px 0 2px;font-size:11px;color:var(--text-muted)">${pagas}/${parcelas.length} parcela(s) paga(s)</div>${linhasParc}` : ''}
+    </div>`;
+  }
+
+  const resumoHtml = `<div style="font-size:12px;color:var(--text-muted);margin-top:6px">
+    ${orc.desconto ? `Desconto: −${fmtMoeda(orc.desconto)} · ` : ''}${orc.creditoHaver ? `Crédito em haver: −${fmtMoeda(orc.creditoHaver)} · ` : ''}Total: <strong style="color:#111">${fmtMoeda(orc.total)}</strong>
+  </div>`;
+
+  document.getElementById('modal-info-orc')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modal-info-orc';
+  modal.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this) this.remove()">
+      <div style="background:#fff;border-radius:14px;padding:22px;max-width:560px;width:100%;max-height:88vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+          <h3 style="margin:0;font-size:16px"><i class="bi bi-clipboard-check me-2"></i>Orçamento ${esc(orc.numero || '')}</h3>
+          <button onclick="document.getElementById('modal-info-orc').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:#666;line-height:1">×</button>
+        </div>
+        <div style="font-size:13px;font-weight:600;margin-bottom:2px">${esc(orc.clienteNome || '')}</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:14px">${fmtDate(orc.data)}${orc.aprovadoPor ? ' · Aprovado por ' + esc(orc.aprovadoPor) : ''}</div>
+        <div style="font-size:12px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Serviços e observações</div>
+        ${itensHtml}
+        ${resumoHtml}
+        <div style="font-size:12px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.5px;margin:18px 0 8px">Pagamento</div>
+        ${pagHtml}
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
 }
 
 async function excluirOrcamento(orcId, clienteId, source) {
@@ -12522,9 +12630,11 @@ async function renderOrcamentos() {
       // Cor do valor: verde=pago, vermelho=rejeitado, amarelo escuro=pendente de pagamento
       const corTotal = (o.status === 'Rejeitado') ? '#dc2626'
         : (statusPagamentoOrcamento(o) === 'pago' ? '#16a34a' : '#b45309');
-      let acoesBtns = '';
+      let acoesBtns = (modo === 'aprovado')
+        ? `<button class="btn btn-ghost btn-sm" onclick="verInfoOrcamento('${o.id}')" title="Ver informações (observações e pagamento)"><i class="bi bi-eye" style="color:var(--accent)"></i></button>`
+        : '';
       if (modo === 'pendente') {
-        acoesBtns = `
+        acoesBtns += `
           <button class="btn btn-ghost btn-sm" onclick="editarOrcamento('${o.id}','${esc(String(o.clienteId))}')" title="Editar"><i class="bi bi-pencil" style="color:var(--accent)"></i></button>
           <button class="btn btn-ghost btn-sm" onclick="aprovarOrcamento('${o.id}','${esc(String(o.clienteId))}','global')" title="Aprovar"><i class="bi bi-check-circle" style="color:var(--success)"></i></button>
           <button class="btn btn-ghost btn-sm" onclick="rejeitarOrcamento('${o.id}','${esc(String(o.clienteId))}','global')" title="Rejeitar"><i class="bi bi-x-circle" style="color:var(--danger)"></i></button>
@@ -12532,9 +12642,9 @@ async function renderOrcamentos() {
       } else if (modo === 'rejeitado') {
         acoesBtns = `<button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${esc(String(o.clienteId))}','global')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>`;
       } else if (modo === 'aprovado') {
-        acoesBtns = orcamentosComDemanda.has(String(o.id))
-          ? `<span style="font-size:11px;color:var(--text-muted)" title="Exclua a demanda vinculada em Controle de Demandas para poder excluir este orçamento">Demanda ativa</span>`
-          : `<button class="btn btn-ghost btn-sm" onclick="editarOrcamento('${o.id}','${esc(String(o.clienteId))}')" title="Editar (volta para Pendente)"><i class="bi bi-pencil" style="color:var(--accent)"></i></button>
+        acoesBtns += orcamentosComDemanda.has(String(o.id))
+          ? ` <span style="font-size:11px;color:var(--text-muted)" title="Exclua a demanda vinculada em Controle de Demandas para poder excluir este orçamento">Demanda ativa</span>`
+          : ` <button class="btn btn-ghost btn-sm" onclick="editarOrcamento('${o.id}','${esc(String(o.clienteId))}')" title="Editar (volta para Pendente)"><i class="bi bi-pencil" style="color:var(--accent)"></i></button>
              <button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${esc(String(o.clienteId))}','global')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>`;
       }
       return `<tr>
