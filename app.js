@@ -742,6 +742,7 @@ function statusBadge(s) {
     'Desistência Cliente':          { cls:'badge-red',    txt:'Desistência' },
     'Aguardando Docs':              { cls:'badge-yellow', txt:'Ag. Docs' },
     'Restituído':                   { cls:'badge-purple', txt:'Restituído' },
+    'Em Análise (Email)':           { cls:'badge-blue',   txt:'Em Análise (Email)' },
   };
   return m[s] || { cls:'badge-gray', txt: s || '—' };
 }
@@ -753,6 +754,7 @@ const STATUS_PROCESSO = [
   'Aguardando Pagamento GRU',
   'Pronto para Análise',
   'Em análise',
+  'Em Análise (Email)',
   'Aguardando Assinatura',
   'Aguardando Protocolo (email)',
   'Restituído',
@@ -760,6 +762,25 @@ const STATUS_PROCESSO = [
   'Desistência Cliente',
 ];
 const STATUS_FECHADOS = ['Deferido', 'Indeferido', 'Desistência Cliente'];
+
+// Considera "com protocolo" quando há N° de Protocolo salvo ou um registro de
+// "Protocolo no Sistema" no histórico do processo.
+function processoTemProtocolo(p) {
+  if (p && p.NumeroProtocolo && String(p.NumeroProtocolo).trim()) return true;
+  try {
+    const hist = JSON.parse((p && p.HistoricoStatus) || '[]');
+    return Array.isArray(hist) && hist.some(h => /Protocolo no Sistema/i.test((h && h.status) || ''));
+  } catch(e) { return false; }
+}
+
+// Tipos que, ao registrar o número de protocolo, passam automaticamente para "Em Análise (Email)"
+const TIPOS_STATUS_EMAIL_AO_PROTOCOLAR = [
+  'Mudança de Acervo',
+  'Comunicado de Furto/Extravio',
+  'Defesa de Notificação',
+  'Correção de dados de arma',
+  ...TIPOS_TRANSFERENCIA,
+];
 const RESPONSAVEIS = ['Andrieli', 'Geison', 'Janaína', 'Matheus', 'Priscila', 'Simone'];
 const TIPOS_SEM_GRU = ['Defesa de Notificação', 'Mudança de endereço SINARM PF', 'Porte de Arma PF', 'Correção de dados de arma', 'Comunicado de Furto/Extravio'];
 const FORMAS_PAGAMENTO_OPTS = ['Pix', 'Dinheiro', 'Cartão'];
@@ -3067,8 +3088,8 @@ async function renderProcessosList() {
   }
 
   const contagensTab = {
-    aprotocolar:  processos.filter(p => STATUS_A_PROTOCOLAR.includes(p.Status)).length,
-    protocolados: processos.filter(p => STATUS_PROTOCOLADOS.includes(p.Status)).length,
+    aprotocolar:  processos.filter(p => STATUS_A_PROTOCOLAR.includes(p.Status) && !processoTemProtocolo(p)).length,
+    protocolados: processos.filter(p => STATUS_PROTOCOLADOS.includes(p.Status) || (processoTemProtocolo(p) && STATUS_A_PROTOCOLAR.includes(p.Status))).length,
     futuro:       processos.filter(p => p.Status === 'Processo Futuro').length,
     todos:        processos.length,
   };
@@ -3153,8 +3174,8 @@ function aplicarFiltrosProcessos() {
   const r = document.getElementById('filtro-responsavel')?.value || '';
   const tab = window._processosTab || 'aprotocolar';
   let lista = window._processos_filtro || [];
-  if (tab === 'aprotocolar')       lista = lista.filter(p => STATUS_A_PROTOCOLAR.includes(p.Status));
-  else if (tab === 'protocolados') lista = lista.filter(p => STATUS_PROTOCOLADOS.includes(p.Status));
+  if (tab === 'aprotocolar')       lista = lista.filter(p => STATUS_A_PROTOCOLAR.includes(p.Status) && !processoTemProtocolo(p));
+  else if (tab === 'protocolados') lista = lista.filter(p => STATUS_PROTOCOLADOS.includes(p.Status) || (processoTemProtocolo(p) && STATUS_A_PROTOCOLAR.includes(p.Status)));
   else if (tab === 'futuro')       lista = lista.filter(p => p.Status === 'Processo Futuro');
   if (q) lista = lista.filter(p => (p.ClienteNome||'').toLowerCase().includes(q) || (p.TipoProcesso||'').toLowerCase().includes(q));
   if (s) lista = lista.filter(p => p.Status === s);
@@ -3288,7 +3309,7 @@ function sortProcessos(field) {
 // ============================================================
 // CONSULTA DE PROCESSOS
 // ============================================================
-const STATUS_CONSULTA = ['Em análise', 'Pronto para Análise', 'Aguardando Pagamento GRU', 'Aguardando Protocolo (email)'];
+const STATUS_CONSULTA = ['Em análise', 'Em Análise (Email)', 'Pronto para Análise', 'Aguardando Pagamento GRU', 'Aguardando Protocolo (email)'];
 
 function _getUltimoRegistroISO(p) {
   try {
@@ -3346,6 +3367,7 @@ async function renderConsultaProcessos() {
   }
 
   const listaSorted = sortLista(lista, window._consultaSortCol, window._consultaSortDir);
+  window._consultaListaAtual = listaSorted;
 
   const el = document.getElementById('page-content');
 
@@ -3362,8 +3384,9 @@ async function renderConsultaProcessos() {
 
   el.innerHTML = `
     <div class="card">
-      <div class="card-header">
+      <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;gap:10px">
         <h3><i class="bi bi-search me-2"></i>Processos pendentes de registro (${lista.length})</h3>
+        <button class="btn btn-outline btn-sm" onclick="imprimirConsultaProcessos()" title="Imprimir / salvar em PDF a lista atual"><i class="bi bi-printer me-1"></i>Imprimir PDF</button>
       </div>
       <div class="table-wrapper">
         <table>
@@ -3415,11 +3438,34 @@ function consultaSortBy(col) {
   renderConsultaProcessos();
 }
 
+function imprimirConsultaProcessos() {
+  const lista = window._consultaListaAtual || [];
+  if (!lista.length) { toast('Nenhum processo para imprimir.', 'warning'); return; }
+  const hoje = new Date().toLocaleDateString('pt-BR');
+  const rows = lista.map(p => `<tr>
+    <td>${esc(p.ClienteNome||'—')}</td>
+    <td>${esc(p.TipoProcesso||'—')}${p.Restituido ? ' (Restituído)' : ''}</td>
+    <td>${esc(infoArmaLocalProcesso(p) || '—')}</td>
+    <td>${esc(p.NumeroProtocolo||'—')}</td>
+    <td>${esc(p.Responsavel||'—')}</td>
+    <td>${esc(_getUltimoRegistro(p) || '—')}</td>
+    <td>${esc(p.Status||'—')}</td>
+  </tr>`).join('');
+  const html = `
+    <h2>Consulta de Processos — Pendentes de Registro</h2>
+    <p style="text-align:center;color:#555;margin-top:-10px;font-size:11pt">${lista.length} processo(s) · Emitido em ${hoje}</p>
+    <table>
+      <thead><tr><th>Cliente</th><th>Tipo</th><th>Identificação</th><th>Protocolo</th><th>Responsável</th><th>Último Registro</th><th>Status</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  imprimirDocumento(html, 'Consulta de Processos');
+}
+
 // ============================================================
 // MEUS PROCESSOS
 // ============================================================
 const STATUS_A_PROTOCOLAR = ['Parado', 'Aguardando Documentos', 'Aguardando Pagamento GRU', 'Aguardando Assinatura', 'Aguardando Protocolo (email)', 'Restituído'];
-const STATUS_PROTOCOLADOS = ['Pronto para Análise', 'Em análise'];
+const STATUS_PROTOCOLADOS = ['Pronto para Análise', 'Em análise', 'Em Análise (Email)'];
 const MEUS_PROCESSOS_TABS = [
   { key: 'aprotocolar',  label: 'A Protocolar' },
   { key: 'protocolados', label: 'Protocolados' },
@@ -3435,7 +3481,7 @@ async function renderMeusProcessos(tab = 'aprotocolar') {
 
   // Processos com GRU já paga OU com número de protocolo salvo saem de "A Protocolar"
   // e passam para "Protocolados"
-  const temProtocolo  = p => !!(p.NumeroProtocolo && String(p.NumeroProtocolo).trim());
+  const temProtocolo  = p => processoTemProtocolo(p);
   const isAProtocolar = p => STATUS_A_PROTOCOLAR.includes(p.Status) && !p.GruPaga && !temProtocolo(p);
   const isProtocolado = p => STATUS_PROTOCOLADOS.includes(p.Status) || ((p.GruPaga || temProtocolo(p)) && STATUS_A_PROTOCOLAR.includes(p.Status));
 
@@ -6308,21 +6354,42 @@ async function salvarDatasProcesso(e, id) {
     const proc = await App.graph.getItem(CONFIG.listas.processos, id);
     const historico = JSON.parse(proc.HistoricoStatus || '[]');
     const agora = new Date();
+    const usuarioProt = App.account?.name || App.account?.username || 'Desconhecido';
     historico.push({
       data:    agora.toLocaleDateString('pt-BR'),
       hora:    agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
       status:  `Protocolo no Sistema — N° ${numProt}`,
-      usuario: App.account?.name || App.account?.username || 'Desconhecido'
+      usuario: usuarioProt
     });
-    await App.graph.updateItem(CONFIG.listas.processos, id, {
+    // Certos tipos passam automaticamente para "Em Análise (Email)" ao registrar o protocolo
+    const mudaParaEmail = TIPOS_STATUS_EMAIL_AO_PROTOCOLAR.includes(proc.TipoProcesso) && proc.Status !== 'Em Análise (Email)';
+    const updates = {
       NumeroProtocolo:      numProt,
       DataProtocoloSistema: dataProt,
-      HistoricoStatus:      JSON.stringify(historico)
-    });
+    };
+    if (mudaParaEmail) {
+      updates.Status = 'Em Análise (Email)';
+      historico.push({
+        data:    agora.toLocaleDateString('pt-BR'),
+        hora:    agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+        status:  'Em Análise (Email)',
+        usuario: usuarioProt
+      });
+    }
+    updates.HistoricoStatus = JSON.stringify(historico);
+    await App.graph.updateItem(CONFIG.listas.processos, id, updates);
     App.invalidateCache('processos');
     if (window._processoDetalhe) {
       window._processoDetalhe.NumeroProtocolo      = numProt;
       window._processoDetalhe.DataProtocoloSistema = dataProt;
+      if (mudaParaEmail) window._processoDetalhe.Status = 'Em Análise (Email)';
+    }
+    if (mudaParaEmail) {
+      const b = statusBadge('Em Análise (Email)');
+      const badge = document.getElementById('status-badge-detalhe');
+      if (badge) { badge.className = `badge ${b.cls}`; badge.textContent = b.txt; }
+      const selStatus = document.getElementById('sel-status');
+      if (selStatus) selStatus.value = 'Em Análise (Email)';
     }
     const body = document.getElementById('historico-status-body');
     if (body) body.innerHTML = renderHistoricoStatus(historico, id);
@@ -8725,6 +8792,11 @@ async function renderWhatsApp() {
       .wa-topbar{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--border)}
       .wa-status{padding:8px 12px;border-bottom:1px solid var(--border);font-size:12px;display:flex;align-items:center;gap:8px}
       .wa-status .info{flex:1;min-width:0}
+      .wa-sync{padding:6px 12px;background:#e7f7ee;border-bottom:1px solid #c9ebd6;font-size:11.5px;color:#128c7e;display:none;flex-direction:column;gap:5px}
+      .wa-sync .bar{height:5px;background:#cdeede;border-radius:3px;overflow:hidden}
+      .wa-sync .bar > i{display:block;height:100%;background:#25d366;width:0;border-radius:3px;transition:width .3s}
+      .wa-sync .bar.indef > i{width:40%;animation:wa-indef 1.1s ease-in-out infinite}
+      @keyframes wa-indef{0%{margin-left:-40%}100%{margin-left:100%}}
       .wa-desconectar{background:none;border:1px solid var(--danger);color:var(--danger);border-radius:6px;font-size:11px;padding:3px 8px;cursor:pointer;flex-shrink:0;white-space:nowrap}
       .wa-desconectar:hover{background:var(--danger);color:#fff}
       .wa-tabs{display:flex;gap:6px;padding:8px 8px 0;position:relative}
@@ -8836,6 +8908,10 @@ async function renderWhatsApp() {
           <button class="wa-iconbtn" style="font-size:18px" onclick="waAbrirConfig()" title="Configurações"><i class="bi bi-gear"></i></button>
         </div>
         <div class="wa-status" id="wa-status"></div>
+        <div class="wa-sync" id="wa-sync">
+          <span id="wa-sync-txt"><i class="bi bi-arrow-repeat me-1"></i>Sincronizando mensagens...</span>
+          <div class="bar" id="wa-sync-bar"><i id="wa-sync-fill"></i></div>
+        </div>
         <div class="wa-tabs" id="wa-tabs">
           <button class="wa-tab ativo" data-aba="tudo" onclick="waSetAba('tudo')">Tudo</button>
           <button class="wa-tab" data-aba="nlidas" onclick="waSetAba('nlidas')">Não lidas</button>
@@ -8871,6 +8947,7 @@ async function renderWhatsApp() {
   waMontarEmojis();
   waMontarRapidas();
   waRenderStatus();
+  waRenderSync(window._wa.sync);  // restaura a barra de sincronização se ainda estiver ativa
   waRenderLista();  // mostra imediatamente as conversas já em memória
   if (window._wa.socket) { try { window._wa.socket.disconnect(); } catch (e) {} window._wa.socket = null; }
   waConectar();
@@ -8895,9 +8972,21 @@ function waConectar() {
   waIdToken().then(token => {
     const socket = io(CONFIG.waGatewayUrl, { auth: { token }, transports: ['websocket', 'polling'] });
     window._wa.socket = socket;
-    socket.on('status', e => { window._wa.estado = e; waRenderStatus(); });
+    socket.on('status', e => {
+      window._wa.estado = e;
+      waRenderStatus();
+      // O status inicial (ao conectar) já informa se há sincronização em andamento
+      window._wa.sync = { sincronizando: !!e.sincronizando, progress: e.syncProgress };
+      waRenderSync(window._wa.sync);
+    });
     socket.on('message', m => waOnMessage(m));
     socket.on('refresh', () => waCarregarChats());
+    socket.on('sync', info => {
+      window._wa.sync = info || {};
+      waRenderSync(window._wa.sync);
+      // Ao concluir a sincronização, recarrega a lista para trazer as novas mensagens
+      if (info && !info.sincronizando) waCarregarChats();
+    });
     socket.on('read', d => {
       if (d && d.all) window._wa.chats.forEach(c => c.unread = 0);
       else if (d && d.jid) { const c = window._wa.chats.find(x => x.jid === d.jid); if (c) c.unread = 0; }
@@ -8929,6 +9018,27 @@ function waRenderStatus() {
     el.innerHTML = `<div class="info" style="text-align:center"><div style="font-size:11px;margin-bottom:6px;color:#667781">Escaneie no WhatsApp do número dedicado:</div><img src="${e.qr}" style="width:200px;height:200px" /></div>`;
   } else {
     el.innerHTML = `<span class="info" style="color:var(--danger)"><i class="bi bi-x-circle me-1"></i>Desconectado${isAdminUser() ? ' — aguardando QR...' : ' — avise um administrador.'}</span>`;
+  }
+}
+
+// Barra de progresso da sincronização de mensagens (download de histórico do WhatsApp)
+function waRenderSync(info) {
+  const box = document.getElementById('wa-sync'); if (!box) return;
+  const st = info || {};
+  if (!st.sincronizando) { box.style.display = 'none'; return; }
+  box.style.display = 'flex';
+  const bar  = document.getElementById('wa-sync-bar');
+  const fill = document.getElementById('wa-sync-fill');
+  const txt  = document.getElementById('wa-sync-txt');
+  const p = (typeof st.progress === 'number') ? Math.max(0, Math.min(100, Math.round(st.progress))) : null;
+  if (p == null) {
+    if (bar)  bar.classList.add('indef');
+    if (fill) fill.style.width = '';
+    if (txt)  txt.innerHTML = `<i class="bi bi-arrow-repeat me-1"></i>Sincronizando mensagens...`;
+  } else {
+    if (bar)  bar.classList.remove('indef');
+    if (fill) fill.style.width = p + '%';
+    if (txt)  txt.innerHTML = `<i class="bi bi-arrow-repeat me-1"></i>Sincronizando mensagens... ${p}%`;
   }
 }
 
