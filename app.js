@@ -176,6 +176,7 @@ function calcPagamento(p) {
 // ============================================================
 const FORMAS_PAG_ORC = ['Pix', 'Dinheiro', 'Cartão'];
 const BANCOS_ORC     = ['Sicredi', 'Banco do Brasil', 'Cresol'];
+const BANCOS_CARTAO_ORC = ['Sicredi', 'Inter', 'Cresol']; // bancos quando a forma é Cartão
 const PARCELAS_OPTS  = [2,3,4,5,6,7,8,9,10,11,12];
 
 // Retorna: 'aberto' | 'pago' | 'pago_parcial' | 'devedor'
@@ -12285,6 +12286,7 @@ function pagOrcFormHTML(pfx, pg) {
   const mod = pg.modalidade || '';
   const formaOpts = (sel) => `<option value="">Selecione...</option>` + FORMAS_PAG_ORC.map(f => `<option value="${f}" ${sel===f?'selected':''}>${f}</option>`).join('');
   const bancoOpts = (sel) => `<option value="">Selecione...</option>` + BANCOS_ORC.map(b => `<option value="${b}" ${sel===b?'selected':''}>${b}</option>`).join('');
+  const bancoOptsCartao = (sel) => `<option value="">Selecione...</option>` + BANCOS_CARTAO_ORC.map(b => `<option value="${b}" ${sel===b?'selected':''}>${b}</option>`).join('');
   const vezesOpts = (sel) => `<option value="">Selecione...</option>` + PARCELAS_OPTS.map(n => `<option value="${n}" ${String(sel)===String(n)?'selected':''}>${n}x</option>`).join('');
   return `
     <div style="display:flex;gap:20px;margin-bottom:12px">
@@ -12296,8 +12298,8 @@ function pagOrcFormHTML(pfx, pg) {
       <div id="${pfx}-desc5-info" style="font-size:12px;color:var(--success);margin-bottom:8px"></div>
       <div class="form-grid">
         <div><label>Data de Pagamento</label><input type="date" id="${pfx}-data" value="${esc(pg.dataPagamento||hoje)}"></div>
-        <div><label>Forma de Pagamento</label><select id="${pfx}-forma">${formaOpts(pg.formaPagamento)}</select></div>
-        <div><label>Banco</label><select id="${pfx}-banco">${bancoOpts(pg.banco)}</select></div>
+        <div><label>Forma de Pagamento</label><select id="${pfx}-forma" onchange="onFormaPagOrcChange('${pfx}')">${formaOpts(pg.formaPagamento)}</select></div>
+        <div id="${pfx}-banco-wrap"><label>Banco</label><select id="${pfx}-banco">${(pg.formaPagamento === 'Cartão' ? bancoOptsCartao : bancoOpts)(pg.banco)}</select></div>
       </div>
     </div>
     <div id="${pfx}-parcelado" style="display:${mod==='parcelado'?'':'none'}">
@@ -12324,6 +12326,24 @@ function onPagModChange(pfx) {
   recalcPagOrc(pfx);
 }
 
+// Campo Banco conforme a forma de pagamento à vista:
+// Dinheiro -> esconde; Cartão -> bancos de cartão (Sicredi, Inter, Cresol); demais -> bancos padrão
+function onFormaPagOrcChange(pfx) {
+  const forma = document.getElementById(`${pfx}-forma`)?.value;
+  const wrap = document.getElementById(`${pfx}-banco-wrap`);
+  const sel = document.getElementById(`${pfx}-banco`);
+  if (!wrap || !sel) return;
+  if (forma === 'Dinheiro') {
+    wrap.style.display = 'none';
+    sel.value = '';
+    return;
+  }
+  wrap.style.display = '';
+  const bancos = forma === 'Cartão' ? BANCOS_CARTAO_ORC : BANCOS_ORC;
+  const atual = sel.value;
+  sel.innerHTML = `<option value="">Selecione...</option>` + bancos.map(b => `<option value="${b}" ${atual === b ? 'selected' : ''}>${b}</option>`).join('');
+}
+
 function onPagEntradaChange(pfx) {
   const chk = document.getElementById(`${pfx}-entrada-chk`)?.checked;
   const wrap = document.getElementById(`${pfx}-entrada-wrap`);
@@ -12334,7 +12354,16 @@ function onPagEntradaChange(pfx) {
 
 function getPagTotal(pfx) {
   if (pfx === 'orc') return window._orcTotalAtual || 0;
-  return (window._pagTotais && window._pagTotais[pfx]) || 0;
+  let base = (window._pagTotais && window._pagTotais[pfx]) || 0;
+  // Abate o crédito em haver selecionado no modal (se houver)
+  const credChk = document.getElementById(`${pfx}-credito-chk`);
+  if (credChk && credChk.checked) {
+    const disp = (window._pagCredito && window._pagCredito[pfx]) || 0;
+    let cred = Math.max(0, parseFloat(document.getElementById(`${pfx}-credito-valor`)?.value) || 0);
+    cred = Math.min(cred, disp, base);
+    base = Math.max(0, base - cred);
+  }
+  return base;
 }
 
 function recalcPagOrc(pfx) {
@@ -12400,7 +12429,7 @@ function onOrcPagoChange() {
   const chk = document.getElementById('orc-pago-chk')?.checked;
   const panel = document.getElementById('orc-pago-panel');
   if (panel) panel.style.display = chk ? '' : 'none';
-  if (chk) recalcPagOrc('orc');
+  if (chk) { recalcPagOrc('orc'); onFormaPagOrcChange('orc'); }
 }
 
 async function salvarOrcamento() {
@@ -12918,19 +12947,38 @@ async function _refreshAposPagamentoOrc() {
 
 async function abrirPagamentoOrcamento(orcId) {
   showLoading();
-  let orc;
+  let orc, mapaCred = {};
   try {
     const lista = await App.graph._readFile('orcamentos').catch(() => []);
     orc = (Array.isArray(lista) ? lista : []).find(o => String(o.id) === String(orcId));
+    mapaCred = await _carregarCreditos();
   } catch(e) {}
   hideLoading();
   if (!orc) { toast('Orçamento não encontrado.', 'error'); return; }
 
   const pfx = `emab-${orcId}`;
+  const totalSemCredito = _totalOrcSemCredito(orc);            // valor antes de abater crédito
+  const creditoHaverAntigo = Number(orc.creditoHaver) || 0;   // crédito já abatido neste orçamento
+  const credDisponivel = Math.round((saldoCreditoHaver(mapaCred, orc.clienteId) + creditoHaverAntigo) * 100) / 100;
   window._pagTotais = window._pagTotais || {};
-  window._pagTotais[pfx] = Number(orc.total) || 0;
+  window._pagTotais[pfx] = totalSemCredito;
+  window._pagCredito = window._pagCredito || {};
+  window._pagCredito[pfx] = credDisponivel;
+  window._pagOrcInfo = window._pagOrcInfo || {};
+  window._pagOrcInfo[pfx] = { clienteId: orc.clienteId, creditoHaverAntigo, totalSemCredito };
   const pg = orc.pagamento;
   const itensTxt = (orc.itens || []).map(i => `${i.qtd>1?i.qtd+'× ':''}${esc(i.tipo)} — ${fmtMoeda(i.subtotal != null ? i.subtotal : (i.qtd*i.valor))}`).join('<br>');
+
+  // Bloco de crédito em haver (aparece só quando há saldo) — abate do valor à vista ou parcelado
+  const creditoBloco = credDisponivel > 0 ? `
+    <div style="margin-bottom:14px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <label class="checkbox-item" style="margin:0;font-weight:600;white-space:nowrap"><input type="checkbox" id="${pfx}-credito-chk" ${creditoHaverAntigo>0?'checked':''} onchange="onPagCreditoChange('${pfx}')"> <i class="bi bi-wallet2 me-1" style="color:#16a34a"></i>Abater crédito em haver</label>
+      <span style="font-size:12px;color:var(--text-muted)">Disponível: <strong style="color:#16a34a">${fmtMoeda(credDisponivel)}</strong></span>
+      <span id="${pfx}-credito-input-wrap" style="display:${creditoHaverAntigo>0?'inline-flex':'none'};align-items:center;gap:6px">
+        <span style="font-size:12px">Abater R$</span>
+        <input id="${pfx}-credito-valor" type="number" step="0.01" min="0" value="${creditoHaverAntigo||''}" style="width:110px" oninput="recalcPagOrc('${pfx}')">
+      </span>
+    </div>` : '';
 
   let corpo;
   if (pg && pg.modalidade === 'parcelado' && Array.isArray(pg.parcelas) && pg.parcelas.length) {
@@ -12942,7 +12990,7 @@ async function abrirPagamentoOrcamento(orcId) {
       </div>
       <div style="text-align:right;margin-top:14px"><button class="btn btn-outline btn-sm" onclick="removerPagamentoOrcamento('${orcId}')">Remover pagamento</button></div>`;
   } else {
-    corpo = `<div id="${pfx}-form">${pagOrcFormHTML(pfx, null)}</div>
+    corpo = `${creditoBloco}<div id="${pfx}-form">${pagOrcFormHTML(pfx, null)}</div>
       <div style="text-align:right;margin-top:16px"><button class="btn btn-primary btn-sm" onclick="salvarPagamentoOrcamentoModal('${orcId}')"><i class="bi bi-floppy me-1"></i>Salvar Pagamento</button></div>`;
   }
 
@@ -12958,12 +13006,26 @@ async function abrirPagamentoOrcamento(orcId) {
         </div>
         <div style="font-size:13px;font-weight:600;margin-bottom:4px">${esc(orc.clienteNome||'')}</div>
         <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px">${itensTxt}</div>
-        <div style="font-weight:700;margin-bottom:16px;padding-bottom:10px;border-bottom:1px solid var(--border)">Total: ${fmtMoeda(orc.total)}</div>
+        <div style="font-weight:700;margin-bottom:16px;padding-bottom:10px;border-bottom:1px solid var(--border)">Total: ${fmtMoeda(totalSemCredito)}</div>
         ${corpo}
       </div>
     </div>`;
   document.body.appendChild(modal);
-  if (!(pg && pg.modalidade === 'parcelado')) recalcPagOrc(pfx);
+  if (!(pg && pg.modalidade === 'parcelado')) { recalcPagOrc(pfx); onFormaPagOrcChange(pfx); }
+}
+
+// Mostra/esconde o campo de valor do crédito no modal de pagamento e recalcula o total
+function onPagCreditoChange(pfx) {
+  const chk = document.getElementById(`${pfx}-credito-chk`)?.checked;
+  const wrap = document.getElementById(`${pfx}-credito-input-wrap`);
+  if (wrap) wrap.style.display = chk ? 'inline-flex' : 'none';
+  const inp = document.getElementById(`${pfx}-credito-valor`);
+  if (chk && inp && !inp.value) {
+    const disp = (window._pagCredito && window._pagCredito[pfx]) || 0;
+    const base = (window._pagTotais && window._pagTotais[pfx]) || 0;
+    inp.value = Math.min(disp, base).toFixed(2);
+  }
+  recalcPagOrc(pfx);
 }
 
 function renderParcelasEditor(orcId, pg) {
@@ -12999,8 +13061,21 @@ async function salvarPagamentoOrcamentoModal(orcId) {
   const pfx = `emab-${orcId}`;
   const erro = validarPagamentoOrc(pfx);
   if (erro) { toast(erro, 'warning'); return; }
-  const total = getPagTotal(pfx);
+  const total = getPagTotal(pfx);              // já com o crédito abatido
   const pagamento = coletarPagamentoOrc(pfx, total);
+
+  // Crédito em haver aplicado neste modal
+  const info = (window._pagOrcInfo && window._pagOrcInfo[pfx]) || {};
+  const totalSemCredito = info.totalSemCredito != null ? info.totalSemCredito : total;
+  let creditoAplicado = 0;
+  const credChk = document.getElementById(`${pfx}-credito-chk`);
+  if (credChk && credChk.checked) {
+    const disp = (window._pagCredito && window._pagCredito[pfx]) || 0;
+    creditoAplicado = Math.max(0, parseFloat(document.getElementById(`${pfx}-credito-valor`)?.value) || 0);
+    creditoAplicado = Math.min(creditoAplicado, disp, totalSemCredito);
+    creditoAplicado = Math.round(creditoAplicado * 100) / 100;
+  }
+
   showLoading();
   try {
     const lista = await App.graph._readFile('orcamentos').catch(() => []);
@@ -13008,7 +13083,15 @@ async function salvarPagamentoOrcamentoModal(orcId) {
     const idx = arr.findIndex(o => String(o.id) === String(orcId));
     if (idx < 0) throw new Error('Orçamento não encontrado.');
     arr[idx].pagamento = pagamento;
+    // Aplica o crédito ao total do orçamento
+    arr[idx].total = Math.max(0, Math.round((totalSemCredito - creditoAplicado) * 100) / 100);
+    arr[idx].creditoHaver = creditoAplicado || undefined;
     await App.graph._writeFile('orcamentos', arr);
+    // Ajusta o saldo de crédito do cliente pela diferença em relação ao que já estava abatido
+    const antigo = info.creditoHaverAntigo || 0;
+    if (creditoAplicado !== antigo && info.clienteId) {
+      await salvarCreditoHaver(info.clienteId, antigo - creditoAplicado, `Orçamento ${arr[idx].numero || ''}`.trim());
+    }
     document.getElementById('modal-pag-orc')?.remove();
     toast('Pagamento registrado.', 'success');
     await _refreshAposPagamentoOrc();
