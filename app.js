@@ -9018,6 +9018,7 @@ async function renderWhatsApp() {
   if (window._wa.socket) { try { window._wa.socket.disconnect(); } catch (e) {} window._wa.socket = null; }
   waConectar();
   waCarregarChats();  // atualiza em segundo plano (sem travar a tela)
+  waIniciarPolling(); // rede de segurança: busca novidades periodicamente mesmo se o socket falhar
   // Ação pendente: abrir uma conversa já com a mensagem pronta (ex.: enviar orçamento)
   if (window._waAbrirPendente) {
     const p = window._waAbrirPendente; window._waAbrirPendente = null;
@@ -9038,6 +9039,11 @@ function waConectar() {
   waIdToken().then(token => {
     const socket = io(CONFIG.waGatewayUrl, { auth: { token }, transports: ['websocket', 'polling'] });
     window._wa.socket = socket;
+    // (Re)conectou ao gateway: puxa tudo de novo para recuperar o que chegou enquanto esteve offline
+    socket.on('connect', () => {
+      waCarregarChats();
+      if (window._wa.jidAtivo) waAtualizarConversaAtiva();
+    });
     socket.on('status', e => {
       window._wa.estado = e;
       waRenderStatus();
@@ -9831,6 +9837,71 @@ function waOnReaction(d) {
   if (!d || !d.id) return;
   const msg = (window._wa.msgs || []).find(x => x.id === d.id);
   if (msg) { msg.reaction = d.emoji || null; waRenderThread(); }
+}
+
+// ============================================================
+// REDE DE SEGURANÇA — ATUALIZAÇÃO POR POLLING
+// Mesmo que o socket em tempo real falhe, caia ou perca eventos, a página
+// busca as novidades periodicamente (lista de conversas + conversa aberta).
+// Assim as mensagens novas SEMPRE aparecem, independente do estado da conexão.
+// ============================================================
+async function waAtualizarConversaAtiva() {
+  const jid = window._wa.jidAtivo;
+  if (!jid) return;
+  const jids = waJidsDoGrupo(jid);
+  try {
+    const arrays = await Promise.all(jids.map(j => waApi('/messages?jid=' + encodeURIComponent(j)).then(r => r.messages || []).catch(() => [])));
+    if (window._wa.jidAtivo !== jid) return; // trocou de conversa durante a busca
+    const vistos = new Set();
+    const servidor = arrays.flat().map(waNorm)
+      .filter(m => { if (m.id && vistos.has(m.id)) return false; if (m.id) vistos.add(m.id); return true; });
+    waConfirmarEnviadas(servidor);
+    const msgs = window._wa.msgs || (window._wa.msgs = []);
+    let novas = 0;
+    for (const m of servidor) {
+      const existente = msgs.find(x => waMesmaMsg(x, m));
+      if (existente) {
+        existente.id = m.id || existente.id;
+        if (m.mediaUrl)  existente.mediaUrl  = m.mediaUrl;
+        if (m.mediaName) existente.mediaName = m.mediaName;
+        if (m.savedPath) existente.savedPath = m.savedPath;
+        if (m.reaction != null) existente.reaction = m.reaction;
+      } else { msgs.push(m); novas++; }
+    }
+    if (novas > 0) {
+      window._wa.msgs = msgs.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+      waRenderThread();
+      const cc = window._wa.chats.find(x => x.jid === jid); if (cc) cc.unread = 0;
+      waApi('/messages?jid=' + encodeURIComponent(jid)).catch(() => {}); // marca como lido no servidor
+    }
+  } catch (e) {}
+}
+
+async function waPollChats() {
+  try {
+    const r = await waApi('/chats');
+    const novos = r.chats || [];
+    const sig = arr => (arr || []).map(c => `${c.jid}:${c.last_ts || 0}:${c.unread || 0}:${c.last_message || ''}`).join('|');
+    if (sig(novos) !== sig(window._wa.chats)) {
+      window._wa.chats = novos;
+      waRenderLista();
+    }
+  } catch (e) {}
+}
+
+function waPollTick() {
+  // Se o usuário saiu da página do WhatsApp, encerra o polling
+  if (!document.getElementById('wa-thread')) {
+    if (window._waPollTimer) { clearInterval(window._waPollTimer); window._waPollTimer = null; }
+    return;
+  }
+  waPollChats();
+  if (window._wa.jidAtivo) waAtualizarConversaAtiva();
+}
+
+function waIniciarPolling() {
+  if (window._waPollTimer) clearInterval(window._waPollTimer);
+  window._waPollTimer = setInterval(waPollTick, 12000);
 }
 
 // Regra de identificação do operador:
