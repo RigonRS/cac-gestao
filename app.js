@@ -9046,6 +9046,8 @@ function waConectar() {
     });
     socket.on('status', e => {
       window._wa.estado = e;
+      // Conectou ou apareceu QR (re-pareando): a corrupção foi/está sendo resolvida
+      if (e && (e.conectado || e.qr) && window._wa.saude) window._wa.saude.precisaReparear = false;
       waRenderStatus();
       // O status inicial (ao conectar) já informa se há sincronização em andamento
       window._wa.sync = { sincronizando: !!e.sincronizando, progress: e.syncProgress };
@@ -9085,6 +9087,15 @@ function waRenderStatus() {
   const el = document.getElementById('wa-status'); if (!el) return;
   const e = window._wa.estado;
   const precisaReparear = !!(window._wa.saude && window._wa.saude.precisaReparear);
+  // O QR tem prioridade máxima: se está aparecendo, o re-pareamento está em andamento
+  if (e.qr && isAdminUser()) {
+    el.innerHTML = `<div class="info" style="text-align:center"><div style="font-size:11px;margin-bottom:6px;color:#667781">Escaneie no WhatsApp do número dedicado:</div><img src="${e.qr}" style="width:200px;height:200px" /></div>`;
+    return;
+  }
+  if (e.conectado && !precisaReparear) {
+    el.innerHTML = `<span class="info" style="color:#128c7e;font-weight:600"><i class="bi bi-check-circle-fill me-1"></i>Conectado${e.numero ? (' · ' + esc(waFmtNumero(e.numero, e.numero))) : ''}</span>${isAdminUser() ? `<button class="wa-desconectar" onclick="waConfirmarDesconectar()"><i class="bi bi-power me-1"></i>Desconectar</button>` : ''}`;
+    return;
+  }
   if (precisaReparear) {
     el.innerHTML = `<span class="info" style="color:#b91c1c;font-weight:600"><i class="bi bi-exclamation-triangle-fill me-1"></i>Sessão corrompida — reconecte o número (mensagens não estão chegando)</span>${isAdminUser() ? `<button class="wa-desconectar" onclick="waConfirmarDesconectar()"><i class="bi bi-power me-1"></i>Reconectar</button>` : ''}`;
     return;
@@ -9143,7 +9154,24 @@ async function waDesconectar() {
   try {
     showLoading();
     await waApi('/logout', { method: 'POST', body: JSON.stringify({}) });
-    toast('WhatsApp desconectado.', 'success');
+    // Limpa o estado local para a tela sair do "sessão corrompida" e aguardar o QR
+    if (window._wa.saude) window._wa.saude.precisaReparear = false;
+    window._wa.estado.conectado = false; window._wa.estado.numero = null;
+    waRenderStatus();
+    toast('Desconectado. Gerando novo QR Code...', 'success');
+    // Rede de segurança: consulta o status algumas vezes até o QR aparecer
+    let tentativas = 0;
+    const puxarQR = async () => {
+      tentativas++;
+      try {
+        const s = await waApi('/status');
+        window._wa.estado.conectado = s.conectado; window._wa.estado.numero = s.numero; window._wa.saude = s.saude || null;
+        if (!s.conectado && isAdminUser()) { const q = await waApi('/qr'); if (q.qr) { window._wa.estado.qr = q.qr; } }
+        waRenderStatus();
+      } catch (e) {}
+      if (!window._wa.estado.qr && !window._wa.estado.conectado && tentativas < 12) setTimeout(puxarQR, 2000);
+    };
+    setTimeout(puxarQR, 2500);
   } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
