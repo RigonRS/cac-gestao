@@ -9075,7 +9075,7 @@ function waConectar() {
 
 async function waCarregarChats() {
   try { const r = await waApi('/chats'); window._wa.chats = r.chats || []; waRenderLista(); } catch (e) {}
-  try { const s = await waApi('/status'); window._wa.estado.conectado = s.conectado; window._wa.estado.numero = s.numero; waRenderStatus(); } catch (e) {}
+  try { const s = await waApi('/status'); window._wa.estado.conectado = s.conectado; window._wa.estado.numero = s.numero; window._wa.saude = s.saude || null; waRenderStatus(); } catch (e) {}
   if (!window._wa.estado.conectado && isAdminUser()) {
     try { const q = await waApi('/qr'); if (q.qr) { window._wa.estado.qr = q.qr; waRenderStatus(); } } catch (e) {}
   }
@@ -9084,6 +9084,11 @@ async function waCarregarChats() {
 function waRenderStatus() {
   const el = document.getElementById('wa-status'); if (!el) return;
   const e = window._wa.estado;
+  const precisaReparear = !!(window._wa.saude && window._wa.saude.precisaReparear);
+  if (precisaReparear) {
+    el.innerHTML = `<span class="info" style="color:#b91c1c;font-weight:600"><i class="bi bi-exclamation-triangle-fill me-1"></i>Sessão corrompida — reconecte o número (mensagens não estão chegando)</span>${isAdminUser() ? `<button class="wa-desconectar" onclick="waConfirmarDesconectar()"><i class="bi bi-power me-1"></i>Reconectar</button>` : ''}`;
+    return;
+  }
   if (e.conectado) {
     el.innerHTML = `<span class="info" style="color:#128c7e;font-weight:600"><i class="bi bi-check-circle-fill me-1"></i>Conectado${e.numero ? (' · ' + esc(waFmtNumero(e.numero, e.numero))) : ''}</span>${isAdminUser() ? `<button class="wa-desconectar" onclick="waConfirmarDesconectar()"><i class="bi bi-power me-1"></i>Desconectar</button>` : ''}`;
   } else if (e.qr && isAdminUser()) {
@@ -10531,6 +10536,43 @@ function toggleModoSelecaoNotificacoes(on) {
   window._notifModoSelecao = on;
   window._notifSelecionadas = new Set();
   abrirPopupNotificacoes();
+}
+
+// Verifica a saúde do WhatsApp no login (apenas administradores) e avisa se a
+// sessão estiver corrompida (precisa re-parear) — já que a página quase não é aberta.
+async function verificarSaudeWhatsApp() {
+  if (!isAdminUser() || !CONFIG.waGatewayUrl || window._waMobile) return;
+  if (sessionStorage.getItem('wa_problema_avisado')) return;
+  try {
+    const s = await waApi('/status');
+    if (s && s.saude && s.saude.precisaReparear) {
+      sessionStorage.setItem('wa_problema_avisado', '1');
+      alertaWhatsAppProblema(s);
+    }
+  } catch (e) {}
+}
+
+function alertaWhatsAppProblema(info) {
+  document.getElementById('modal-wa-problema')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modal-wa-problema';
+  modal.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:10001;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this) this.remove()">
+      <div style="background:#fff;border-radius:14px;padding:24px;max-width:460px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.3)">
+        <h3 style="margin:0 0 10px;font-size:17px;color:#b91c1c"><i class="bi bi-exclamation-triangle-fill me-2"></i>WhatsApp precisa ser reconectado</h3>
+        <p style="font-size:13.5px;color:#374151;line-height:1.7;margin:0 0 10px">
+          A conexão do WhatsApp está com a <strong>sessão corrompida</strong> e não está recebendo mensagens novas. O sistema tentou se recuperar sozinho, mas não conseguiu.
+        </p>
+        <p style="font-size:13.5px;color:#374151;line-height:1.7;margin:0 0 18px">
+          Para voltar a receber mensagens, é preciso <strong>reconectar o número</strong>: abra o WhatsApp, clique em <strong>Desconectar</strong> e escaneie o novo QR Code no celular do número dedicado.
+        </p>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button class="btn btn-outline btn-sm" onclick="document.getElementById('modal-wa-problema').remove()">Depois</button>
+          <button class="btn btn-primary btn-sm" onclick="document.getElementById('modal-wa-problema').remove();navigate('whatsapp')"><i class="bi bi-whatsapp me-1"></i>Abrir WhatsApp</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
 }
 
 // Liga/desliga o popup automático de notificações (apenas administradores)
@@ -13610,6 +13652,7 @@ async function iniciarApp() {
 
   // Notificações: gera automáticas, atualiza o sino e avisa se houver novas (uma vez por sessão do navegador)
   // No modo celular (só WhatsApp) não mostramos o sino nem o popup de notificações.
+  if (!window._waMobile) verificarSaudeWhatsApp();  // avisa admins se o WhatsApp precisar re-parear
   if (!window._waMobile) (async () => {
     await autoParadoProcessos();
     await gerarNotificacoesAutomaticas();
