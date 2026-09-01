@@ -10504,7 +10504,7 @@ function abrirPopupNotificacoes() {
         ${isAdminUser() && !modoSelecao ? `
           <label style="display:flex;align-items:center;gap:7px;font-size:12.5px;color:#374151;margin-bottom:14px;cursor:pointer;background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:8px 10px">
             <input type="checkbox" ${!(window._notifConfig && window._notifConfig.popupDesativado) ? 'checked' : ''} onchange="toggleNotifPopup(this.checked)" />
-            Mostrar aviso automático (popup) de novas notificações ao abrir o sistema
+            Mostrar aviso automático (popup) de novas notificações ao abrir o sistema <span style="color:var(--text-muted)">(vale apenas para Matheus e Simone)</span>
           </label>` : ''}
         ${lista.length === 0
           ? `<div class="empty-state" style="padding:24px"><i class="bi bi-bell-slash"></i><p>Nenhuma notificação.</p></div>`
@@ -13614,7 +13614,9 @@ async function iniciarApp() {
     await autoParadoProcessos();
     await gerarNotificacoesAutomaticas();
     const naoLidas = await atualizarBadgeNotificacoes();
-    const popupDesativado = !!(window._notifConfig && window._notifConfig.popupDesativado);
+    // O desligar do popup vale APENAS para os administradores (Matheus e Simone);
+    // os demais operadores continuam recebendo o aviso normalmente.
+    const popupDesativado = isAdminUser() && !!(window._notifConfig && window._notifConfig.popupDesativado);
     if (naoLidas > 0 && !popupDesativado && !sessionStorage.getItem('notif_popup_mostrado')) {
       sessionStorage.setItem('notif_popup_mostrado', '1');
       setTimeout(() => alertaNovasNotificacoes(naoLidas), 800);
