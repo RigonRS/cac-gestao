@@ -614,23 +614,29 @@ async function renderDashboard() {
 
       <div class="card">
         <div class="card-header">
-          <h3><i class="bi bi-list-check me-2"></i>Processos Recentes</h3>
+          <h3><i class="bi bi-clock-history me-2"></i>Últimas movimentações de processos protocolados</h3>
           <a class="btn btn-outline btn-sm" onclick="navigate('processos')">Ver todos</a>
         </div>
         <div class="card-body" style="padding:0">
-          ${processos.length === 0
-            ? '<div class="empty-state" style="padding:24px"><i class="bi bi-folder-x" style="font-size:32px"></i><p>Nenhum processo</p></div>'
-            : processos.slice(-8).reverse().map(p => {
-                const b = statusBadge(p.Status);
-                return `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--border);cursor:pointer" onclick="navigate('processos/detalhe',{id:'${p.id}'})">
-                  <div>
-                    <div style="font-size:13px;font-weight:600">${esc(p.TipoProcesso)}</div>
-                    <div style="font-size:11px;color:var(--text-muted)">${esc(p.ClienteNome)} · ${fmtDate(p.DataAbertura ? p.DataAbertura.split('T')[0] : '')}</div>
-                  </div>
-                  <span class="badge ${b.cls}">${b.txt}</span>
-                </div>`;
-              }).join('')
-          }
+          ${(() => {
+            const STATUS_MOV = ['Aguardando Pagamento GRU', 'Pronto para Análise', 'Em análise', 'Aguardando Protocolo (email)', 'Em Análise (Email)'];
+            const lista = processos.filter(p => STATUS_MOV.includes(p.Status))
+              .map(p => ({ p, iso: _getUltimoRegistroISO(p) }))
+              .sort((a, b) => (b.iso || '').localeCompare(a.iso || ''))
+              .slice(0, 8);
+            if (!lista.length) return '<div class="empty-state" style="padding:24px"><i class="bi bi-folder-x" style="font-size:32px"></i><p>Nenhum processo protocolado</p></div>';
+            return lista.map(({ p }) => {
+              const b = statusBadge(p.Status);
+              const ultReg = _getUltimoRegistro(p);
+              return `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--border);cursor:pointer;gap:10px" onclick="navigate('processos/detalhe',{id:'${p.id}'})">
+                <div style="min-width:0">
+                  <div style="font-size:13px;font-weight:600">${esc(p.TipoProcesso)}</div>
+                  <div style="font-size:11px;color:var(--text-muted)">${esc(p.ClienteNome)}${ultReg ? ' · últ. mov.: ' + ultReg : ''}</div>
+                </div>
+                <span class="badge ${b.cls}" style="flex-shrink:0">${b.txt}</span>
+              </div>`;
+            }).join('');
+          })()}
         </div>
       </div>
     </div>
@@ -5055,7 +5061,8 @@ async function gerarRequerimento() {
     const { vendedor: vendCadastrado, arma: armaVendCadastrada } = await resolverVendedorEArmaCadastrados(dados);
     let v = {}, cp = {}, vendHabs = [], compHabs = [], vendEmail = '', compEmail = '';
 
-    if (isMudanca || (isTransf && dados.clienteVende === 'sim')) {
+    if (isMudanca || (isTransf && (dados.clienteVende === 'sim' || dados.mesmoTitular === 'sim'))) {
+      // Mesmo titular: o cliente é o vendedor E o comprador. Venda: o cliente é o vendedor.
       v = { nome:c.Title||'', cpf:c.CPF||'',
         rg:`${c.RG||''}${c.OrgaoEmissor?' '+c.OrgaoEmissor:''}${c.UFDoc?'/'+c.UFDoc:''}`,
         cr:c.NumeroCR||'', telefone:c.Celular||'',
@@ -5132,8 +5139,8 @@ async function gerarRequerimento() {
 
     let arm = {};
     try {
-      const armaIdRaw = (dados.armaId||'').split('|')[0];
-      if (armaIdRaw && (isMudanca || dados.clienteVende === 'sim')) {
+      const armaIdRaw = (dados.armaId || dados.armaIdMesmoTitular || '').split('|')[0];
+      if (armaIdRaw && (isMudanca || dados.clienteVende === 'sim' || dados.mesmoTitular === 'sim')) {
         const arma = await App.graph.getItem(CONFIG.listas.armas, armaIdRaw);
         arm = { acervoOrigem:arma.AtividadeCadastrada||'', especie:arma.Especie||'',
           calibre:arma.Calibre||'', marca:arma.Marca||'', modelo:arma.Modelo||'',
@@ -7603,13 +7610,61 @@ async function renderPagamentosGRU() {
                   <span style="font-size:13px;font-weight:600;color:#16a34a">${fmtMoeda(taxaProcesso(p))}</span>
                   ${p.DataProtocoloSistema ? `<div style="font-size:11px;color:var(--text-muted)"><i class="bi bi-calendar-check"></i> Protocolo: ${fmtDate(p.DataProtocoloSistema.split('T')[0])}</div>` : ''}
                 </div>
-                <span class="badge badge-orange">GRU Pendente</span>
+                <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+                  <button onclick="pagarGRUHoje('${p.id}')" title="Registrar o pagamento da GRU com a data de hoje" style="white-space:nowrap;font-size:11px;padding:3px 9px;border:1px solid #16a34a;color:#16a34a;background:#fff;border-radius:6px;cursor:pointer;font-weight:600"><i class="bi bi-calendar-check me-1"></i>Pagar Hoje</button>
+                  <span class="badge badge-orange">GRU Pendente</span>
+                </div>
               </div>
             </div>`).join('')}
           </div>
         </div>`).join('')}
       </div>
     </div>`;
+}
+
+// Registra o pagamento da GRU de um processo com a data de HOJE (a partir da página de GRU)
+async function pagarGRUHoje(id) {
+  const hoje = new Date().toISOString().split('T')[0];
+  const confirmar = await new Promise(resolve => {
+    document.getElementById('modal-pagar-gru-hoje')?.remove();
+    const modal = document.createElement('div');
+    modal.id = 'modal-pagar-gru-hoje';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+    modal.innerHTML = `
+      <div style="background:#fff;border-radius:12px;padding:24px;max-width:400px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,.2)">
+        <h3 style="margin:0 0 12px;font-size:16px"><i class="bi bi-cash-coin me-2" style="color:#16a34a"></i>Confirmar Pagamento da GRU</h3>
+        <p style="font-size:13px;color:#374151;margin:0 0 18px">Deseja confirmar o pagamento desta GRU com a data de <strong>hoje (${fmtDate(hoje)})</strong>?</p>
+        <div style="display:flex;justify-content:flex-end;gap:10px">
+          <button id="pgh-nao" style="background:#f3f4f6;color:#374151;border:1px solid #d1d5db;border-radius:6px;padding:8px 18px;cursor:pointer;font-size:13px">Cancelar</button>
+          <button id="pgh-sim" style="background:#16a34a;color:#fff;border:none;border-radius:6px;padding:8px 18px;cursor:pointer;font-size:13px;font-weight:600">Confirmar</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', e => { if (e.target === modal) { modal.remove(); resolve(false); } });
+    document.getElementById('pgh-nao').onclick = () => { modal.remove(); resolve(false); };
+    document.getElementById('pgh-sim').onclick = () => { modal.remove(); resolve(true); };
+  });
+  if (!confirmar) return;
+  showLoading();
+  try {
+    const proc = await App.graph.getItem(CONFIG.listas.processos, id);
+    const historico = JSON.parse(proc.HistoricoStatus || '[]');
+    const agora = new Date();
+    historico.push({
+      data:    agora.toLocaleDateString('pt-BR'),
+      hora:    agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+      status:  `Pagamento GRU — ${fmtDate(hoje)}`,
+      usuario: App.account?.name || App.account?.username || 'Desconhecido'
+    });
+    await App.graph.updateItem(CONFIG.listas.processos, id, {
+      GruPaga:          true,
+      DataPagamentoGRU: hoje,
+      HistoricoStatus:  JSON.stringify(historico)
+    });
+    App.invalidateCache('processos');
+    toast('Pagamento da GRU registrado para hoje!', 'success');
+    await renderPagamentosGRU();
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 // ============================================================
@@ -13140,18 +13195,28 @@ async function removerPagamentoOrcamento(orcId) {
 // ============================================================
 // CONTROLE DE DEMANDAS
 // ============================================================
+function sortDemandas(col) {
+  const s = window._demandasSort || (window._demandasSort = { col: null, dir: 'asc' });
+  if (s.col === col) s.dir = s.dir === 'asc' ? 'desc' : 'asc';
+  else { s.col = col; s.dir = 'asc'; }
+  renderControleDemandas();
+}
+
 async function renderControleDemandas() {
   if (!isAdminUser()) { document.getElementById('page-content').innerHTML = `<div class="empty-state"><i class="bi bi-lock"></i><p>Acesso restrito a administradores.</p></div>`; return; }
   document.getElementById('page-title').textContent = 'Controle de Demandas';
   showLoading();
   try {
-    const [demandasRaw, processos, orcRaw] = await Promise.all([
+    const [demandasRaw, processos, orcRaw, clientes] = await Promise.all([
       App.graph._readFile('demandas').catch(() => []),
       App.getProcessos(),
       App.graph._readFile('orcamentos').catch(() => []),
+      App.getClientes(),
     ]);
     const demandas = Array.isArray(demandasRaw) ? demandasRaw : [];
     const orcamentos = Array.isArray(orcRaw) ? orcRaw : [];
+    const clienteMap = {}; (clientes || []).forEach(c => { clienteMap[String(c.id)] = c; });
+    const demandaTem2fa = d => (clienteMap[String(d.clienteId)]?.VerificacaoEtapas === 'Sim');
     window._controleDemandasProcessos = processos;
     window._controleDemandasLista = demandas;
 
@@ -13185,11 +13250,41 @@ async function renderControleDemandas() {
       </div>`;
     }).join('');
 
-    // Tabela de demandas (apenas não-concluídas primeiro, depois concluídas)
-    const demandasOrdenadas = [...demandas].sort((a,b) => {
-      const ord = { 'Aguardando Delegação': 0, 'Aberta': 1, 'Concluída': 2 };
-      return (ord[a.status]??1) - (ord[b.status]??1) || (b.dataCriacao||'').localeCompare(a.dataCriacao||'');
-    });
+    // Ordenação: por padrão não-concluídas primeiro; ou pela coluna escolhida (crescente/decrescente)
+    const sortState = window._demandasSort || (window._demandasSort = { col: null, dir: 'asc' });
+    const valorOrdenacao = (d, col) => {
+      const orc = orcamentos.find(o => String(o.id) === String(d.orcamentoId));
+      switch (col) {
+        case 'numero':    return (d.numero || '').toLowerCase();
+        case 'orcamento': return (d.orcamentoNumero || '').toLowerCase();
+        case 'cliente':   return (d.clienteNome || '').toLowerCase();
+        case 'criado':    return d.dataCriacao || '';
+        case 'total':     return orc ? (Number(orc.total) || 0) : (Number(d.total) || 0);
+        case 'status':    return ({ 'Aguardando Delegação': 0, 'Aberta': 1, 'Concluída': 2 })[d.status] ?? 1;
+        case 'operador':  return (d.operador || '').toLowerCase();
+        case 'delegado':  return d.dataDelegacao || '';
+        case '2fa':       return demandaTem2fa(d) ? 1 : 0;
+        default:          return '';
+      }
+    };
+    let demandasOrdenadas;
+    if (sortState.col) {
+      demandasOrdenadas = [...demandas].sort((a, b) => {
+        const va = valorOrdenacao(a, sortState.col), vb = valorOrdenacao(b, sortState.col);
+        const cmp = (typeof va === 'number' && typeof vb === 'number') ? (va - vb) : String(va).localeCompare(String(vb), 'pt-BR');
+        return sortState.dir === 'asc' ? cmp : -cmp;
+      });
+    } else {
+      demandasOrdenadas = [...demandas].sort((a, b) => {
+        const ord = { 'Aguardando Delegação': 0, 'Aberta': 1, 'Concluída': 2 };
+        return (ord[a.status] ?? 1) - (ord[b.status] ?? 1) || (b.dataCriacao || '').localeCompare(a.dataCriacao || '');
+      });
+    }
+    const thSort = (col, label) => {
+      const active = sortState.col === col;
+      const icon = active ? (sortState.dir === 'asc' ? '↑' : '↓') : '↕';
+      return `<th style="cursor:pointer;user-select:none;white-space:nowrap" onclick="sortDemandas('${col}')">${label} <span style="font-size:10px;color:${active ? 'var(--accent)' : '#9ca3af'}">${icon}</span></th>`;
+    };
 
     const linhasTabela = demandasOrdenadas.map(d => {
       const statusBadge = d.status === 'Aguardando Delegação'
@@ -13221,9 +13316,11 @@ async function renderControleDemandas() {
             ${RESPONSAVEIS.map(r => `<option value="${r}" ${d.operador===r?'selected':''}>${r}</option>`).join('')}
           </select>` : '';
 
+      const _2fa = demandaTem2fa(d);
       return `<tr>
         <td style="font-weight:700;white-space:nowrap">${esc(d.numero||'—')}</td>
         <td style="white-space:nowrap;font-size:12px">${esc(d.orcamentoNumero||'—')}</td>
+        <td style="text-align:center">${_2fa ? '<span class="badge badge-blue" title="Verificação em 2 etapas ativa"><i class="bi bi-shield-lock-fill"></i></span>' : '<span style="color:var(--text-muted)">—</span>'}</td>
         <td>${esc(d.clienteNome||'—')}</td>
         <td style="white-space:nowrap;font-size:12px">${fmtDate(d.dataCriacao)}</td>
         <td style="font-size:12px">${progItems}</td>
@@ -13244,7 +13341,7 @@ async function renderControleDemandas() {
         <div class="card-header"><h3><i class="bi bi-list-task me-2"></i>Demandas</h3></div>
         <div class="card-body" style="padding:0">
           ${demandas.length ? `<div class="table-wrapper"><table>
-            <thead><tr><th>Nº</th><th>Orçamento</th><th>Cliente</th><th>Criado em</th><th>Serviços / Progresso</th><th>Total</th><th>Status</th><th>Operador</th><th>Delegado em</th><th>Delegar</th><th>Ações</th></tr></thead>
+            <thead><tr>${thSort('numero','Nº')}${thSort('orcamento','Orçamento')}${thSort('2fa','<i class="bi bi-shield-lock" title="Verificação em 2 etapas"></i>')}${thSort('cliente','Cliente')}${thSort('criado','Criado em')}<th>Serviços / Progresso</th>${thSort('total','Total')}${thSort('status','Status')}${thSort('operador','Operador')}${thSort('delegado','Delegado em')}<th>Delegar</th><th>Ações</th></tr></thead>
             <tbody>${linhasTabela}</tbody>
           </table></div>` : `<div class="empty-state" style="padding:40px"><i class="bi bi-inbox"></i><p>Nenhuma demanda criada ainda. Aprove um orçamento para gerar a primeira demanda.</p></div>`}
         </div>
