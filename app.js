@@ -6437,10 +6437,20 @@ async function salvarDatasProcesso(e, id) {
     });
     // Certos tipos passam automaticamente para "Em Análise (Email)" ao registrar o protocolo
     const mudaParaEmail = TIPOS_STATUS_EMAIL_AO_PROTOCOLAR.includes(proc.TipoProcesso) && proc.Status !== 'Em Análise (Email)';
+    // Ao registrar o protocolo, marca automaticamente todos os itens do checklist
+    let checklistProt = null;
+    try {
+      const cl = JSON.parse(proc.ChecklistJSON || '[]');
+      if (Array.isArray(cl) && cl.length) {
+        cl.forEach(i => { i.concluido = true; });
+        checklistProt = JSON.stringify(cl);
+      }
+    } catch(e) {}
     const updates = {
       NumeroProtocolo:      numProt,
       DataProtocoloSistema: dataProt,
     };
+    if (checklistProt) updates.ChecklistJSON = checklistProt;
     if (mudaParaEmail) {
       updates.Status = 'Em Análise (Email)';
       historico.push({
@@ -6456,6 +6466,7 @@ async function salvarDatasProcesso(e, id) {
     if (window._processoDetalhe) {
       window._processoDetalhe.NumeroProtocolo      = numProt;
       window._processoDetalhe.DataProtocoloSistema = dataProt;
+      if (checklistProt) window._processoDetalhe.ChecklistJSON = checklistProt;
       if (mudaParaEmail) window._processoDetalhe.Status = 'Em Análise (Email)';
     }
     if (mudaParaEmail) {
@@ -6480,6 +6491,8 @@ async function salvarDatasProcesso(e, id) {
         </div>`;
     }
     toast('Protocolo salvo!', 'success');
+    // Reflete o checklist marcado automaticamente na tela
+    if (checklistProt) await renderProcessoDetalhe(id);
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
@@ -13356,10 +13369,10 @@ function abrirModalProcessosOperador(operador, filtro) {
     lista = processos.filter(p => p.Responsavel === operador && p.Status === 'Processo Futuro');
     tituloFiltro = 'Futuro';
   } else if (filtro === 'protocolados') {
-    lista = processos.filter(p => p.Responsavel === operador && STATUS_PROTOCOLADOS.includes(p.Status));
+    lista = processos.filter(p => p.Responsavel === operador && (STATUS_PROTOCOLADOS.includes(p.Status) || (processoTemProtocolo(p) && STATUS_A_PROTOCOLAR.includes(p.Status))));
     tituloFiltro = 'Protocolados';
   } else {
-    lista = processos.filter(p => p.Responsavel === operador && STATUS_A_PROTOCOLAR.includes(p.Status));
+    lista = processos.filter(p => p.Responsavel === operador && STATUS_A_PROTOCOLAR.includes(p.Status) && !processoTemProtocolo(p));
     tituloFiltro = 'A Protocolar';
   }
   document.getElementById('modal-processos-operador')?.remove();
