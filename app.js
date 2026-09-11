@@ -372,7 +372,11 @@ function ratioExtraProcesso(p, orcamentos, demandas) {
 // Extra (comissão) de um processo. O desconto do orçamento é aplicado de forma
 // PROPORCIONAL sobre (valor cheio − taxa), para que a comissão caia na mesma
 // proporção do desconto (e não seja penalizada a mais pela taxa fixa).
+function _ajusteExtraKey(id, responsavel) { return `${id}|${responsavel}`; }
 function extraProcesso(p, orcamentos, demandas, responsavel) {
+  // Ajuste manual salvo (via botão de olho na página de Extras) tem prioridade
+  const aj = window._extrasAjustes && window._extrasAjustes[_ajusteExtraKey(p.id, responsavel)];
+  if (aj && Number.isFinite(Number(aj.extra))) return Number(aj.extra);
   const taxa  = TAXAS_PROCESSO[p.TipoProcesso] || 0;
   const cheio = valorCheioProcessoExtras(p, orcamentos, demandas);
   const ratio = ratioExtraProcesso(p, orcamentos, demandas);
@@ -7853,14 +7857,16 @@ function imprimirExtras(responsavel) {
 
 async function renderPagamentosExtras() {
   document.getElementById('page-title').textContent = 'Pagamentos de Extras';
-  const [processos, avulsosRaw, extrasPagosMesRaw, orcDemRaw] = await Promise.all([
+  const [processos, avulsosRaw, extrasPagosMesRaw, orcDemRaw, ajustesRaw] = await Promise.all([
     App.getProcessos(),
     App.graph._readFile('extras_avulsos').catch(() => []),
     App.graph._readFile('extras_pagos_mes').catch(() => []),
     _carregarOrcamentosDemandas(),
+    App.graph._readFile('extras_ajustes').catch(() => ({})),
   ]);
   const avulsos = Array.isArray(avulsosRaw) ? avulsosRaw : [];
   const extrasPagosMes = Array.isArray(extrasPagosMesRaw) ? extrasPagosMesRaw : [];
+  window._extrasAjustes = (ajustesRaw && !Array.isArray(ajustesRaw) && typeof ajustesRaw === 'object') ? ajustesRaw : {};
   const _orcExtras = orcDemRaw.orcamentos;
   const _demExtras = orcDemRaw.demandas;
   window._extrasProcessos = processos;
@@ -7912,6 +7918,7 @@ async function renderPagamentosExtras() {
         const valorExtraBase = valorProcessoParaExtras(p, _orcExtras, _demExtras);
         const temDescExtra = Math.abs(valorExtraBase - valor) > 0.005;
         const extra = extraProcesso(p, _orcExtras, _demExtras, responsavel);
+        const temAjuste = !!(window._extrasAjustes && window._extrasAjustes[_ajusteExtraKey(p.id, responsavel)]);
         const desc = getProcessoDescExtra(p);
         const infoPag = infoPagamentoProcessoTxt(p);
         // Situação de pagamento via orçamento vinculado (modelo novo); legado usa PagamentosJSON
@@ -7932,10 +7939,11 @@ async function renderPagamentosExtras() {
             ${badgePagHtml}
             ${p.Restituido ? `<div style="margin-top:4px"><span class="badge" style="background:#9333ea;color:#fff;font-size:11px"><i class="bi bi-arrow-return-left me-1"></i>Restituído</span></div>` : ''}
           </div>
-          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0">
+          <div style="display:flex;align-items:flex-start;gap:6px;flex-shrink:0">
+            <button class="btn btn-ghost btn-xs" style="font-size:12px;padding:2px 6px;color:var(--accent)" onclick="verCalculoExtra('${p.id}','${esc(responsavel)}')" title="Ver e editar o cálculo do extra"><i class="bi bi-eye"></i></button>
             <div style="text-align:right">
               <div style="font-size:14px;font-weight:700;color:var(--success)">${fmtMoeda(extra)}</div>
-              <div style="font-size:10px;color:var(--text-muted)">10% extra</div>
+              <div style="font-size:10px;color:${temAjuste ? '#d97706' : 'var(--text-muted)'}">${temAjuste ? '<i class="bi bi-pencil-fill me-1"></i>ajuste manual' : 'extra'}</div>
             </div>
           </div>
         </div>`;
@@ -8007,6 +8015,129 @@ async function renderPagamentosExtras() {
     <div style="display:grid;grid-template-columns:${colTemplate};gap:20px">
       ${cards}
     </div>`;
+}
+
+// ---- Modal: ver/editar o cálculo do extra de um processo ----
+function _recalcAjusteExtra() {
+  const valor = parseFloat((document.getElementById('aj-valor')||{}).value) || 0;
+  const taxa  = parseFloat((document.getElementById('aj-taxa')||{}).value) || 0;
+  const pct   = parseFloat((document.getElementById('aj-pct')||{}).value) || 0;
+  const extra = Math.max(0, valor - taxa) * pct / 100;
+  const out = document.getElementById('aj-extra');
+  if (out) out.textContent = fmtMoeda(extra);
+}
+
+function verCalculoExtra(id, responsavel) {
+  const p = (window._extrasProcessos || []).find(x => String(x.id) === String(id));
+  if (!p) { toast('Processo não encontrado.', 'error'); return; }
+  const orc = window._extrasOrc || [], dem = window._extrasDem || [];
+  const cheio  = valorCheioProcessoExtras(p, orc, dem);
+  const taxa   = TAXAS_PROCESSO[p.TipoProcesso] || 0;
+  const ratio  = ratioExtraProcesso(p, orc, dem);
+  const fracao = fracaoExtraProcesso(p.TipoProcesso, responsavel);
+  const pctPadrao = ratio * fracao * 100;
+  const key = _ajusteExtraKey(id, responsavel);
+  const aj = (window._extrasAjustes || {})[key];
+  const vVal  = aj ? Number(aj.valor) : cheio;
+  const vTaxa = aj ? Number(aj.taxa)  : taxa;
+  const vPct  = aj ? Number(aj.percentual) : Math.round(pctPadrao * 10000) / 10000;
+  const extraAtual = Math.max(0, vVal - vTaxa) * vPct / 100;
+  const temDesconto = Math.abs(ratio - 1) > 0.0001;
+
+  document.getElementById('modal-calculo-extra')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modal-calculo-extra';
+  modal.dataset.pid = id;
+  modal.dataset.resp = responsavel;
+  const linhaInfo = (rot, val) => `<div style="display:flex;justify-content:space-between;font-size:12px;padding:2px 0"><span style="color:var(--text-muted)">${rot}</span><span style="font-weight:600">${val}</span></div>`;
+  modal.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this) this.remove()">
+      <div style="background:#fff;border-radius:14px;padding:24px;max-width:460px;width:100%;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <h3 style="margin:0;font-size:16px"><i class="bi bi-calculator me-2" style="color:var(--accent)"></i>Cálculo do Extra</h3>
+          <button onclick="document.getElementById('modal-calculo-extra').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:#666;line-height:1">×</button>
+        </div>
+        <div style="font-size:13px;font-weight:600">${esc(p.ClienteNome||'—')}</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:14px">${esc(p.TipoProcesso||'—')} · ${esc(responsavel)}</div>
+
+        <div style="background:var(--bg-secondary);border-radius:8px;padding:10px 12px;margin-bottom:16px">
+          <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:4px">Cálculo automático</div>
+          ${linhaInfo('Valor cheio do processo', fmtMoeda(cheio))}
+          ${linhaInfo('Desconto de taxas', '− ' + fmtMoeda(taxa))}
+          ${temDesconto ? linhaInfo('Desconto do orçamento', (Math.round((1-ratio)*10000)/100).toString().replace('.', ',') + '%') : ''}
+          ${linhaInfo('Percentual do extra (base)', (Math.round(fracao*10000)/100).toString().replace('.', ',') + '%')}
+          ${linhaInfo('→ Porcentagem aplicada', (Math.round(pctPadrao*100)/100).toString().replace('.', ',') + '%')}
+          ${linhaInfo('Extra calculado', fmtMoeda(Math.max(0, cheio - taxa) * ratio * fracao))}
+        </div>
+
+        <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:8px">Editar valores</div>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <label style="font-size:12px">Valor do processo (R$)
+            <input type="number" step="0.01" min="0" id="aj-valor" value="${vVal.toFixed(2)}" oninput="_recalcAjusteExtra()" style="width:100%;margin-top:3px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px" />
+          </label>
+          <label style="font-size:12px">Desconto das taxas (R$)
+            <input type="number" step="0.01" min="0" id="aj-taxa" value="${vTaxa.toFixed(2)}" oninput="_recalcAjusteExtra()" style="width:100%;margin-top:3px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px" />
+          </label>
+          <label style="font-size:12px">Porcentagem aplicada (%)
+            <input type="number" step="0.01" min="0" id="aj-pct" value="${vPct}" oninput="_recalcAjusteExtra()" style="width:100%;margin-top:3px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px" />
+          </label>
+        </div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center;background:#f0fdf4;border-radius:8px;padding:10px 12px;margin-top:14px">
+          <span style="font-size:13px;font-weight:600;color:#166534">Extra final</span>
+          <span id="aj-extra" style="font-size:16px;font-weight:700;color:var(--success)">${fmtMoeda(extraAtual)}</span>
+        </div>
+
+        <div style="display:flex;justify-content:space-between;gap:10px;margin-top:18px">
+          <div>${aj ? `<button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="restaurarAjusteExtra('${id}','${esc(responsavel)}')"><i class="bi bi-arrow-counterclockwise me-1"></i>Restaurar automático</button>` : ''}</div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-ghost btn-sm" onclick="document.getElementById('modal-calculo-extra').remove()">Cancelar</button>
+            <button class="btn btn-primary btn-sm" onclick="salvarAjusteExtra()"><i class="bi bi-floppy me-1"></i>Salvar ajuste</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
+async function salvarAjusteExtra() {
+  const modal = document.getElementById('modal-calculo-extra');
+  if (!modal) return;
+  const id = modal.dataset.pid;
+  const responsavel = modal.dataset.resp;
+  const valor = parseFloat((document.getElementById('aj-valor')||{}).value) || 0;
+  const taxa  = parseFloat((document.getElementById('aj-taxa')||{}).value) || 0;
+  const pct   = parseFloat((document.getElementById('aj-pct')||{}).value) || 0;
+  const extra = Math.max(0, valor - taxa) * pct / 100;
+  showLoading();
+  try {
+    const atual = await App.graph._readFile('extras_ajustes').catch(() => ({}));
+    const mapa = (atual && !Array.isArray(atual) && typeof atual === 'object') ? atual : {};
+    mapa[_ajusteExtraKey(id, responsavel)] = {
+      valor, taxa, percentual: pct, extra,
+      por: getCurrentUserName(),
+      data: new Date().toISOString().split('T')[0],
+    };
+    await App.graph._writeFile('extras_ajustes', mapa);
+    window._extrasAjustes = mapa;
+    modal.remove();
+    toast('Ajuste do extra salvo!', 'success');
+    await renderPagamentosExtras();
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function restaurarAjusteExtra(id, responsavel) {
+  showLoading();
+  try {
+    const atual = await App.graph._readFile('extras_ajustes').catch(() => ({}));
+    const mapa = (atual && !Array.isArray(atual) && typeof atual === 'object') ? atual : {};
+    delete mapa[_ajusteExtraKey(id, responsavel)];
+    await App.graph._writeFile('extras_ajustes', mapa);
+    window._extrasAjustes = mapa;
+    document.getElementById('modal-calculo-extra')?.remove();
+    toast('Cálculo automático restaurado.', 'info');
+    await renderPagamentosExtras();
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 // ============================================================
@@ -8263,6 +8394,7 @@ async function renderConfiguracoes(view) {
   if (view === 'checklists') { window._chkEdit = null; return renderConfigChecklists(); }
   if (view === 'msg-orcamento') return renderConfigMensagemOrcamento();
   if (view === 'info-portal') return renderConfigInfoPortal();
+  if (view === 'prioridades') return renderConfigPrioridades();
 
   const el = document.getElementById('page-content');
   el.innerHTML = `
@@ -8286,6 +8418,13 @@ async function renderConfiguracoes(view) {
           <i class="bi bi-list-check" style="font-size:36px;color:#2563eb"></i>
           <h3 style="margin:12px 0 6px;font-size:16px">Editar Checklists</h3>
           <p style="font-size:13px;color:var(--text-muted);margin:0">Organizar a ordem, adicionar e remover itens dos checklists dos processos.</p>
+        </div>
+      </div>
+      <div class="card" style="cursor:pointer" onclick="renderConfiguracoes('prioridades')">
+        <div class="card-body" style="text-align:center;padding:28px 16px">
+          <i class="bi bi-sort-numeric-down" style="font-size:36px;color:#dc2626"></i>
+          <h3 style="margin:12px 0 6px;font-size:16px">Ordem de Prioridade</h3>
+          <p style="font-size:13px;color:var(--text-muted);margin:0">Definir a ordem de prioridade dos tipos de processo na fila de protocolo.</p>
         </div>
       </div>
       <div class="card" style="cursor:pointer" onclick="renderConfiguracoes('msg-orcamento')">
@@ -8547,6 +8686,59 @@ async function salvarConfigExtras() {
     Object.keys(CONFIG_EXTRAS).forEach(k => delete CONFIG_EXTRAS[k]);
     Object.assign(CONFIG_EXTRAS, cfg);
     toast('Configuração de extras salva!', 'success');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+// ---- Configuração: ordem de prioridade dos processos ----
+function renderConfigPrioridades() {
+  const el = document.getElementById('page-content');
+  const idFromTipo = t => t.replace(/[^a-zA-Z0-9]/g, '_');
+  // Lista todos os tipos com prioridade, do mais prioritário (menor número) ao menos
+  const tipos = Object.keys(PRIORIDADE_PROCESSO)
+    .sort((a, b) => (PRIORIDADE_PROCESSO[a] - PRIORIDADE_PROCESSO[b]) || a.localeCompare(b));
+  el.innerHTML = `
+    <button class="btn btn-ghost btn-sm" style="margin-bottom:12px" onclick="renderConfiguracoes('menu')"><i class="bi bi-arrow-left me-1"></i>Voltar</button>
+    <div class="card">
+      <div class="card-header">
+        <h3><i class="bi bi-sort-numeric-down me-2" style="color:#dc2626"></i>Ordem de Prioridade dos Processos</h3>
+        <button class="btn btn-primary" onclick="salvarConfigPrioridades()"><i class="bi bi-floppy me-1"></i>Salvar Alterações</button>
+      </div>
+      <div class="card-body" style="padding:0">
+        <p style="font-size:12px;color:var(--text-muted);padding:12px 16px 0;margin:0">Defina o <strong>nível de prioridade</strong> de cada tipo de processo na fila de protocolo (Meus Processos). <strong>1 = maior prioridade</strong>; números maiores aparecem depois. Pode repetir o mesmo número para tipos que devem ter a mesma prioridade (desempate por data). Processos <strong>Restituídos</strong> aparecem sempre no topo, independentemente desta ordem.</p>
+        <div class="table-wrapper"><table>
+          <thead><tr>
+            <th style="width:70px;text-align:center">Ordem</th>
+            <th>Tipo de Processo</th>
+            <th style="width:130px;text-align:center">Nível de prioridade</th>
+          </tr></thead>
+          <tbody>
+            ${tipos.map((tipo, i) => `
+              <tr>
+                <td style="text-align:center;color:var(--text-muted)">${i + 1}º</td>
+                <td style="font-weight:600">${esc(tipo)}</td>
+                <td style="text-align:center">
+                  <input type="number" step="1" min="1" class="cfgprio-num" data-tipo="${esc(tipo)}" value="${PRIORIDADE_PROCESSO[tipo]}" style="width:72px;padding:4px 6px;border:1px solid var(--border);border-radius:4px;font-size:13px;text-align:center" />
+                </td>
+              </tr>`).join('')}
+          </tbody>
+        </table></div>
+      </div>
+    </div>`;
+}
+
+async function salvarConfigPrioridades() {
+  showLoading();
+  try {
+    const cfg = {};
+    document.querySelectorAll('.cfgprio-num').forEach(inp => {
+      const tipo = inp.dataset.tipo;
+      const n = Number(inp.value);
+      if (tipo && Number.isFinite(n) && n > 0) cfg[tipo] = n;
+    });
+    await App.graph._writeFile('prioridades_processos', cfg);
+    Object.keys(cfg).forEach(tipo => { PRIORIDADE_PROCESSO[tipo] = cfg[tipo]; });
+    toast('Ordem de prioridade salva!', 'success');
+    renderConfigPrioridades();
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
@@ -10460,6 +10652,18 @@ async function criarNotificacao(usuario, tipo, titulo, mensagem, extra = {}) {
     });
     await App.graph._writeFile('notificacoes', arr);
   } catch(e) { console.error('criarNotificacao:', e); }
+}
+
+// Remove a notificação de "Nova Demanda Recebida" enviada a um operador (ex.: quando a
+// demanda é redelegada a outra pessoa, o operador antigo não deve mais vê-la).
+async function removerNotificacaoDemanda(demandaId, usuario) {
+  if (!demandaId || !usuario) return;
+  try {
+    const lista = await App.graph._readFile('notificacoes').catch(() => []);
+    const arr = Array.isArray(lista) ? lista : [];
+    const filtrada = arr.filter(n => !(String(n.demandaId) === String(demandaId) && n.usuario === usuario && n.tipo === 'demanda_recebida'));
+    if (filtrada.length !== arr.length) await App.graph._writeFile('notificacoes', filtrada);
+  } catch(e) { console.error('removerNotificacaoDemanda:', e); }
 }
 
 // Move automaticamente para "Parado" processos em "Aguardando Documentos"/"Aguardando Assinatura"
@@ -13504,11 +13708,14 @@ async function delegarDemanda(demandaId, operador) {
     const arr = Array.isArray(lista) ? lista : [];
     const idx = arr.findIndex(d => String(d.id) === String(demandaId));
     if (idx < 0) throw new Error('Demanda não encontrada.');
+    const operadorAntigo = arr[idx].operador || null;
     if (!operador) {
       // "Delegar a..." (vazio) selecionado em uma demanda já delegada → volta a Aguardando Delegação
       if (arr[idx].operador || arr[idx].status === 'Aberta') {
         arr[idx] = { ...arr[idx], operador: null, status: 'Aguardando Delegação', dataDelegacao: null, delegadoPor: null };
         await App.graph._writeFile('demandas', arr);
+        // Remove a notificação enviada ao operador que estava com a demanda
+        if (operadorAntigo) await removerNotificacaoDemanda(demandaId, operadorAntigo);
         toast('Demanda retornada para Aguardando Delegação.', 'info');
         await renderControleDemandas();
       }
@@ -13522,6 +13729,8 @@ async function delegarDemanda(demandaId, operador) {
       delegadoPor: getCurrentUserName(),
     };
     await App.graph._writeFile('demandas', arr);
+    // Redelegada a outra pessoa → remove a notificação do operador antigo
+    if (operadorAntigo && operadorAntigo !== operador) await removerNotificacaoDemanda(demandaId, operadorAntigo);
     const demanda = arr[idx];
     const tiposTxt = (demanda.itens || []).map(i => i.tipo).join(', ') || 'serviços diversos';
     await criarNotificacao(operador, 'demanda_recebida', 'Nova Demanda Recebida',
@@ -13835,6 +14044,17 @@ async function iniciarApp() {
   try {
     const ce = await App.graph._readFile('config_extras');
     if (ce && !Array.isArray(ce)) Object.assign(CONFIG_EXTRAS, ce);
+  } catch(e) {}
+
+  // Carrega ordem de prioridade dos processos personalizada
+  try {
+    const pr = await App.graph._readFile('prioridades_processos');
+    if (pr && !Array.isArray(pr) && typeof pr === 'object') {
+      Object.keys(pr).forEach(tipo => {
+        const n = Number(pr[tipo]);
+        if (Number.isFinite(n)) PRIORIDADE_PROCESSO[tipo] = n;
+      });
+    }
   } catch(e) {}
 
   // Carrega configuração de notificações (ex.: popup automático ligado/desligado)
