@@ -13419,6 +13419,71 @@ function sortDemandas(col) {
   renderControleDemandas();
 }
 
+// Card-resumo de um operador (contadores + extras). Usado em Controle de Demandas e
+// em Minhas Demandas. opts.mostrarValorTotal controla a linha "Valor total dos processos".
+function _cardResumoOperador(op, processos, demandas, orcamentos, opts = {}) {
+  const mostrarValorTotal = opts.mostrarValorTotal !== false;
+  const somaProc = arr => arr.reduce((s, p) => s + (Number(p.ValorProcesso) || 0), 0);
+  const valorDemanda = d => { const o = orcamentos.find(x => String(x.id) === String(d.orcamentoId)); return o ? (Number(o.total) || 0) : (Number(d.total) || 0); };
+  // Extra projetado dos processos de um bucket, conforme as taxas/percentuais do operador
+  const somaExtraProc = arr => arr.reduce((s, p) => s + extraProcesso(p, orcamentos, demandas, op), 0);
+  // Extra projetado de uma demanda (ainda sem processos criados), a partir dos itens do orçamento
+  const extraDemanda = d => {
+    const o = orcamentos.find(x => String(x.id) === String(d.orcamentoId));
+    const ratio = ratioDescontoOrcamento(o);
+    return (d.itens || []).reduce((s, item) => {
+      const taxa  = TAXAS_PROCESSO[item.tipo] || 0;
+      const cheio = Number(item.valor) || 0;
+      const fr    = fracaoExtraProcesso(item.tipo, op);
+      return s + Math.max(0, cheio - taxa) * ratio * fr * (Number(item.qtd) || 1);
+    }, 0);
+  };
+  const demandasArr     = demandas.filter(d => d.operador === op && d.status === 'Aberta');
+  const aProtocolarArr  = processos.filter(p => p.Responsavel === op && STATUS_A_PROTOCOLAR.includes(p.Status));
+  const futuroArr       = processos.filter(p => p.Responsavel === op && p.Status === 'Processo Futuro');
+  const protocoladosArr = processos.filter(p => p.Responsavel === op && STATUS_PROTOCOLADOS.includes(p.Status));
+  const valorTotalOp = demandasArr.reduce((s, d) => s + valorDemanda(d), 0)
+    + somaProc(aProtocolarArr) + somaProc(futuroArr) + somaProc(protocoladosArr);
+  const extraDemandasOp = demandasArr.reduce((s, d) => s + extraDemanda(d), 0);
+  const extraAProtOp    = somaExtraProc(aProtocolarArr);
+  const extraFuturoOp   = somaExtraProc(futuroArr);
+  const extraProtOp     = somaExtraProc(protocoladosArr);
+  const extraTotalOp    = extraDemandasOp + extraAProtOp + extraFuturoOp + extraProtOp;
+  const extraMini = v => `<div style="font-size:10px;color:var(--success);font-weight:700;margin-top:1px" title="Extra projetado">${fmtMoeda(v)}</div>`;
+  const contador = (valor, cor, label, filtro, extraVal) => `<div title="${esc(label)}">
+    <div style="display:flex;align-items:center;gap:2px;justify-content:center">
+      <div style="font-size:24px;font-weight:800;color:${cor}">${valor}</div>
+      <button class="btn btn-ghost btn-sm" style="padding:0 2px" onclick="abrirModalProcessosOperador('${esc(op)}','${filtro}')" title="Ver processos — ${esc(label)}"><i class="bi bi-eye" style="font-size:12px"></i></button>
+    </div>
+    <div style="font-size:10px;color:var(--text-muted)">${esc(label)}</div>
+    ${extraMini(extraVal)}
+  </div>`;
+  return `<div class="card" style="flex:1;min-width:260px;text-align:center;padding:16px">
+    <div style="font-size:14px;font-weight:700;margin-bottom:10px">${esc(op)}</div>
+    <div style="display:flex;gap:14px;justify-content:center;flex-wrap:wrap">
+      <div title="Demandas em aberto">
+        <div style="display:flex;align-items:center;gap:2px;justify-content:center">
+          <div style="font-size:24px;font-weight:800;color:var(--accent)">${demandasArr.length}</div>
+          <button class="btn btn-ghost btn-sm" style="padding:0 2px" onclick="abrirModalDemandasOperador('${esc(op)}')" title="Ver demandas em aberto de ${esc(op)}"><i class="bi bi-eye" style="font-size:12px"></i></button>
+        </div>
+        <div style="font-size:10px;color:var(--text-muted)">demandas</div>
+        ${extraMini(extraDemandasOp)}
+      </div>
+      ${contador(aProtocolarArr.length, 'var(--warning,#f59e0b)', 'a protocolar', 'aprotocolar', extraAProtOp)}
+      ${contador(futuroArr.length, '#7c3aed', 'futuro', 'futuro', extraFuturoOp)}
+      ${contador(protocoladosArr.length, 'var(--accent)', 'protocolados', 'protocolados', extraProtOp)}
+    </div>
+    ${mostrarValorTotal ? `<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:center;gap:6px">
+      <span style="font-size:11px;color:var(--text-muted)">Valor total dos processos</span>
+      <span style="font-size:15px;font-weight:800;color:var(--success)">${fmtMoeda(valorTotalOp)}</span>
+    </div>` : ''}
+    <div style="margin-top:${mostrarValorTotal ? '4px' : '12px'};${mostrarValorTotal ? '' : 'padding-top:10px;border-top:1px solid var(--border);'}display:flex;align-items:center;justify-content:center;gap:6px">
+      <span style="font-size:11px;color:var(--text-muted)">Extra calculado</span>
+      <span style="font-size:14px;font-weight:800;color:#d97706">${fmtMoeda(extraTotalOp)}</span>
+    </div>
+  </div>`;
+}
+
 async function renderControleDemandas() {
   if (!isAdminUser()) { document.getElementById('page-content').innerHTML = `<div class="empty-state"><i class="bi bi-lock"></i><p>Acesso restrito a administradores.</p></div>`; return; }
   document.getElementById('page-title').textContent = 'Controle de Demandas';
@@ -13442,74 +13507,8 @@ async function renderControleDemandas() {
     window._controleDemandasProcessos = processos;
     window._controleDemandasLista = demandas;
 
-    // Painel por operador
-    const _somaProc = arr => arr.reduce((s, p) => s + (Number(p.ValorProcesso) || 0), 0);
-    const _valorDemanda = d => { const o = orcamentos.find(x => String(x.id) === String(d.orcamentoId)); return o ? (Number(o.total) || 0) : (Number(d.total) || 0); };
-    // Extra projetado dos processos de um bucket, conforme as taxas/percentuais do operador
-    const _somaExtraProc = (arr, op) => arr.reduce((s, p) => s + extraProcesso(p, orcamentos, demandas, op), 0);
-    // Extra projetado de uma demanda (ainda sem processos criados), a partir dos itens do orçamento
-    const _extraDemanda = (d, op) => {
-      const o = orcamentos.find(x => String(x.id) === String(d.orcamentoId));
-      const ratio = ratioDescontoOrcamento(o);
-      return (d.itens || []).reduce((s, item) => {
-        const taxa  = TAXAS_PROCESSO[item.tipo] || 0;
-        const cheio = Number(item.valor) || 0;
-        const fr    = fracaoExtraProcesso(item.tipo, op);
-        return s + Math.max(0, cheio - taxa) * ratio * fr * (Number(item.qtd) || 1);
-      }, 0);
-    };
-    const painelHtml = RESPONSAVEIS.map(op => {
-      const demandasArr     = demandas.filter(d => d.operador === op && d.status === 'Aberta');
-      const aProtocolarArr  = processos.filter(p => p.Responsavel === op && STATUS_A_PROTOCOLAR.includes(p.Status));
-      const futuroArr       = processos.filter(p => p.Responsavel === op && p.Status === 'Processo Futuro');
-      const protocoladosArr = processos.filter(p => p.Responsavel === op && STATUS_PROTOCOLADOS.includes(p.Status));
-      const demandasOp      = demandasArr.length;
-      const aProtocolarOp   = aProtocolarArr.length;
-      const futuroOp        = futuroArr.length;
-      const protocoladosOp  = protocoladosArr.length;
-      // Somatória do valor de todos os processos do operador (demandas + 3 filas de processos)
-      const valorTotalOp = demandasArr.reduce((s, d) => s + _valorDemanda(d), 0)
-        + _somaProc(aProtocolarArr) + _somaProc(futuroArr) + _somaProc(protocoladosArr);
-      // Extra projetado por bucket e total
-      const extraDemandasOp = demandasArr.reduce((s, d) => s + _extraDemanda(d, op), 0);
-      const extraAProtOp    = _somaExtraProc(aProtocolarArr, op);
-      const extraFuturoOp    = _somaExtraProc(futuroArr, op);
-      const extraProtOp     = _somaExtraProc(protocoladosArr, op);
-      const extraTotalOp    = extraDemandasOp + extraAProtOp + extraFuturoOp + extraProtOp;
-      const extraMini = v => `<div style="font-size:10px;color:var(--success);font-weight:700;margin-top:1px" title="Extra projetado">${fmtMoeda(v)}</div>`;
-      const contador = (valor, cor, label, filtro, extraVal) => `<div title="${esc(label)}">
-        <div style="display:flex;align-items:center;gap:2px;justify-content:center">
-          <div style="font-size:24px;font-weight:800;color:${cor}">${valor}</div>
-          <button class="btn btn-ghost btn-sm" style="padding:0 2px" onclick="abrirModalProcessosOperador('${esc(op)}','${filtro}')" title="Ver processos — ${esc(label)}"><i class="bi bi-eye" style="font-size:12px"></i></button>
-        </div>
-        <div style="font-size:10px;color:var(--text-muted)">${esc(label)}</div>
-        ${extraMini(extraVal)}
-      </div>`;
-      return `<div class="card" style="flex:1;min-width:260px;text-align:center;padding:16px">
-        <div style="font-size:14px;font-weight:700;margin-bottom:10px">${esc(op)}</div>
-        <div style="display:flex;gap:14px;justify-content:center;flex-wrap:wrap">
-          <div title="Demandas em aberto">
-            <div style="display:flex;align-items:center;gap:2px;justify-content:center">
-              <div style="font-size:24px;font-weight:800;color:var(--accent)">${demandasOp}</div>
-              <button class="btn btn-ghost btn-sm" style="padding:0 2px" onclick="abrirModalDemandasOperador('${esc(op)}')" title="Ver demandas em aberto de ${esc(op)}"><i class="bi bi-eye" style="font-size:12px"></i></button>
-            </div>
-            <div style="font-size:10px;color:var(--text-muted)">demandas</div>
-            ${extraMini(extraDemandasOp)}
-          </div>
-          ${contador(aProtocolarOp, 'var(--warning,#f59e0b)', 'a protocolar', 'aprotocolar', extraAProtOp)}
-          ${contador(futuroOp, '#7c3aed', 'futuro', 'futuro', extraFuturoOp)}
-          ${contador(protocoladosOp, 'var(--accent)', 'protocolados', 'protocolados', extraProtOp)}
-        </div>
-        <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:center;gap:6px">
-          <span style="font-size:11px;color:var(--text-muted)">Valor total dos processos</span>
-          <span style="font-size:15px;font-weight:800;color:var(--success)">${fmtMoeda(valorTotalOp)}</span>
-        </div>
-        <div style="margin-top:4px;display:flex;align-items:center;justify-content:center;gap:6px">
-          <span style="font-size:11px;color:var(--text-muted)">Extra calculado</span>
-          <span style="font-size:14px;font-weight:800;color:#d97706">${fmtMoeda(extraTotalOp)}</span>
-        </div>
-      </div>`;
-    }).join('');
+    // Painel por operador (mesmo card usado em Minhas Demandas; aqui com o valor total dos processos)
+    const painelHtml = RESPONSAVEIS.map(op => _cardResumoOperador(op, processos, demandas, orcamentos, { mostrarValorTotal: true })).join('');
 
     // Ordenação: por padrão não-concluídas primeiro; ou pela coluna escolhida (crescente/decrescente)
     const sortState = window._demandasSort || (window._demandasSort = { col: null, dir: 'asc' });
@@ -13793,11 +13792,19 @@ async function renderMinhasDemandas() {
   showLoading();
   try {
     const currentUser = getCurrentUserName();
-    const [demandasRaw, processos] = await Promise.all([
+    const [demandasRaw, processos, orcRaw, ajustesRaw] = await Promise.all([
       App.graph._readFile('demandas').catch(() => []),
       App.getProcessos(),
+      App.graph._readFile('orcamentos').catch(() => []),
+      App.graph._readFile('extras_ajustes').catch(() => ({})),
     ]);
-    const todas = (Array.isArray(demandasRaw) ? demandasRaw : []).filter(d => d.operador === currentUser);
+    const demandasAll = Array.isArray(demandasRaw) ? demandasRaw : [];
+    const orcamentos = Array.isArray(orcRaw) ? orcRaw : [];
+    // Necessário para o card-resumo (extras) e para os modais dos botões de olho
+    window._extrasAjustes = (ajustesRaw && !Array.isArray(ajustesRaw) && typeof ajustesRaw === 'object') ? ajustesRaw : {};
+    window._controleDemandasProcessos = processos;
+    window._controleDemandasLista = demandasAll;
+    const todas = demandasAll.filter(d => d.operador === currentUser);
     const abertas    = todas.filter(d => d.status === 'Aberta');
     const concluidas = todas.filter(d => d.status === 'Concluída');
 
@@ -13846,7 +13853,15 @@ async function renderMinhasDemandas() {
       </h3>
       ${concluidas.map(buildCard).join('')}` : '';
 
-    document.getElementById('page-content').innerHTML = secaoAberta + secaoConcluida;
+    // Quadro-resumo do operador (contadores + extras), sem o valor total dos processos
+    const resumoHtml = `
+      <div style="margin-bottom:20px">
+        <div style="display:flex;gap:12px;flex-wrap:wrap">
+          ${_cardResumoOperador(currentUser, processos, demandasAll, orcamentos, { mostrarValorTotal: false })}
+        </div>
+      </div>`;
+
+    document.getElementById('page-content').innerHTML = resumoHtml + secaoAberta + secaoConcluida;
   } catch(e) { document.getElementById('page-content').innerHTML = `<div class="empty-state"><i class="bi bi-exclamation-triangle"></i><p>${esc(e.message)}</p></div>`; } finally { hideLoading(); }
 }
 
