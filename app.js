@@ -13424,14 +13424,19 @@ async function renderControleDemandas() {
   document.getElementById('page-title').textContent = 'Controle de Demandas';
   showLoading();
   try {
-    const [demandasRaw, processos, orcRaw, clientes] = await Promise.all([
+    const [demandasRaw, processos, orcRaw, clientes, ajustesRaw] = await Promise.all([
       App.graph._readFile('demandas').catch(() => []),
       App.getProcessos(),
       App.graph._readFile('orcamentos').catch(() => []),
       App.getClientes(),
+      App.graph._readFile('extras_ajustes').catch(() => ({})),
     ]);
     const demandas = Array.isArray(demandasRaw) ? demandasRaw : [];
     const orcamentos = Array.isArray(orcRaw) ? orcRaw : [];
+    // Ajustes manuais de extra (mesma fonte da página de Extras) p/ os valores baterem
+    window._extrasAjustes = (ajustesRaw && !Array.isArray(ajustesRaw) && typeof ajustesRaw === 'object') ? ajustesRaw : {};
+    window._extrasOrc = orcamentos;
+    window._extrasDem = demandas;
     const clienteMap = {}; (clientes || []).forEach(c => { clienteMap[String(c.id)] = c; });
     const demandaTem2fa = d => (clienteMap[String(d.clienteId)]?.VerificacaoEtapas === 'Sim');
     window._controleDemandasProcessos = processos;
@@ -13440,6 +13445,19 @@ async function renderControleDemandas() {
     // Painel por operador
     const _somaProc = arr => arr.reduce((s, p) => s + (Number(p.ValorProcesso) || 0), 0);
     const _valorDemanda = d => { const o = orcamentos.find(x => String(x.id) === String(d.orcamentoId)); return o ? (Number(o.total) || 0) : (Number(d.total) || 0); };
+    // Extra projetado dos processos de um bucket, conforme as taxas/percentuais do operador
+    const _somaExtraProc = (arr, op) => arr.reduce((s, p) => s + extraProcesso(p, orcamentos, demandas, op), 0);
+    // Extra projetado de uma demanda (ainda sem processos criados), a partir dos itens do orçamento
+    const _extraDemanda = (d, op) => {
+      const o = orcamentos.find(x => String(x.id) === String(d.orcamentoId));
+      const ratio = ratioDescontoOrcamento(o);
+      return (d.itens || []).reduce((s, item) => {
+        const taxa  = TAXAS_PROCESSO[item.tipo] || 0;
+        const cheio = Number(item.valor) || 0;
+        const fr    = fracaoExtraProcesso(item.tipo, op);
+        return s + Math.max(0, cheio - taxa) * ratio * fr * (Number(item.qtd) || 1);
+      }, 0);
+    };
     const painelHtml = RESPONSAVEIS.map(op => {
       const demandasArr     = demandas.filter(d => d.operador === op && d.status === 'Aberta');
       const aProtocolarArr  = processos.filter(p => p.Responsavel === op && STATUS_A_PROTOCOLAR.includes(p.Status));
@@ -13452,12 +13470,20 @@ async function renderControleDemandas() {
       // Somatória do valor de todos os processos do operador (demandas + 3 filas de processos)
       const valorTotalOp = demandasArr.reduce((s, d) => s + _valorDemanda(d), 0)
         + _somaProc(aProtocolarArr) + _somaProc(futuroArr) + _somaProc(protocoladosArr);
-      const contador = (valor, cor, label, filtro) => `<div title="${esc(label)}">
+      // Extra projetado por bucket e total
+      const extraDemandasOp = demandasArr.reduce((s, d) => s + _extraDemanda(d, op), 0);
+      const extraAProtOp    = _somaExtraProc(aProtocolarArr, op);
+      const extraFuturoOp    = _somaExtraProc(futuroArr, op);
+      const extraProtOp     = _somaExtraProc(protocoladosArr, op);
+      const extraTotalOp    = extraDemandasOp + extraAProtOp + extraFuturoOp + extraProtOp;
+      const extraMini = v => `<div style="font-size:10px;color:var(--success);font-weight:700;margin-top:1px" title="Extra projetado">${fmtMoeda(v)}</div>`;
+      const contador = (valor, cor, label, filtro, extraVal) => `<div title="${esc(label)}">
         <div style="display:flex;align-items:center;gap:2px;justify-content:center">
           <div style="font-size:24px;font-weight:800;color:${cor}">${valor}</div>
           <button class="btn btn-ghost btn-sm" style="padding:0 2px" onclick="abrirModalProcessosOperador('${esc(op)}','${filtro}')" title="Ver processos — ${esc(label)}"><i class="bi bi-eye" style="font-size:12px"></i></button>
         </div>
         <div style="font-size:10px;color:var(--text-muted)">${esc(label)}</div>
+        ${extraMini(extraVal)}
       </div>`;
       return `<div class="card" style="flex:1;min-width:260px;text-align:center;padding:16px">
         <div style="font-size:14px;font-weight:700;margin-bottom:10px">${esc(op)}</div>
@@ -13468,14 +13494,19 @@ async function renderControleDemandas() {
               <button class="btn btn-ghost btn-sm" style="padding:0 2px" onclick="abrirModalDemandasOperador('${esc(op)}')" title="Ver demandas em aberto de ${esc(op)}"><i class="bi bi-eye" style="font-size:12px"></i></button>
             </div>
             <div style="font-size:10px;color:var(--text-muted)">demandas</div>
+            ${extraMini(extraDemandasOp)}
           </div>
-          ${contador(aProtocolarOp, 'var(--warning,#f59e0b)', 'a protocolar', 'aprotocolar')}
-          ${contador(futuroOp, '#7c3aed', 'futuro', 'futuro')}
-          ${contador(protocoladosOp, 'var(--accent)', 'protocolados', 'protocolados')}
+          ${contador(aProtocolarOp, 'var(--warning,#f59e0b)', 'a protocolar', 'aprotocolar', extraAProtOp)}
+          ${contador(futuroOp, '#7c3aed', 'futuro', 'futuro', extraFuturoOp)}
+          ${contador(protocoladosOp, 'var(--accent)', 'protocolados', 'protocolados', extraProtOp)}
         </div>
         <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:center;gap:6px">
           <span style="font-size:11px;color:var(--text-muted)">Valor total dos processos</span>
           <span style="font-size:15px;font-weight:800;color:var(--success)">${fmtMoeda(valorTotalOp)}</span>
+        </div>
+        <div style="margin-top:4px;display:flex;align-items:center;justify-content:center;gap:6px">
+          <span style="font-size:11px;color:var(--text-muted)">Extra calculado</span>
+          <span style="font-size:14px;font-weight:800;color:#d97706">${fmtMoeda(extraTotalOp)}</span>
         </div>
       </div>`;
     }).join('');
