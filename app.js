@@ -13438,11 +13438,20 @@ async function renderControleDemandas() {
     window._controleDemandasLista = demandas;
 
     // Painel por operador
+    const _somaProc = arr => arr.reduce((s, p) => s + (Number(p.ValorProcesso) || 0), 0);
+    const _valorDemanda = d => { const o = orcamentos.find(x => String(x.id) === String(d.orcamentoId)); return o ? (Number(o.total) || 0) : (Number(d.total) || 0); };
     const painelHtml = RESPONSAVEIS.map(op => {
-      const demandasOp      = demandas.filter(d => d.operador === op && d.status === 'Aberta').length;
-      const aProtocolarOp   = processos.filter(p => p.Responsavel === op && STATUS_A_PROTOCOLAR.includes(p.Status)).length;
-      const futuroOp        = processos.filter(p => p.Responsavel === op && p.Status === 'Processo Futuro').length;
-      const protocoladosOp  = processos.filter(p => p.Responsavel === op && STATUS_PROTOCOLADOS.includes(p.Status)).length;
+      const demandasArr     = demandas.filter(d => d.operador === op && d.status === 'Aberta');
+      const aProtocolarArr  = processos.filter(p => p.Responsavel === op && STATUS_A_PROTOCOLAR.includes(p.Status));
+      const futuroArr       = processos.filter(p => p.Responsavel === op && p.Status === 'Processo Futuro');
+      const protocoladosArr = processos.filter(p => p.Responsavel === op && STATUS_PROTOCOLADOS.includes(p.Status));
+      const demandasOp      = demandasArr.length;
+      const aProtocolarOp   = aProtocolarArr.length;
+      const futuroOp        = futuroArr.length;
+      const protocoladosOp  = protocoladosArr.length;
+      // Somatória do valor de todos os processos do operador (demandas + 3 filas de processos)
+      const valorTotalOp = demandasArr.reduce((s, d) => s + _valorDemanda(d), 0)
+        + _somaProc(aProtocolarArr) + _somaProc(futuroArr) + _somaProc(protocoladosArr);
       const contador = (valor, cor, label, filtro) => `<div title="${esc(label)}">
         <div style="display:flex;align-items:center;gap:2px;justify-content:center">
           <div style="font-size:24px;font-weight:800;color:${cor}">${valor}</div>
@@ -13463,6 +13472,10 @@ async function renderControleDemandas() {
           ${contador(aProtocolarOp, 'var(--warning,#f59e0b)', 'a protocolar', 'aprotocolar')}
           ${contador(futuroOp, '#7c3aed', 'futuro', 'futuro')}
           ${contador(protocoladosOp, 'var(--accent)', 'protocolados', 'protocolados')}
+        </div>
+        <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:center;gap:6px">
+          <span style="font-size:11px;color:var(--text-muted)">Valor total dos processos</span>
+          <span style="font-size:15px;font-weight:800;color:var(--success)">${fmtMoeda(valorTotalOp)}</span>
         </div>
       </div>`;
     }).join('');
