@@ -8085,6 +8085,7 @@ function _recalcAjusteExtra() {
 function verCalculoExtra(id, responsavel) {
   const p = (window._extrasProcessos || []).find(x => String(x.id) === String(id));
   if (!p) { toast('Processo não encontrado.', 'error'); return; }
+  const admin = isAdminUser(); // apenas administradores podem editar o valor do extra
   const orc = window._extrasOrc || [], dem = window._extrasDem || [];
   const cheio  = valorCheioProcessoExtras(p, orc, dem);
   const taxa   = TAXAS_PROCESSO[p.TipoProcesso] || 0;
@@ -8125,6 +8126,7 @@ function verCalculoExtra(id, responsavel) {
           ${linhaInfo('Extra calculado', fmtMoeda(Math.max(0, cheio - taxa) * ratio * fracao))}
         </div>
 
+        ${admin ? `
         <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:8px">Editar valores</div>
         <div style="display:flex;flex-direction:column;gap:10px">
           <label style="font-size:12px">Valor do processo (R$)
@@ -8136,26 +8138,32 @@ function verCalculoExtra(id, responsavel) {
           <label style="font-size:12px">Porcentagem aplicada (%)
             <input type="number" step="0.01" min="0" id="aj-pct" value="${vPct}" oninput="_recalcAjusteExtra()" style="width:100%;margin-top:3px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px" />
           </label>
-        </div>
+        </div>` : ''}
 
         <div style="display:flex;justify-content:space-between;align-items:center;background:#f0fdf4;border-radius:8px;padding:10px 12px;margin-top:14px">
           <span style="font-size:13px;font-weight:600;color:#166534">Extra final</span>
           <span id="aj-extra" style="font-size:16px;font-weight:700;color:var(--success)">${fmtMoeda(extraAtual)}</span>
         </div>
 
+        ${admin ? `
         <div style="display:flex;justify-content:space-between;gap:10px;margin-top:18px">
           <div>${aj ? `<button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="restaurarAjusteExtra('${id}','${esc(responsavel)}')"><i class="bi bi-arrow-counterclockwise me-1"></i>Restaurar automático</button>` : ''}</div>
           <div style="display:flex;gap:8px">
             <button class="btn btn-ghost btn-sm" onclick="document.getElementById('modal-calculo-extra').remove()">Cancelar</button>
             <button class="btn btn-primary btn-sm" onclick="salvarAjusteExtra()"><i class="bi bi-floppy me-1"></i>Salvar ajuste</button>
           </div>
-        </div>
+        </div>` : `
+        <div style="margin-top:16px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+          <span style="font-size:11px;color:var(--text-muted)"><i class="bi bi-lock me-1"></i>Somente administradores podem editar o valor do extra.</span>
+          <button class="btn btn-ghost btn-sm" onclick="document.getElementById('modal-calculo-extra').remove()">Fechar</button>
+        </div>`}
       </div>
     </div>`;
   document.body.appendChild(modal);
 }
 
 async function salvarAjusteExtra() {
+  if (!isAdminUser()) { toast('Apenas administradores podem editar o valor dos extras.', 'error'); return; }
   const modal = document.getElementById('modal-calculo-extra');
   if (!modal) return;
   const id = modal.dataset.pid;
@@ -8182,6 +8190,7 @@ async function salvarAjusteExtra() {
 }
 
 async function restaurarAjusteExtra(id, responsavel) {
+  if (!isAdminUser()) { toast('Apenas administradores podem editar o valor dos extras.', 'error'); return; }
   showLoading();
   try {
     const atual = await App.graph._readFile('extras_ajustes').catch(() => ({}));
