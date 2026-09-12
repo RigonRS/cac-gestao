@@ -424,6 +424,20 @@ function validadeStatus(isoDate) {
 function esc(str) {
   return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+// Escape para valores colocados DENTRO de uma string JS entre aspas simples num atributo
+// (ex.: onclick="fn('${escJs(x)}')"). Além do escape HTML, trata a barra invertida e a
+// aspa simples — que, sem isso, "quebrariam" a string JS e permitiriam injeção. Use este
+// (e não esc) sempre que o valor for argumento de uma função em onclick/onchange etc.
+function escJs(str) {
+  return String(str == null ? '' : str)
+    .replace(/\\/g, '\\\\')      // barra invertida (JS)
+    .replace(/'/g, "\\'")         // aspa simples (JS)
+    .replace(/&/g, '&amp;')       // HTML
+    .replace(/"/g, '&quot;')      // HTML (fecharia o atributo)
+    .replace(/</g, '&lt;')        // HTML
+    .replace(/>/g, '&gt;')        // HTML
+    .replace(/\r?\n/g, '\\n');    // quebra de linha (JS)
+}
 function getInitials(nome) {
   return (nome || '?').split(' ').slice(0,2).map(p => p[0]).join('').toUpperCase();
 }
@@ -973,7 +987,7 @@ function abrirModalPagarExtrasMes(responsavel, mes) {
         </select>
         <div style="display:flex;gap:10px;justify-content:flex-end">
           <button onclick="document.getElementById('modal-pagar-extra').remove()" class="btn btn-outline btn-sm">Cancelar</button>
-          <button onclick="confirmarPagarExtrasMes('${esc(responsavel)}','${mes}')" class="btn btn-primary btn-sm">Confirmar</button>
+          <button onclick="confirmarPagarExtrasMes('${escJs(responsavel)}','${mes}')" class="btn btn-primary btn-sm">Confirmar</button>
         </div>
       </div>
     </div>`;
@@ -1256,7 +1270,7 @@ function renderClientesRows(lista) {
         <div class="btn-group">
           <button class="btn btn-outline btn-sm" onclick="navigate('clientes/perfil',{id:'${c.id}'})"><i class="bi bi-eye"></i></button>
           <button class="btn btn-outline btn-sm" onclick="navigate('clientes/editar',{id:'${c.id}'})"><i class="bi bi-pencil"></i></button>
-          <button class="btn btn-ghost btn-sm" onclick="confirmarDeleteCliente('${c.id}','${esc(c.Title)}')"><i class="bi bi-trash" style="color:var(--danger)"></i></button>
+          <button class="btn btn-ghost btn-sm" onclick="confirmarDeleteCliente('${c.id}','${escJs(c.Title)}')"><i class="bi bi-trash" style="color:var(--danger)"></i></button>
         </div>
       </td>
     </tr>`;
@@ -1868,8 +1882,8 @@ async function renderClientePerfil(id, tab = 'dados') {
       <div class="btn-group" style="margin-left:auto;flex-wrap:wrap">
         <button class="btn btn-outline btn-sm" onclick="imprimirDadosCliente('${id}')"><i class="bi bi-printer"></i> Imprimir Dados</button>
         <button class="btn btn-outline btn-sm" onclick="imprimirArmasCliente('${id}')"><i class="bi bi-printer"></i> Imprimir Armas</button>
-        <button class="btn btn-outline btn-sm" onclick="acessarPortalCliente('${esc(cliente.CPF||'')}','${cliente.DataNascimento?normISO(cliente.DataNascimento):''}')" title="Abrir o portal deste cliente"><i class="bi bi-box-arrow-up-right"></i> Acessar Portal</button>
-        ${(cliente.Celular && CONFIG.waGatewayUrl && isExtrasUser()) ? `<button class="btn btn-sm" style="background:#25d366;color:#fff;border:none" onclick="abrirConversaWhatsAppCliente('${esc(cliente.Celular)}')" title="Abrir conversa no WhatsApp"><i class="bi bi-whatsapp"></i> WhatsApp</button>` : ''}
+        <button class="btn btn-outline btn-sm" onclick="acessarPortalCliente('${escJs(cliente.CPF||'')}','${cliente.DataNascimento?normISO(cliente.DataNascimento):''}')" title="Abrir o portal deste cliente"><i class="bi bi-box-arrow-up-right"></i> Acessar Portal</button>
+        ${(cliente.Celular && CONFIG.waGatewayUrl && isExtrasUser()) ? `<button class="btn btn-sm" style="background:#25d366;color:#fff;border:none" onclick="abrirConversaWhatsAppCliente('${escJs(cliente.Celular)}')" title="Abrir conversa no WhatsApp"><i class="bi bi-whatsapp"></i> WhatsApp</button>` : ''}
         <button class="btn btn-outline btn-sm" onclick="navigate('clientes/editar',{id:'${id}'})"><i class="bi bi-pencil"></i> Editar</button>
         ${!inativo ? `
         <button class="btn btn-primary btn-sm" onclick="navigate('processos/novo',{clienteId:'${id}'})"><i class="bi bi-plus-lg"></i> Novo Processo</button>
@@ -3333,7 +3347,7 @@ function renderProcessosRows(lista) {
       <td><div class="btn-group">
         <button class="btn btn-outline btn-sm" onclick="event.stopPropagation();navigate('processos/detalhe',{id:'${p.id}'})"><i class="bi bi-eye"></i></button>
         <button class="btn btn-outline btn-sm" onclick="event.stopPropagation();navigate('processos/editar',{id:'${p.id}'})"><i class="bi bi-pencil"></i></button>
-        <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deletarProcesso('${p.id}','${esc(p.ClienteNome||'')}')" title="Excluir processo"><i class="bi bi-trash"></i></button>
+        <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deletarProcesso('${p.id}','${escJs(p.ClienteNome||'')}')" title="Excluir processo"><i class="bi bi-trash"></i></button>
       </div></td>
     </tr>`;
   }).join('');
@@ -7836,11 +7850,11 @@ function rodapePagoMesHtml(responsavel, mes, pagoMes) {
     return `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <span class="badge badge-green" style="font-size:12px"><i class="bi bi-check-circle-fill me-1"></i>Pago em ${fmtDate(pagoMes.dataPagamento)}</span>
       <span style="font-size:12px;color:var(--text-muted)">${esc(pagoMes.formaPagamento||'')}${pagoMes.banco ? ' · ' + esc(pagoMes.banco) : ''}</span>
-      ${isAdminUser() ? `<button class="btn btn-ghost btn-sm" onclick="desfazerPagamentoExtrasMes('${esc(responsavel)}','${mes}')" title="Desfazer"><i class="bi bi-arrow-counterclockwise"></i> Desfazer</button>` : ''}
+      ${isAdminUser() ? `<button class="btn btn-ghost btn-sm" onclick="desfazerPagamentoExtrasMes('${escJs(responsavel)}','${mes}')" title="Desfazer"><i class="bi bi-arrow-counterclockwise"></i> Desfazer</button>` : ''}
     </div>`;
   }
   return isAdminUser()
-    ? `<button class="btn btn-primary btn-sm" onclick="abrirModalPagarExtrasMes('${esc(responsavel)}','${mes}')"><i class="bi bi-check-lg me-1"></i>Marcar Mês como Pago</button>`
+    ? `<button class="btn btn-primary btn-sm" onclick="abrirModalPagarExtrasMes('${escJs(responsavel)}','${mes}')"><i class="bi bi-check-lg me-1"></i>Marcar Mês como Pago</button>`
     : `<span class="badge badge-gray" style="font-size:12px">Pagamento pendente</span>`;
 }
 
@@ -7995,7 +8009,7 @@ async function renderPagamentosExtras() {
             </div>
           </div>
           <div style="display:flex;align-items:flex-start;gap:6px;flex-shrink:0">
-            <button class="btn btn-ghost btn-xs" style="font-size:12px;padding:2px 6px;color:var(--accent)" onclick="verCalculoExtra('${p.id}','${esc(responsavel)}')" title="Ver e editar o cálculo do extra"><i class="bi bi-eye"></i></button>
+            <button class="btn btn-ghost btn-xs" style="font-size:12px;padding:2px 6px;color:var(--accent)" onclick="verCalculoExtra('${p.id}','${escJs(responsavel)}')" title="Ver e editar o cálculo do extra"><i class="bi bi-eye"></i></button>
             <div style="text-align:right">
               <div style="font-size:14px;font-weight:700;color:var(--success)">${fmtMoeda(extra)}</div>
               <div style="font-size:10px;color:${temAjuste ? '#d97706' : 'var(--text-muted)'}">${temAjuste ? '<i class="bi bi-pencil-fill me-1"></i>ajuste manual' : 'extra'}</div>
@@ -8016,8 +8030,8 @@ async function renderPagamentosExtras() {
               <div style="font-size:10px;color:var(--text-muted)">renovação ${esc(a.tipo)}</div>
             </div>
             ${(isAdminUser() || a.responsavel === getCurrentUserName()) ? `<div style="display:flex;gap:4px">
-              <button class="btn btn-ghost btn-xs" style="font-size:11px;padding:1px 6px" onclick="editarExtraAvulso('${esc(String(a.id))}')" title="Editar valor"><i class="bi bi-pencil"></i></button>
-              <button class="btn btn-ghost btn-xs" style="font-size:11px;padding:1px 6px;color:var(--danger)" onclick="excluirExtraAvulso('${esc(String(a.id))}')" title="Excluir extra"><i class="bi bi-trash"></i></button>
+              <button class="btn btn-ghost btn-xs" style="font-size:11px;padding:1px 6px" onclick="editarExtraAvulso('${escJs(String(a.id))}')" title="Editar valor"><i class="bi bi-pencil"></i></button>
+              <button class="btn btn-ghost btn-xs" style="font-size:11px;padding:1px 6px;color:var(--danger)" onclick="excluirExtraAvulso('${escJs(String(a.id))}')" title="Excluir extra"><i class="bi bi-trash"></i></button>
             </div>` : ''}
           </div>
         </div>`;
@@ -8147,7 +8161,7 @@ function verCalculoExtra(id, responsavel) {
 
         ${admin ? `
         <div style="display:flex;justify-content:space-between;gap:10px;margin-top:18px">
-          <div>${aj ? `<button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="restaurarAjusteExtra('${id}','${esc(responsavel)}')"><i class="bi bi-arrow-counterclockwise me-1"></i>Restaurar automático</button>` : ''}</div>
+          <div>${aj ? `<button class="btn btn-ghost btn-sm" style="color:var(--danger)" onclick="restaurarAjusteExtra('${id}','${escJs(responsavel)}')"><i class="bi bi-arrow-counterclockwise me-1"></i>Restaurar automático</button>` : ''}</div>
           <div style="display:flex;gap:8px">
             <button class="btn btn-ghost btn-sm" onclick="document.getElementById('modal-calculo-extra').remove()">Cancelar</button>
             <button class="btn btn-primary btn-sm" onclick="salvarAjusteExtra()"><i class="bi bi-floppy me-1"></i>Salvar ajuste</button>
@@ -8275,7 +8289,7 @@ async function renderPrazosProcessos() {
                 </thead>
                 <tbody>
                   ${linhas.map(l => `
-                    <tr style="cursor:pointer" onclick="abrirDetalhePrazoTipo('${esc(l.tipo).replace(/'/g,"\\'")}')" title="Ver processos contabilizados">
+                    <tr style="cursor:pointer" onclick="abrirDetalhePrazoTipo('${escJs(l.tipo).replace(/'/g,"\\'")}')" title="Ver processos contabilizados">
                       <td style="font-weight:600"><i class="bi bi-list-ul me-1" style="color:var(--accent)"></i>${esc(l.tipo)}</td>
                       <td style="text-align:center">${l.total}${l.total !== l.totalTipo ? ` <span style="color:var(--text-muted);font-size:11px">de ${l.totalTipo}</span>` : ''}</td>
                       <td style="text-align:center">${_prazoFmtDias(l.avgAP)}</td>
@@ -8316,7 +8330,7 @@ function abrirDetalhePrazoTipo(tipo) {
               const ad = _prazoDiffDias(p.DataAbertura, p.DataDeferimento);
               const pd = _prazoDiffDias(p.DataProtocoloSistema, p.DataDeferimento);
               return `<tr style="${contab ? '' : 'opacity:0.5'}">
-                <td style="text-align:center"><input type="checkbox" ${contab ? 'checked' : ''} onchange="togglePrazoProcesso('${p.id}',this.checked,'${esc(tipo).replace(/'/g,"\\'")}')" /></td>
+                <td style="text-align:center"><input type="checkbox" ${contab ? 'checked' : ''} onchange="togglePrazoProcesso('${p.id}',this.checked,'${escJs(tipo).replace(/'/g,"\\'")}')" /></td>
                 <td><a style="cursor:pointer;color:var(--accent)" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.ClienteNome||'—')}</a></td>
                 <td style="text-align:center">${ap===null?'—':ap}</td>
                 <td style="text-align:center">${ad===null?'—':ad}</td>
@@ -9565,7 +9579,7 @@ function waRenderFiltroEspecial() {
     const cli = m.cliente;
     const tel = cli && cli.Celular ? String(cli.Celular).replace(/\D/g, '') : '';
     const nome = m.nome || (cli && cli.Title) || 'Cliente';
-    const onclick = tel ? `onclick="waIniciarConversa('${esc(tel)}','${esc(nome)}')"` : '';
+    const onclick = tel ? `onclick="waIniciarConversa('${escJs(tel)}','${escJs(nome)}')"` : '';
     return `<div class="wa-item" ${onclick} style="${tel ? '' : 'opacity:.6;cursor:default'}">
       ${waAvatarHtml(nome, '', 44)}
       <div style="flex:1;min-width:0">
@@ -9622,7 +9636,7 @@ function waContatosBuscaHtml(termoRaw, termo) {
 
   let itens = lista.slice(0, 25).map(x => {
     const nomeSafe = String(x.nome || '').replace(/['\\]/g, '');
-    return `<div class="wa-item" onclick="waIniciarConversa('${esc(x.phone)}','${esc(nomeSafe)}')">
+    return `<div class="wa-item" onclick="waIniciarConversa('${escJs(x.phone)}','${escJs(nomeSafe)}')">
       ${waAvatarHtml(x.nome, '', 44)}
       <div style="flex:1;min-width:0"><div class="nome">${esc(x.nome || waFmtDigits(x.phone))}</div><div class="prev">${esc(waFmtDigits(x.phone))}</div></div>
       <i class="bi bi-chat-dots" style="color:#25d366"></i>
@@ -9630,7 +9644,7 @@ function waContatosBuscaHtml(termoRaw, termo) {
   }).join('');
 
   if (digitos.length >= 8 && !vistos.has(digitos.slice(-8)) && !jaTem.has(digitos.slice(-8))) {
-    itens += `<div class="wa-item" onclick="waIniciarConversa('${esc(digitos)}','')">
+    itens += `<div class="wa-item" onclick="waIniciarConversa('${escJs(digitos)}','')">
       <div style="width:44px;height:44px;border-radius:50%;background:#25d366;color:#fff;display:flex;align-items:center;justify-content:center;flex-shrink:0"><i class="bi bi-telephone-plus"></i></div>
       <div style="flex:1;min-width:0"><div class="nome">Iniciar conversa</div><div class="prev">${esc(waFmtDigits(digitos))}</div></div>
       <i class="bi bi-chat-dots" style="color:#25d366"></i>
@@ -9694,7 +9708,7 @@ function waRenderLista() {
       const ativo = c.jid === window._wa.jidAtivo;
       const nome = waNomeChat(c);
       const hora = c.last_ts ? new Date(c.last_ts * 1000).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
-      return `<div class="wa-item ${ativo ? 'ativo' : ''} ${c.unread ? 'nlida' : ''}" onclick="waAbrir('${esc(c.jid)}')">
+      return `<div class="wa-item ${ativo ? 'ativo' : ''} ${c.unread ? 'nlida' : ''}" onclick="waAbrir('${escJs(c.jid)}')">
         ${waAvatarHtml(nome, c.jid, 44)}
         <div style="flex:1;min-width:0">
           <div style="display:flex;justify-content:space-between;gap:6px"><span class="nome">${esc(nome)}</span><span style="font-size:11px;color:#667781;flex-shrink:0">${hora}</span></div>
@@ -9736,7 +9750,7 @@ function waMensagensBuscaHtml(termoRaw) {
     const nome = waNomeChat(chat);
     const trecho = String(r.body || '').slice(0, 70);
     const principal = waJidPrincipal(r.jid);
-    return `<div class="wa-item" onclick="waAbrir('${esc(principal)}')">
+    return `<div class="wa-item" onclick="waAbrir('${escJs(principal)}')">
       ${waAvatarHtml(nome, principal, 44)}
       <div style="flex:1;min-width:0"><div class="nome">${esc(nome)}</div><div class="prev">${esc(trecho)}</div></div>
     </div>`;
@@ -9772,9 +9786,9 @@ function waRenderHeader() {
     </div>
     <button class="btn btn-ghost btn-sm" title="Marcar como não lida" onclick="waMarcarNaoLida()"><i class="bi bi-envelope"></i></button>
     ${(() => {
-      if (cli) return `<button class="btn btn-ghost btn-sm" onclick="navigate('clientes/perfil',{id:'${esc(String(cli.id))}'})"><i class="bi bi-person-lines-fill me-1"></i>Ver cliente</button>`;
+      if (cli) return `<button class="btn btn-ghost btn-sm" onclick="navigate('clientes/perfil',{id:'${escJs(String(cli.id))}'})"><i class="bi bi-person-lines-fill me-1"></i>Ver cliente</button>`;
       const clube = waClubeDe(chat);
-      if (clube) return `<button class="btn btn-ghost btn-sm" onclick="navigate('clubes/editar',{id:'${esc(String(clube.id))}'})"><i class="bi bi-building me-1"></i>Ver clube</button>`;
+      if (clube) return `<button class="btn btn-ghost btn-sm" onclick="navigate('clubes/editar',{id:'${escJs(String(clube.id))}'})"><i class="bi bi-building me-1"></i>Ver clube</button>`;
       if (waEhGrupo(chat)) return '';
       return `<button class="btn btn-outline btn-sm" onclick="waAbrirVincular('cliente')"><i class="bi bi-person-plus me-1"></i>Cliente</button>
         <button class="btn btn-outline btn-sm" onclick="waAbrirVincular('clube')"><i class="bi bi-building-add me-1"></i>Clube</button>`;
@@ -9825,7 +9839,7 @@ function waRenderVincularLista() {
   const rows = fonte
     .filter(c => !termo || (c.Title || '').toLowerCase().includes(termo) || (dig.length >= 3 && String(c.Celular || c.Telefone || '').replace(/\D/g, '').includes(dig)))
     .slice(0, 80)
-    .map(c => `<div class="wa-item" onclick="waVincular('${esc(String(c.id))}')">
+    .map(c => `<div class="wa-item" onclick="waVincular('${escJs(String(c.id))}')">
       ${waAvatarHtml(c.Title, '', 40)}
       <div style="flex:1;min-width:0"><div class="nome">${esc(c.Title)}</div><div class="prev">${esc(waFmtDigits(c.Celular || c.Telefone) || '')}</div></div>
     </div>`).join('');
@@ -9888,9 +9902,9 @@ async function waAbrirPerfil() {
         </div>
         <div style="padding:18px 20px">
           ${cli
-            ? `<div style="margin-bottom:16px"><button class="btn btn-primary btn-sm" style="width:100%;margin-bottom:8px" onclick="document.getElementById('wa-modal-perfil').remove();navigate('clientes/perfil',{id:'${esc(String(cli.id))}'})"><i class="bi bi-person-lines-fill me-1"></i>Abrir cadastro de ${esc(cli.Title)}</button><button class="btn btn-outline btn-sm" style="width:100%" onclick="waAbrirVincular('cliente')"><i class="bi bi-pencil me-1"></i>Alterar cadastro vinculado</button></div>`
+            ? `<div style="margin-bottom:16px"><button class="btn btn-primary btn-sm" style="width:100%;margin-bottom:8px" onclick="document.getElementById('wa-modal-perfil').remove();navigate('clientes/perfil',{id:'${escJs(String(cli.id))}'})"><i class="bi bi-person-lines-fill me-1"></i>Abrir cadastro de ${esc(cli.Title)}</button><button class="btn btn-outline btn-sm" style="width:100%" onclick="waAbrirVincular('cliente')"><i class="bi bi-pencil me-1"></i>Alterar cadastro vinculado</button></div>`
             : clube
-              ? `<div style="margin-bottom:16px"><button class="btn btn-primary btn-sm" style="width:100%;margin-bottom:8px" onclick="document.getElementById('wa-modal-perfil').remove();navigate('clubes/editar',{id:'${esc(String(clube.id))}'})"><i class="bi bi-building me-1"></i>Abrir clube ${esc(clube.Title)}</button><button class="btn btn-outline btn-sm" style="width:100%" onclick="waAbrirVincular('clube')"><i class="bi bi-pencil me-1"></i>Alterar clube vinculado</button></div>`
+              ? `<div style="margin-bottom:16px"><button class="btn btn-primary btn-sm" style="width:100%;margin-bottom:8px" onclick="document.getElementById('wa-modal-perfil').remove();navigate('clubes/editar',{id:'${escJs(String(clube.id))}'})"><i class="bi bi-building me-1"></i>Abrir clube ${esc(clube.Title)}</button><button class="btn btn-outline btn-sm" style="width:100%" onclick="waAbrirVincular('clube')"><i class="bi bi-pencil me-1"></i>Alterar clube vinculado</button></div>`
               : `<div style="font-size:12px;color:#667781;margin-bottom:10px"><i class="bi bi-info-circle me-1"></i>Este número não está vinculado a nenhum cliente ou clube.</div><div style="display:flex;gap:8px;margin-bottom:16px"><button class="btn btn-outline btn-sm" style="flex:1" onclick="waAbrirVincular('cliente')"><i class="bi bi-person-plus me-1"></i>Cliente</button><button class="btn btn-outline btn-sm" style="flex:1" onclick="waAbrirVincular('clube')"><i class="bi bi-building-add me-1"></i>Clube</button></div>`}
           <div style="font-weight:600;font-size:13px;margin-bottom:8px;color:#111"><i class="bi bi-folder2-open me-1"></i>Processos em aberto</div>
           <div id="wa-perfil-processos" style="margin-bottom:18px;font-size:13px;color:#667781">${cli ? 'Carregando...' : 'Sem cliente vinculado.'}</div>
@@ -9937,7 +9951,7 @@ async function waAbrirPerfil() {
         contO.innerHTML = orcAbertos.length
           ? orcAbertos.map(o => {
               const dataFmt = o.data ? new Date(o.data + 'T00:00:00').toLocaleDateString('pt-BR') : '';
-              return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #f0f0f0;cursor:pointer" onclick="document.getElementById('wa-modal-perfil').remove();navigate('clientes/perfil',{id:'${esc(String(cli.id))}',tab:'orcamentos'})">
+              return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #f0f0f0;cursor:pointer" onclick="document.getElementById('wa-modal-perfil').remove();navigate('clientes/perfil',{id:'${escJs(String(cli.id))}',tab:'orcamentos'})">
                 <span style="color:#111">Orçamento ${esc(o.numero || '')}${dataFmt ? ` · ${dataFmt}` : ''}</span>
                 <span style="font-weight:600;flex-shrink:0">${fmtMoeda(Number(o.total) || 0)}</span>
               </div>`;
@@ -10043,7 +10057,7 @@ function waBolha(m) {
   const base = CONFIG.waGatewayUrl;
   let corpo = '';
   if (m.type === 'image' || m.type === 'sticker') {
-    corpo = m.mediaUrl ? `<img class="midia" src="${esc(base + m.mediaUrl)}" onclick="window.open('${esc(base + m.mediaUrl)}','_blank')" />` : `<i class="bi bi-image me-1"></i>${esc(m.mediaName || 'imagem')}`;
+    corpo = m.mediaUrl ? `<img class="midia" src="${esc(base + m.mediaUrl)}" onclick="window.open('${escJs(base + m.mediaUrl)}','_blank')" />` : `<i class="bi bi-image me-1"></i>${esc(m.mediaName || 'imagem')}`;
     if (m.body) corpo += `<div style="margin-top:3px">${waFmtTexto(m.body)}</div>`;
   } else if (m.type === 'video') {
     corpo = m.mediaUrl ? `<video class="midia" controls src="${esc(base + m.mediaUrl)}"></video>` : `<i class="bi bi-camera-video me-1"></i>${esc(m.mediaName || 'vídeo')}`;
@@ -10064,11 +10078,11 @@ function waBolha(m) {
   const reacao = m.reaction ? `<div class="wa-reacao">${esc(m.reaction)}</div>` : '';
   // Botão de download para qualquer arquivo (foto, vídeo, áudio, documento)
   const btnBaixar = m.mediaUrl
-    ? `<button class="fwd" title="Baixar arquivo" onclick="waBaixarMidia('${esc(base + m.mediaUrl)}','${esc(String(m.mediaName || 'arquivo').replace(/['\\]/g, ''))}')"><i class="bi bi-download"></i></button>`
+    ? `<button class="fwd" title="Baixar arquivo" onclick="waBaixarMidia('${escJs(base + m.mediaUrl)}','${escJs(String(m.mediaName || 'arquivo').replace(/['\\]/g, ''))}')"><i class="bi bi-download"></i></button>`
     : '';
   const acoesFull = (m.id || btnBaixar) ? `<div class="wa-acoes">
-      ${m.id ? `<button class="fwd" title="Responder" onclick="waResponder('${esc(String(m.id))}')"><i class="bi bi-reply-fill"></i></button>
-      <button class="fwd" title="Encaminhar" onclick="waEncaminhar('${esc(String(m.id))}')"><i class="bi bi-arrow-return-right"></i></button>` : ''}
+      ${m.id ? `<button class="fwd" title="Responder" onclick="waResponder('${escJs(String(m.id))}')"><i class="bi bi-reply-fill"></i></button>
+      <button class="fwd" title="Encaminhar" onclick="waEncaminhar('${escJs(String(m.id))}')"><i class="bi bi-arrow-return-right"></i></button>` : ''}
       ${btnBaixar}
     </div>` : '';
   return `<div class="wa-msg ${me ? 'me' : 'them'}"><div class="wa-bubble ${me ? 'me' : 'them'}">${remetente}${citada}${corpo}${rodape}${reacao}</div>${acoesFull}</div>`;
@@ -10146,7 +10160,7 @@ function waRenderFwdLista() {
   const rows = waGrupos()
     .filter(c => { const n = waNomeChat(c).toLowerCase(); return !termo || n.includes(termo) || String(c.jid).includes(termo); })
     .slice(0, 80)
-    .map(c => { const nome = waNomeChat(c); return `<div class="wa-item" onclick="waConfirmarEncaminhar('${esc(c.jid)}')">${waAvatarHtml(nome, c.jid, 40)}<div style="flex:1;min-width:0"><div class="nome">${esc(nome)}</div></div></div>`; })
+    .map(c => { const nome = waNomeChat(c); return `<div class="wa-item" onclick="waConfirmarEncaminhar('${escJs(c.jid)}')">${waAvatarHtml(nome, c.jid, 40)}<div style="flex:1;min-width:0"><div class="nome">${esc(nome)}</div></div></div>`; })
     .join('');
   cont.innerHTML = rows || '<div style="padding:16px;color:#667781;font-size:13px">Nenhuma conversa.</div>';
 }
@@ -10585,11 +10599,11 @@ function waMontarRapidas() {
   const lista = window._wa.rapidas || [];
   const itens = lista.map(r => `
     <div class="wa-rapida-item" style="display:flex;align-items:center;gap:8px">
-      <div style="flex:1;min-width:0" onclick="waInserirRapida('${esc(String(r.id))}')">
+      <div style="flex:1;min-width:0" onclick="waInserirRapida('${escJs(String(r.id))}')">
         <div class="txt" style="white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${esc((r.texto || '').replace(/\*/g, ''))}</div>
       </div>
-      <button class="wa-iconbtn" style="font-size:14px" title="Editar" onclick="event.stopPropagation();waEditarRapida('${esc(String(r.id))}')"><i class="bi bi-pencil"></i></button>
-      <button class="wa-iconbtn" style="font-size:14px;color:var(--danger)" title="Excluir" onclick="event.stopPropagation();waExcluirRapida('${esc(String(r.id))}')"><i class="bi bi-trash"></i></button>
+      <button class="wa-iconbtn" style="font-size:14px" title="Editar" onclick="event.stopPropagation();waEditarRapida('${escJs(String(r.id))}')"><i class="bi bi-pencil"></i></button>
+      <button class="wa-iconbtn" style="font-size:14px;color:var(--danger)" title="Excluir" onclick="event.stopPropagation();waExcluirRapida('${escJs(String(r.id))}')"><i class="bi bi-trash"></i></button>
     </div>`).join('');
   el.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 8px 8px">
@@ -11131,7 +11145,7 @@ async function renderProcessoEditar(id) {
     <div class="btn-group" style="margin-top:8px">
       <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg"></i> Salvar Alterações</button>
       <button type="button" class="btn btn-outline" onclick="navigate('processos/detalhe',{id:'${id}'})">Cancelar</button>
-      <button type="button" class="btn btn-danger" onclick="deletarProcesso('${id}','${esc(processo.ClienteNome||'')}')"><i class="bi bi-trash"></i> Excluir Processo</button>
+      <button type="button" class="btn btn-danger" onclick="deletarProcesso('${id}','${escJs(processo.ClienteNome||'')}')"><i class="bi bi-trash"></i> Excluir Processo</button>
     </div>
   </form>`;
 
@@ -12082,7 +12096,7 @@ function renderClubesRows(lista) {
       <div class="btn-group">
         <button class="btn btn-outline btn-sm" onclick="verDetalhesClube('${cl.id}')" title="Visualizar"><i class="bi bi-eye"></i></button>
         <button class="btn btn-outline btn-sm" onclick="navigate('clubes/editar',{id:'${cl.id}'})"><i class="bi bi-pencil"></i></button>
-        <button class="btn btn-ghost btn-sm" onclick="confirmarDeleteClube('${cl.id}','${esc(cl.Title)}')"><i class="bi bi-trash" style="color:var(--danger)"></i></button>
+        <button class="btn btn-ghost btn-sm" onclick="confirmarDeleteClube('${cl.id}','${escJs(cl.Title)}')"><i class="bi bi-trash" style="color:var(--danger)"></i></button>
       </div>
     </td>
   </tr>`).join('');
@@ -13190,17 +13204,17 @@ async function renderOrcamentos() {
         : '';
       if (modo === 'pendente') {
         acoesBtns += `
-          <button class="btn btn-ghost btn-sm" onclick="editarOrcamento('${o.id}','${esc(String(o.clienteId))}')" title="Editar"><i class="bi bi-pencil" style="color:var(--accent)"></i></button>
-          <button class="btn btn-ghost btn-sm" onclick="aprovarOrcamento('${o.id}','${esc(String(o.clienteId))}','global')" title="Aprovar"><i class="bi bi-check-circle" style="color:var(--success)"></i></button>
-          <button class="btn btn-ghost btn-sm" onclick="rejeitarOrcamento('${o.id}','${esc(String(o.clienteId))}','global')" title="Rejeitar"><i class="bi bi-x-circle" style="color:var(--danger)"></i></button>
-          <button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${esc(String(o.clienteId))}','global')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>`;
+          <button class="btn btn-ghost btn-sm" onclick="editarOrcamento('${o.id}','${escJs(String(o.clienteId))}')" title="Editar"><i class="bi bi-pencil" style="color:var(--accent)"></i></button>
+          <button class="btn btn-ghost btn-sm" onclick="aprovarOrcamento('${o.id}','${escJs(String(o.clienteId))}','global')" title="Aprovar"><i class="bi bi-check-circle" style="color:var(--success)"></i></button>
+          <button class="btn btn-ghost btn-sm" onclick="rejeitarOrcamento('${o.id}','${escJs(String(o.clienteId))}','global')" title="Rejeitar"><i class="bi bi-x-circle" style="color:var(--danger)"></i></button>
+          <button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${escJs(String(o.clienteId))}','global')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>`;
       } else if (modo === 'rejeitado') {
-        acoesBtns = `<button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${esc(String(o.clienteId))}','global')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>`;
+        acoesBtns = `<button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${escJs(String(o.clienteId))}','global')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>`;
       } else if (modo === 'aprovado') {
         acoesBtns += orcamentosComDemanda.has(String(o.id))
           ? ` <span style="font-size:11px;color:var(--text-muted)" title="Exclua a demanda vinculada em Controle de Demandas para poder excluir este orçamento">Demanda ativa</span>`
-          : ` <button class="btn btn-ghost btn-sm" onclick="editarOrcamento('${o.id}','${esc(String(o.clienteId))}')" title="Editar (volta para Pendente)"><i class="bi bi-pencil" style="color:var(--accent)"></i></button>
-             <button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${esc(String(o.clienteId))}','global')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>`;
+          : ` <button class="btn btn-ghost btn-sm" onclick="editarOrcamento('${o.id}','${escJs(String(o.clienteId))}')" title="Editar (volta para Pendente)"><i class="bi bi-pencil" style="color:var(--accent)"></i></button>
+             <button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${escJs(String(o.clienteId))}','global')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>`;
       }
       return `<tr>
         <td style="white-space:nowrap;font-weight:600">${esc(o.numero||'—')}</td>
@@ -13517,7 +13531,7 @@ function _cardResumoOperador(op, processos, demandas, orcamentos, opts = {}) {
   const contador = (valor, cor, label, filtro, extraVal) => `<div title="${esc(label)}">
     <div style="display:flex;align-items:center;gap:2px;justify-content:center">
       <div style="font-size:24px;font-weight:800;color:${cor}">${valor}</div>
-      <button class="btn btn-ghost btn-sm" style="padding:0 2px" onclick="abrirModalProcessosOperador('${esc(op)}','${filtro}')" title="Ver processos — ${esc(label)}"><i class="bi bi-eye" style="font-size:12px"></i></button>
+      <button class="btn btn-ghost btn-sm" style="padding:0 2px" onclick="abrirModalProcessosOperador('${escJs(op)}','${filtro}')" title="Ver processos — ${esc(label)}"><i class="bi bi-eye" style="font-size:12px"></i></button>
     </div>
     <div style="font-size:10px;color:var(--text-muted)">${esc(label)}</div>
     ${extraMini(extraVal)}
@@ -13528,7 +13542,7 @@ function _cardResumoOperador(op, processos, demandas, orcamentos, opts = {}) {
       <div title="Demandas em aberto">
         <div style="display:flex;align-items:center;gap:2px;justify-content:center">
           <div style="font-size:24px;font-weight:800;color:var(--accent)">${demandasArr.length}</div>
-          <button class="btn btn-ghost btn-sm" style="padding:0 2px" onclick="abrirModalDemandasOperador('${esc(op)}')" title="Ver demandas em aberto de ${esc(op)}"><i class="bi bi-eye" style="font-size:12px"></i></button>
+          <button class="btn btn-ghost btn-sm" style="padding:0 2px" onclick="abrirModalDemandasOperador('${escJs(op)}')" title="Ver demandas em aberto de ${esc(op)}"><i class="bi bi-eye" style="font-size:12px"></i></button>
         </div>
         <div style="font-size:10px;color:var(--text-muted)">demandas</div>
         ${extraMini(extraDemandasOp)}
@@ -13886,7 +13900,7 @@ async function renderMinhasDemandas() {
             </div>
           </div>
           ${!concluido && d.status === 'Aberta'
-            ? `<button class="btn btn-primary btn-sm" onclick="navigate('processos/novo',{clienteId:'${d.clienteId}',demandaId:'${d.id}',demandaNumero:'${esc(d.numero||'')}',tipoProcesso:encodeURIComponent('${esc(item.tipo)}'),valorDemanda:'${item.valor||0}',dataOrcamento:'${esc(d.orcamentoData||'')}'})">
+            ? `<button class="btn btn-primary btn-sm" onclick="navigate('processos/novo',{clienteId:'${d.clienteId}',demandaId:'${d.id}',demandaNumero:'${escJs(d.numero||'')}',tipoProcesso:encodeURIComponent('${escJs(item.tipo)}'),valorDemanda:'${item.valor||0}',dataOrcamento:'${escJs(d.orcamentoData||'')}'})">
                 <i class="bi bi-plus-lg me-1"></i>Abrir Processo
               </button>`
             : `<button class="btn btn-outline btn-sm" disabled>${concluido ? 'Concluído' : 'Encerrada'}</button>`}
@@ -14727,7 +14741,7 @@ function _importBuscarCliente() {
   if (termo.length < 2) { cont.innerHTML = ''; return; }
   const termoDig = termo.replace(/\D/g, '');
   const res = (window._importClientes || []).filter(c => (c.Title || '').toLowerCase().includes(termo) || (termoDig && String(c.CPF || '').replace(/\D/g, '').includes(termoDig))).slice(0, 8);
-  cont.innerHTML = res.length ? res.map(c => `<div style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;margin-top:4px;cursor:pointer;display:flex;justify-content:space-between;gap:8px" onclick="_importSelecionarCliente('${esc(String(c.id))}')"><span>${esc(c.Title)}</span><span style="color:var(--text-muted);font-size:12px">${esc(c.CPF || '')}</span></div>`).join('') : '<div style="font-size:12px;color:var(--text-muted);padding:6px">Nenhum cliente encontrado.</div>';
+  cont.innerHTML = res.length ? res.map(c => `<div style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;margin-top:4px;cursor:pointer;display:flex;justify-content:space-between;gap:8px" onclick="_importSelecionarCliente('${escJs(String(c.id))}')"><span>${esc(c.Title)}</span><span style="color:var(--text-muted);font-size:12px">${esc(c.CPF || '')}</span></div>`).join('') : '<div style="font-size:12px;color:var(--text-muted);padding:6px">Nenhum cliente encontrado.</div>';
 }
 async function _importSelecionarCliente(id) {
   window._importCliente = (window._importClientes || []).find(c => String(c.id) === String(id)) || null;
