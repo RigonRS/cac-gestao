@@ -189,7 +189,7 @@ function statusPagamentoOrcamento(orc) {
   const parcelas = Array.isArray(pg.parcelas) ? pg.parcelas : [];
   if (!parcelas.length) return 'pago';
   if (parcelas.every(p => p.pago)) return 'pago';
-  const hoje = new Date().toISOString().split('T')[0];
+  const hoje = hojeISO();
   const temAtrasada = parcelas.some(p => !p.pago && p.dataVencimento && p.dataVencimento < hoje);
   return temAtrasada ? 'devedor' : 'pago_parcial';
 }
@@ -314,13 +314,14 @@ function _totalOrcSemCredito(orc) {
   return (Number(orc && orc.total) || 0) + (Number(orc && orc.creditoHaver) || 0);
 }
 
-// Razão de desconto do orçamento (desconto manual + 5% à vista) sobre o valor bruto dos serviços
-function ratioDescontoOrcamento(orc) {
+// Razão de desconto do orçamento (desconto manual + 5% à vista) sobre o valor bruto dos serviços.
+// incluir5=false ignora o desconto de 5% à vista (usado no cálculo da comissão a partir de Ago/2026).
+function ratioDescontoOrcamento(orc, incluir5 = true) {
   if (!orc) return 1;
   const itens = orc.itens || [];
   const grossSubtotal = itens.reduce((s, i) => s + (Number(i.subtotal != null ? i.subtotal : (i.qtd * i.valor)) || 0), 0);
   const total = _totalOrcSemCredito(orc);
-  const fator5 = (orc.pagamento && orc.pagamento.modalidade === 'avista' && orc.pagamento.desconto5) ? 0.95 : 1;
+  const fator5 = (incluir5 && orc.pagamento && orc.pagamento.modalidade === 'avista' && orc.pagamento.desconto5) ? 0.95 : 1;
   if (grossSubtotal > 0 && Number.isFinite(total)) return (total * fator5) / grossSubtotal;
   return fator5;
 }
@@ -356,17 +357,26 @@ function valorCheioProcessoExtras(p, orcamentos, demandas) {
   return item ? (Number(item.valor) || 0) : bruto;
 }
 
-// Razão de desconto (desconto manual + 5% à vista) que incide sobre este processo (1 = sem desconto)
-function ratioExtraProcesso(p, orcamentos, demandas) {
+// Razão de desconto (desconto manual + 5% à vista) que incide sobre este processo (1 = sem desconto).
+// incluir5=false ignora o desconto de 5% à vista (comissão a partir de Ago/2026).
+function ratioExtraProcesso(p, orcamentos, demandas, incluir5 = true) {
   const orc = p.demandaId ? orcamentoDoProcesso(p, orcamentos, demandas) : null;
   if (!orc) return 1;
   const itens = orc.itens || [];
   const grossSubtotal = itens.reduce((s, i) => s + (Number(i.subtotal != null ? i.subtotal : (i.qtd * i.valor)) || 0), 0);
   const totalComManual = _totalOrcSemCredito(orc);
-  const fator5 = (orc.pagamento && orc.pagamento.modalidade === 'avista' && orc.pagamento.desconto5) ? 0.95 : 1;
+  const fator5 = (incluir5 && orc.pagamento && orc.pagamento.modalidade === 'avista' && orc.pagamento.desconto5) ? 0.95 : 1;
   const item = itens.find(i => i.tipo === p.TipoProcesso);
   if (item && grossSubtotal > 0 && Number.isFinite(totalComManual)) return (totalComManual * fator5) / grossSubtotal;
   return fator5;
+}
+
+// A partir de Agosto/2026 o desconto de 5% à vista deixa de reduzir a comissão (extra).
+// Processos deferidos antes disso mantêm o cálculo antigo (com o 5%).
+const EXTRA_CORTE_SEM_5 = '2026-08-01';
+function _extraMantemDesconto5(p) {
+  const iso = getDataDeferido(p);
+  return !!(iso && iso < EXTRA_CORTE_SEM_5); // true = mantém o 5% (comportamento antigo)
 }
 
 // Extra (comissão) de um processo. O desconto do orçamento é aplicado de forma
@@ -379,13 +389,23 @@ function extraProcesso(p, orcamentos, demandas, responsavel) {
   if (aj && Number.isFinite(Number(aj.extra))) return Number(aj.extra);
   const taxa  = TAXAS_PROCESSO[p.TipoProcesso] || 0;
   const cheio = valorCheioProcessoExtras(p, orcamentos, demandas);
-  const ratio = ratioExtraProcesso(p, orcamentos, demandas);
+  const ratio = ratioExtraProcesso(p, orcamentos, demandas, _extraMantemDesconto5(p));
   return Math.max(0, cheio - taxa) * ratio * fracaoExtraProcesso(p.TipoProcesso, responsavel);
 }
 
 function fmtMoeda(v) {
   if (v === null || v === undefined || v === '') return '—';
   return Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+// Data de hoje no fuso de Brasília (GMT-3) no formato aaaa-mm-dd. Evita o "pulo" para o
+// dia seguinte que acontecia à noite ao usar toISOString() (que devolve UTC).
+function hojeISO() {
+  try {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+  } catch (e) {
+    // Fallback: subtrai 3h do UTC (Brasília = UTC-3) e pega a parte da data
+    return new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().split('T')[0];
+  }
 }
 function daysBetween(isoDate) {
   if (!isoDate) return null;
@@ -834,7 +854,7 @@ const TIPOS_STATUS_EMAIL_AO_PROTOCOLAR = [
 const RESPONSAVEIS = ['Andrieli', 'Geison', 'Janaína', 'Matheus', 'Priscila', 'Simone'];
 const TIPOS_SEM_GRU = ['Defesa de Notificação', 'Mudança de endereço SINARM PF', 'Porte de Arma PF', 'Correção de dados de arma', 'Comunicado de Furto/Extravio'];
 const FORMAS_PAGAMENTO_OPTS = ['Pix', 'Dinheiro', 'Cartão'];
-const BANCOS_PAGAMENTO_OPTS = ['Banco do Brasil', 'Sicredi', 'Cresol'];
+const BANCOS_PAGAMENTO_OPTS = ['Banco do Brasil', 'Sicredi', 'Cresol', 'Santander', 'NuBank', 'Itaú', 'Inter', 'Caixa', 'Banrisul', 'Outros'];
 
 // ============================================================
 // MENSAGENS AUTOMÁTICAS DE WHATSAPP (editáveis em Configurações)
@@ -915,7 +935,7 @@ async function registrarExtraRenovacao(tipo, clienteId, clienteNome, detalhe) {
       clienteNome:    clienteNome || '',
       responsavel,
       valor:          VALORES_EXTRA_RENOVACAO[tipo] || 0,
-      data:           new Date().toISOString().split('T')[0],
+      data:           hojeISO(),
       detalhe:        detalhe || '',
       pago:           false,
       dataPagamento:  null,
@@ -931,7 +951,7 @@ function abrirModalPagarExtrasMes(responsavel, mes) {
   const [y, m] = mes.split('-');
   const mesLbl = `${NOMES_MESES_EXTENSO[parseInt(m,10)-1]} ${y}`;
   document.getElementById('modal-pagar-extra')?.remove();
-  const hoje = new Date().toISOString().split('T')[0];
+  const hoje = hojeISO();
   const modal = document.createElement('div');
   modal.id = 'modal-pagar-extra';
   modal.innerHTML = `
@@ -975,9 +995,35 @@ async function confirmarPagarExtrasMes(responsavel, mes) {
     const entry = { responsavel, mes, pago: true, dataPagamento: data, formaPagamento: forma, banco, marcadoPor: getCurrentUserName() };
     if (idx >= 0) arr[idx] = entry; else arr.push(entry);
     await App.graph._writeFile('extras_pagos_mes', arr);
+    // Ao registrar o mês como pago, marca todos os processos do mês como "Conferido"
+    try {
+      const procs = (window._extrasProcessos || []).filter(p => p.Responsavel === responsavel && _extraProcessoNoMes(p, window._extrasProcessos || [], mes));
+      if (procs.length) {
+        const confAtual = await App.graph._readFile('extras_conferidos').catch(() => ({}));
+        const mapa = (confAtual && !Array.isArray(confAtual) && typeof confAtual === 'object') ? confAtual : {};
+        procs.forEach(p => { mapa[`${p.id}|${mes}`] = true; });
+        await App.graph._writeFile('extras_conferidos', mapa);
+        window._extrasConferidos = mapa;
+      }
+    } catch(e) { console.error('marcar conferidos:', e); }
     toast('Pagamento dos extras do mês registrado!', 'success');
     await renderPagamentosExtras();
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+// Marca/desmarca um processo como "Conferido" (auxílio visual na conferência dos extras)
+async function toggleConferidoExtra(processoId, mes, checked) {
+  if (!isAdminUser()) return;
+  const key = `${processoId}|${mes}`;
+  const row = document.getElementById(`extra-row-${processoId}`);
+  if (row) row.style.background = checked ? '#ecfdf5' : 'transparent';
+  try {
+    const atual = await App.graph._readFile('extras_conferidos').catch(() => ({}));
+    const mapa = (atual && !Array.isArray(atual) && typeof atual === 'object') ? atual : {};
+    if (checked) mapa[key] = true; else delete mapa[key];
+    await App.graph._writeFile('extras_conferidos', mapa);
+    window._extrasConferidos = mapa;
+  } catch(e) { toast(e.message, 'error'); }
 }
 
 async function desfazerPagamentoExtrasMes(responsavel, mes) {
@@ -1380,7 +1426,7 @@ function _abrirModalDeclaracao(subtitulo, emitirCall) {
 // Monta o HTML da declaração. `end` = { logradouro, numero, bairro, complemento, cep, cidade, uf }.
 function _htmlDeclaracaoResidencia(nomeTitular, cpfTitular, c, end) {
   const cidadeUF = [end.cidade, end.uf].filter(Boolean).join('-');
-  const hoje = new Date().toISOString().split('T')[0];
+  const hoje = hojeISO();
   const compTxt = end.complemento ? `${esc(end.complemento)}, ` : '';
   return `
     <h2>DECLARAÇÃO DO TITULAR DO ENDEREÇO RESIDENCIAL PARA GUARDA DE ACERVO DE PRODUTOS CONTROLADOS</h2>
@@ -2415,7 +2461,7 @@ async function deletarDocumento(id, clienteId) {
 function tempoDecorridoProcesso(p) {
   const ini = p.DataProtocoloSistema ? p.DataProtocoloSistema.split('T')[0] : '';
   if (!ini) return '—';
-  const fim = getDataDeferido(p) || new Date().toISOString().split('T')[0];
+  const fim = getDataDeferido(p) || hojeISO();
   let dias = Math.floor((new Date(fim + 'T00:00:00') - new Date(ini + 'T00:00:00')) / 86400000);
   if (!Number.isFinite(dias)) return '—';
   if (dias < 0) dias = 0;
@@ -3728,7 +3774,7 @@ async function renderProcessoForm(clienteId = null, routeParams = {}) {
 
   const fromDemanda = !!demandaId;
   const lockFields  = fromDemanda && !isAdminUser();
-  const hoje        = new Date().toISOString().split('T')[0];
+  const hoje        = hojeISO();
 
   // Se vem de demanda, cliente é fixo; só mostra o nome, sem select
   let clienteHtml;
@@ -4874,7 +4920,7 @@ async function gerarAnexoC() {
     const c = window._clienteDetalhe || {};
     const d = _dadosComprador(c, dados, usaComp);
     const endFmt = [d.end, d.num ? `n° ${d.num}` : '', d.compl, d.bairro, d.cidade, d.uf, d.cep ? `CEP ${d.cep}` : ''].filter(Boolean).join(', ');
-    const hoje = new Date().toISOString().split('T')[0];
+    const hoje = hojeISO();
     const html = `
       <h2>DECLARAÇÃO DE INEXISTÊNCIA DE INQUÉRITOS POLICIAIS<br>OU PROCESSOS CRIMINAIS</h2>
       <p>Eu, <strong>${esc(d.nome)}</strong>, ${esc(usaComp ? 'Brasileiro(a)' : ((c.Nacionalidade||'').toLowerCase().includes('brasil') ? 'Brasileiro(a)' : (c.Nacionalidade||'')))}, ${esc(d.profissao)}, natural de
@@ -4901,7 +4947,7 @@ async function gerarDSA(usarComprador) {
       ? [dados.habCacador, dados.habAtirador, dados.habColecionador].filter(Boolean).join(', ') || 'CAC'
       : (c.Categoria || 'CAC').split(',').map(s => s.trim()).join(', ');
     const endFmt = [d.end, d.num ? `n° ${d.num}` : '', d.compl, d.bairro, d.cidade, d.uf, d.cep ? `CEP ${d.cep}` : ''].filter(Boolean).join(', ');
-    const hoje = new Date().toISOString().split('T')[0];
+    const hoje = hojeISO();
     const html = `
       <h2>DECLARAÇÃO DE SEGURANÇA DO ACERVO (DSA) — ENDEREÇO DE ACERVO</h2>
       <p>Eu, <strong>${esc(d.nome)}</strong>, ${esc(usaComp ? 'Brasileiro(a)' : ((c.Nacionalidade||'').toLowerCase().includes('brasil') ? 'Brasileiro(a)' : (c.Nacionalidade||'')))}, ${esc(d.profissao)}, natural de
@@ -4928,7 +4974,7 @@ async function gerarProcuracao() {
     const c = window._clienteDetalhe || {};
     const d = _dadosComprador(c, dados, usaComp);
     const endFmt = [d.end, d.num ? `n° ${d.num}` : '', d.compl, d.bairro, d.cidade, d.uf, d.cep ? `CEP ${d.cep}` : ''].filter(Boolean).join(', ');
-    const hoje = new Date().toISOString().split('T')[0];
+    const hoje = hojeISO();
     const html = `
       <div style="text-align:right;font-size:10pt;color:#555;margin-bottom:8px">Data de Emissão: ${fmtDate(hoje)}</div>
       <h1>PROCURAÇÃO</h1>
@@ -5032,7 +5078,7 @@ async function gerarTermoTransferencia() {
         arm = { especie: dados.especie||'', marca: dados.marcaArma||'', serie: dados.serieArma||'', acabamento: dados.acabamento||'', calibre: dados.calibre||'', funcionamento: dados.funcionamento||'', numCanos: dados.numeroCanos||'', capacidade: dados.capacidadeTiros||'', comprCano: dados.comprCano||'', pais: dados.paisFabricacao||'', cadSinarm: dados.cadSinarm||'' };
       }
     }
-    const hoje = new Date().toISOString().split('T')[0];
+    const hoje = hojeISO();
     const html = `
       <h1>TERMO DE TRANSFERÊNCIA</h1>
       <p style="text-indent:2cm">Eu, <strong>${esc(vend.nome)}</strong>, portador do CPF nº ${esc(vend.cpf)}, residente à ${esc(vend.endereco)}, <strong>autorizo a TRANSFERÊNCIA</strong> ao Sr. <strong>${esc(comp.nome)}</strong>, portador do CPF nº ${esc(comp.cpf)}, residente à ${esc(comp.endereco)}, de uma arma de sua propriedade, com as seguintes características:</p>
@@ -5170,7 +5216,7 @@ async function gerarRequerimento() {
     } catch(err) {}
 
     const acervoDestino = dados.acervoDestinoMesmoTitular || dados.acervoDestinoVenda || dados.acervoDestino || '';
-    const hoje = new Date().toISOString().split('T')[0];
+    const hoje = hojeISO();
     const cidadeReq = v.municipio || c.Cidade1 || '';
     const ufReq = v.uf || c.UF1Endereco || '';
     const habsChk = (arr) => {
@@ -5622,7 +5668,7 @@ async function renderProcessoDetalhe(id) {
               <label style="font-size:12px">N° Protocolo</label>
               <input type="text" inputmode="numeric" pattern="[0-9]*" name="NumeroProtocolo" value="" placeholder="Apenas números" style="margin-bottom:10px" oninput="this.value=this.value.replace(/\\D/g,'')" />
               <label style="font-size:12px">Data do Protocolo no Sistema</label>
-              <input type="date" name="DataProtocoloSistema" value="${new Date().toISOString().split('T')[0]}" style="margin-bottom:14px" />
+              <input type="date" name="DataProtocoloSistema" value="${hojeISO()}" style="margin-bottom:14px" />
               <button type="submit" class="btn btn-outline" style="width:100%"><i class="bi bi-floppy"></i> Salvar Protocolo</button>
             </form>`}
           </div>
@@ -5707,7 +5753,7 @@ async function atualizarStatus(id, novoStatus) {
     if (proc.Status === 'Processo Futuro' && proc.Responsavel) {
       await criarNotificacao(proc.Responsavel, 'futuro_liberado', 'Processo Liberado para Protocolo',
         `${proc.ClienteNome||'Cliente'} — ${proc.TipoProcesso||''} foi liberado para protocolo (status: ${novoStatus}).`,
-        { clienteId: proc.ClienteId, clienteNome: proc.ClienteNome, processoId: id, chaveUnica: `futuroliberado_${id}_${new Date().toISOString().split('T')[0]}` });
+        { clienteId: proc.ClienteId, clienteNome: proc.ClienteNome, processoId: id, chaveUnica: `futuroliberado_${id}_${hojeISO()}` });
     }
     const b = statusBadge(novoStatus);
     const badge = document.getElementById('status-badge-detalhe');
@@ -5870,7 +5916,7 @@ async function deferirProcesso(id) {
   const _pedirCRAF = (_tipoDefer === 'Aquisição de Arma PF') || _eTransfDefer || _eRenovCRAF || _eRegistrarDefer;
   const modal = document.createElement('div');
   modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center';
-  const hoje = new Date().toISOString().split('T')[0];
+  const hoje = hojeISO();
   // Validade padrão da Guia de Tráfego = data de emissão + 6 meses
   const hoje6 = (() => { const d = new Date(hoje + 'T00:00:00'); d.setMonth(d.getMonth() + 6); return d.toISOString().split('T')[0]; })();
   modal.innerHTML = `
@@ -6347,7 +6393,7 @@ async function liberarProcessosFuturos(deferidoId) {
       if (proc.Responsavel) {
         await criarNotificacao(proc.Responsavel, 'futuro_liberado', 'Processo Liberado para Protocolo',
           `${proc.ClienteNome||'Cliente'} — ${proc.TipoProcesso||''} foi liberado para protocolo (status: Aguardando Documentos).`,
-          { clienteId: proc.ClienteId, clienteNome: proc.ClienteNome, processoId: proc.id, chaveUnica: `futuroliberado_${proc.id}_${new Date().toISOString().split('T')[0]}` });
+          { clienteId: proc.ClienteId, clienteNome: proc.ClienteNome, processoId: proc.id, chaveUnica: `futuroliberado_${proc.id}_${hojeISO()}` });
       }
       toast(`Processo liberado: ${proc.TipoProcesso||'—'} (${proc.ClienteNome||'?'})`, 'success');
     }
@@ -6614,7 +6660,7 @@ async function _confirmarRenovarSIMAF(clienteId, simafIndex, novaData, tipoRenov
     if (!simafList[simafIndex]) { toast('SIMAF não encontrado.', 'error'); return; }
     simafList[simafIndex].DataValidade = novaData;
     const histSimaf = JSON.parse(cliente.HistoricoRenovacoesSIMAF || '[]');
-    histSimaf.push({ data: new Date().toISOString().split('T')[0], usuario: getCurrentUserName(), tipo: tipoRenov, propriedade: simafList[simafIndex].NomePropriedade || '' });
+    histSimaf.push({ data: hojeISO(), usuario: getCurrentUserName(), tipo: tipoRenov, propriedade: simafList[simafIndex].NomePropriedade || '' });
     await App.graph.updateItem(CONFIG.listas.clientes, clienteId, {
       SIMAFs: JSON.stringify(simafList),
       HistoricoRenovacoesSIMAF: JSON.stringify(histSimaf),
@@ -6898,7 +6944,7 @@ async function onGruPagaChange(id, checked) {
   // Ao marcar, já preenche a data de pagamento com hoje (se estiver vazia)
   if (checked) {
     const inp = document.getElementById('input-gru-data');
-    if (inp && !inp.value) inp.value = new Date().toISOString().split('T')[0];
+    if (inp && !inp.value) inp.value = hojeISO();
   }
   showLoading();
   try {
@@ -7270,7 +7316,7 @@ function toggleParcelasProcesso(pid) {
 // Parcelas/valores em aberto de um orçamento (para a página de Pagamentos)
 function parcelasPendentesOrcamento(o) {
   const pg = o.pagamento;
-  const hoje = new Date().toISOString().split('T')[0];
+  const hoje = hojeISO();
   if (!pg || !pg.modalidade) {
     return { itens: [{ label: 'Pagamento não definido', valor: Number(o.total)||0, data: null, vencida: false }], total: Number(o.total)||0, vencido: 0 };
   }
@@ -7641,7 +7687,7 @@ async function renderPagamentosGRU() {
 
 // Registra o pagamento da GRU de um processo com a data de HOJE (a partir da página de GRU)
 async function pagarGRUHoje(id) {
-  const hoje = new Date().toISOString().split('T')[0];
+  const hoje = hojeISO();
   const confirmar = await new Promise(resolve => {
     document.getElementById('modal-pagar-gru-hoje')?.remove();
     const modal = document.createElement('div');
@@ -7857,16 +7903,18 @@ function imprimirExtras(responsavel) {
 
 async function renderPagamentosExtras() {
   document.getElementById('page-title').textContent = 'Pagamentos de Extras';
-  const [processos, avulsosRaw, extrasPagosMesRaw, orcDemRaw, ajustesRaw] = await Promise.all([
+  const [processos, avulsosRaw, extrasPagosMesRaw, orcDemRaw, ajustesRaw, conferidosRaw] = await Promise.all([
     App.getProcessos(),
     App.graph._readFile('extras_avulsos').catch(() => []),
     App.graph._readFile('extras_pagos_mes').catch(() => []),
     _carregarOrcamentosDemandas(),
     App.graph._readFile('extras_ajustes').catch(() => ({})),
+    App.graph._readFile('extras_conferidos').catch(() => ({})),
   ]);
   const avulsos = Array.isArray(avulsosRaw) ? avulsosRaw : [];
   const extrasPagosMes = Array.isArray(extrasPagosMesRaw) ? extrasPagosMesRaw : [];
   window._extrasAjustes = (ajustesRaw && !Array.isArray(ajustesRaw) && typeof ajustesRaw === 'object') ? ajustesRaw : {};
+  window._extrasConferidos = (conferidosRaw && !Array.isArray(conferidosRaw) && typeof conferidosRaw === 'object') ? conferidosRaw : {};
   const _orcExtras = orcDemRaw.orcamentos;
   const _demExtras = orcDemRaw.demandas;
   window._extrasProcessos = processos;
@@ -7931,13 +7979,20 @@ async function renderPagamentosExtras() {
         } else if (getItensPendentesProcesso(p).length > 0) {
           badgePagHtml = `<div style="margin-top:4px"><span class="badge badge-red" style="font-size:10px"><i class="bi bi-exclamation-triangle-fill me-1"></i>Pagamento do cliente pendente</span></div>`;
         }
-        return `<div style="padding:10px 16px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
-          <div style="flex:1;min-width:0">
+        const conferido = !!(window._extrasConferidos && window._extrasConferidos[`${p.id}|${filtroMes}`]);
+        const confChk = isAdminUser()
+          ? `<label class="checkbox-item" title="Conferido (auxílio na conferência)" style="margin:0 6px 0 0;display:flex;align-items:center"><input type="checkbox" ${conferido ? 'checked' : ''} onchange="toggleConferidoExtra('${p.id}','${filtroMes}',this.checked)"></label>`
+          : '';
+        return `<div id="extra-row-${esc(String(p.id))}" style="padding:10px 16px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between;gap:12px;background:${conferido ? '#ecfdf5' : 'transparent'}">
+          <div style="display:flex;align-items:flex-start;flex:1;min-width:0">
+            ${confChk}
+            <div style="flex:1;min-width:0">
             <a style="font-size:13px;font-weight:600;cursor:pointer;color:var(--accent)" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.ClienteNome||'—')}</a>
             <div style="font-size:12px;color:#374151;margin-top:2px">${esc(p.TipoProcesso||'—')}${desc ? ` <span style="color:var(--text-muted)">· ${esc(desc)}</span>` : ''}</div>
             <div style="font-size:11px;color:var(--text-muted)">Valor total: ${fmtMoeda(valor)}${temDescExtra ? ` · <span title="Valor com desconto aplicado para o cálculo do extra">c/ desconto: ${fmtMoeda(valorExtraBase)}</span>` : ''}${infoPag ? ` · ${esc(infoPag)}` : ''}</div>
             ${badgePagHtml}
             ${p.Restituido ? `<div style="margin-top:4px"><span class="badge" style="background:#9333ea;color:#fff;font-size:11px"><i class="bi bi-arrow-return-left me-1"></i>Restituído</span></div>` : ''}
+            </div>
           </div>
           <div style="display:flex;align-items:flex-start;gap:6px;flex-shrink:0">
             <button class="btn btn-ghost btn-xs" style="font-size:12px;padding:2px 6px;color:var(--accent)" onclick="verCalculoExtra('${p.id}','${esc(responsavel)}')" title="Ver e editar o cálculo do extra"><i class="bi bi-eye"></i></button>
@@ -8033,7 +8088,7 @@ function verCalculoExtra(id, responsavel) {
   const orc = window._extrasOrc || [], dem = window._extrasDem || [];
   const cheio  = valorCheioProcessoExtras(p, orc, dem);
   const taxa   = TAXAS_PROCESSO[p.TipoProcesso] || 0;
-  const ratio  = ratioExtraProcesso(p, orc, dem);
+  const ratio  = ratioExtraProcesso(p, orc, dem, _extraMantemDesconto5(p));
   const fracao = fracaoExtraProcesso(p.TipoProcesso, responsavel);
   const pctPadrao = ratio * fracao * 100;
   const key = _ajusteExtraKey(id, responsavel);
@@ -8116,7 +8171,7 @@ async function salvarAjusteExtra() {
     mapa[_ajusteExtraKey(id, responsavel)] = {
       valor, taxa, percentual: pct, extra,
       por: getCurrentUserName(),
-      data: new Date().toISOString().split('T')[0],
+      data: hojeISO(),
     };
     await App.graph._writeFile('extras_ajustes', mapa);
     window._extrasAjustes = mapa;
@@ -10645,7 +10700,7 @@ async function criarNotificacao(usuario, tipo, titulo, mensagem, extra = {}) {
       processoId:   extra.processoId || null,
       demandaId:    extra.demandaId || null,
       chaveUnica:   extra.chaveUnica || null,
-      data:         new Date().toISOString().split('T')[0],
+      data:         hojeISO(),
       criadaEm:     new Date().toISOString(),
       lida:         false,
       dataLeitura:  null,
@@ -11008,7 +11063,7 @@ async function renderProcessoEditar(id) {
             </select>
           </div>
           <div><label>N° Protocolo</label><input name="NumeroProtocolo" value="${esc(processo.NumeroProtocolo||'')}" /></div>
-          <div><label>Data de Protocolo no Sistema</label><input type="date" name="DataProtocoloSistema" value="${d('DataProtocoloSistema') || new Date().toISOString().split('T')[0]}" /></div>
+          <div><label>Data de Protocolo no Sistema</label><input type="date" name="DataProtocoloSistema" value="${d('DataProtocoloSistema') || hojeISO()}" /></div>
           <div><label>Status</label>
             <select name="Status">
               ${STATUS_PROCESSO.map(s => `<option value="${s}" ${processo.Status===s?'selected':''}>${s}</option>`).join('')}
@@ -11362,7 +11417,7 @@ function onPagItemCheck(processoId, key, dataVenc, checked) {
   if (wrap) wrap.style.display = checked ? '' : 'none';
   if (checked) {
     const inp = document.getElementById(`input-pag-data-${key}`);
-    if (inp && !inp.value) inp.value = new Date().toISOString().split('T')[0];
+    if (inp && !inp.value) inp.value = hojeISO();
   }
 }
 
@@ -11468,7 +11523,7 @@ async function _confirmarRenovarCTF(clienteId, tipoRenov) {
   showLoading();
   try {
     const c = await App.graph.getItem(CONFIG.listas.clientes, clienteId);
-    const hoje = new Date().toISOString().split('T')[0];
+    const hoje = hojeISO();
     const novaValidade = addMonths(hoje, 3);
     let hist = [];
     try { hist = JSON.parse(c.HistoricoRenovacoesCTF || '[]'); } catch(e) {}
@@ -11681,7 +11736,7 @@ async function _salvarSIMAF(clienteId, novoSimaf, tipoRenov) {
     const simafList = JSON.parse(cliente.SIMAFs || '[]');
     simafList.push(novoSimaf);
     const histSimaf = JSON.parse(cliente.HistoricoRenovacoesSIMAF || '[]');
-    histSimaf.push({ data: new Date().toISOString().split('T')[0], usuario: getCurrentUserName(), tipo: tipoRenov, propriedade: novoSimaf.NomePropriedade || '' });
+    histSimaf.push({ data: hojeISO(), usuario: getCurrentUserName(), tipo: tipoRenov, propriedade: novoSimaf.NomePropriedade || '' });
     await App.graph.updateItem(CONFIG.listas.clientes, clienteId, {
       SIMAFs: JSON.stringify(simafList),
       HistoricoRenovacoesSIMAF: JSON.stringify(histSimaf),
@@ -12192,7 +12247,7 @@ async function renderOrcamentoForm(clienteId = null, orcId = null) {
           </div>
           <div style="min-width:160px">
             <label>Data do Orçamento</label>
-            <input type="date" id="orc-data-orcamento" style="margin-top:4px" value="${esc((orcExistente?.data || new Date().toISOString().split('T')[0]))}" title="Define a prioridade dos processos quando criados a partir da demanda gerada por este orçamento" />
+            <input type="date" id="orc-data-orcamento" style="margin-top:4px" value="${esc((orcExistente?.data || hojeISO()))}" title="Define a prioridade dos processos quando criados a partir da demanda gerada por este orçamento" />
           </div>
         </div>
         <div id="orc-endereco-panel" style="display:none;margin-bottom:16px"></div>
@@ -12554,7 +12609,7 @@ function copiarMensagemOrcamento() {
 // ------------------------------------------------------------
 function pagOrcFormHTML(pfx, pg) {
   pg = pg || {};
-  const hoje = new Date().toISOString().split('T')[0];
+  const hoje = hojeISO();
   const mod = pg.modalidade || '';
   const formaOpts = (sel) => `<option value="">Selecione...</option>` + FORMAS_PAG_ORC.map(f => `<option value="${f}" ${sel===f?'selected':''}>${f}</option>`).join('');
   const bancoOpts = (sel) => `<option value="">Selecione...</option>` + BANCOS_ORC.map(b => `<option value="${b}" ${sel===b?'selected':''}>${b}</option>`).join('');
@@ -12709,7 +12764,7 @@ async function salvarOrcamento() {
   const parts = (sel?.value || '').split('|');
   const clienteId   = parts[0] || '';
   const clienteNome = parts[1] || '';
-  const dataOrc = document.getElementById('orc-data-orcamento')?.value || new Date().toISOString().split('T')[0];
+  const dataOrc = document.getElementById('orc-data-orcamento')?.value || hojeISO();
 
   const linhas = [];
   let total = 0;
@@ -13038,7 +13093,7 @@ async function aprovarOrcamento(orcId, clienteId, source) {
     const orc = lista.find(o => String(o.id) === String(orcId));
     if (!orc) throw new Error('Orçamento não encontrado.');
     if (orc.status === 'Aprovado') throw new Error('Orçamento já foi aprovado.');
-    const hoje = new Date().toISOString().split('T')[0];
+    const hoje = hojeISO();
     orc.status = 'Aprovado';
     orc.dataAprovacao = hoje;
     orc.aprovadoPor = getCurrentUserName();
@@ -13078,7 +13133,7 @@ async function rejeitarOrcamento(orcId, clienteId, source) {
     if (!orc) throw new Error('Orçamento não encontrado.');
     if (orc.status && orc.status !== 'Pendente') throw new Error('Apenas orçamentos pendentes podem ser rejeitados.');
     orc.status       = 'Rejeitado';
-    orc.dataRejeicao = new Date().toISOString().split('T')[0];
+    orc.dataRejeicao = hojeISO();
     orc.rejeitadoPor = getCurrentUserName();
     await App.graph._writeFile('orcamentos', lista);
     toast('Orçamento rejeitado.', 'success');
@@ -13301,7 +13356,7 @@ function onPagCreditoChange(pfx) {
 }
 
 function renderParcelasEditor(orcId, pg) {
-  const hoje = new Date().toISOString().split('T')[0];
+  const hoje = hojeISO();
   const linhas = pg.parcelas.map((pc, i) => {
     const atrasada = !pc.pago && pc.dataVencimento && pc.dataVencimento < hoje;
     return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);flex-wrap:wrap">
@@ -13325,7 +13380,7 @@ function onParcelaPagoToggle(orcId, i, checked) {
   const dt = document.getElementById(`parc-data-${orcId}-${i}`);
   if (dt) {
     dt.style.display = checked ? '' : 'none';
-    if (checked && !dt.value) dt.value = new Date().toISOString().split('T')[0];
+    if (checked && !dt.value) dt.value = hojeISO();
   }
 }
 
@@ -13430,7 +13485,7 @@ function _cardResumoOperador(op, processos, demandas, orcamentos, opts = {}) {
   // Extra projetado de uma demanda (ainda sem processos criados), a partir dos itens do orçamento
   const extraDemanda = d => {
     const o = orcamentos.find(x => String(x.id) === String(d.orcamentoId));
-    const ratio = ratioDescontoOrcamento(o);
+    const ratio = ratioDescontoOrcamento(o, false); // extra projetado: sem o 5% (regra a partir de Ago/2026)
     return (d.itens || []).reduce((s, item) => {
       const taxa  = TAXAS_PROCESSO[item.tipo] || 0;
       const cheio = Number(item.valor) || 0;
@@ -13768,7 +13823,7 @@ async function delegarDemanda(demandaId, operador) {
       ...arr[idx],
       operador,
       status: 'Aberta',
-      dataDelegacao: new Date().toISOString().split('T')[0],
+      dataDelegacao: hojeISO(),
       delegadoPor: getCurrentUserName(),
     };
     await App.graph._writeFile('demandas', arr);
