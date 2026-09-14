@@ -562,6 +562,7 @@ async function renderDashboard() {
   const vencimentos = [];
   documentos.forEach(d => {
     if (semAnaliseVenc.has(String(d.ClienteId))) return;
+    if (guiaDesconsiderada(d)) return;
     if (d.DataValidade) {
       const dias = daysBetween(d.DataValidade.split('T')[0]);
       if (dias !== null && dias <= limite) {
@@ -596,7 +597,7 @@ async function renderDashboard() {
   vencimentos.sort((a, b) => a.dias - b.dias);
 
   const v60 = [];
-  documentos.forEach(d => { if (semAnaliseVenc.has(String(d.ClienteId))) return; if (d.DataValidade) { const iso = normISO(d.DataValidade); const dias = iso ? daysBetween(iso) : null; if (dias !== null && dias >= 0 && dias <= 60) v60.push({ tipo: d.TipoDocumento, cliente: d.ClienteNome, data: iso, dias }); } });
+  documentos.forEach(d => { if (semAnaliseVenc.has(String(d.ClienteId))) return; if (guiaDesconsiderada(d)) return; if (d.DataValidade) { const iso = normISO(d.DataValidade); const dias = iso ? daysBetween(iso) : null; if (dias !== null && dias >= 0 && dias <= 60) v60.push({ tipo: d.TipoDocumento, cliente: d.ClienteNome, data: iso, dias }); } });
   clientes.forEach(c => { if (naoAnalisaVencimentos(c)) return; if (c.DataValidadeCR) { const iso = normISO(c.DataValidadeCR); const dias = iso ? daysBetween(iso) : null; if (dias !== null && dias >= 0 && dias <= 60) v60.push({ tipo: 'CR', cliente: c.Title, data: iso, dias }); } });
   v60.sort((a, b) => a.dias - b.dias);
 
@@ -855,6 +856,45 @@ function processoTemProtocolo(p) {
 function armaForaDeUso(a) {
   const s = a && a.StatusArma;
   return s === 'Furtada' || s === 'Extraviada';
+}
+
+// Guia de Tráfego "desconsiderada": não entra mais nas listas de validade (fica só como histórico)
+function guiaDesconsiderada(d) {
+  return d && d.TipoDocumento === 'Guia de Tráfego' && d.Desconsiderada === 'sim';
+}
+// Descrição curta de um documento (arma/local/N° GT) para o histórico.
+function descricaoCurtaDoc(d) {
+  if (!d) return '';
+  const partes = [];
+  if (d.ArmaVinculadaDesc) partes.push(d.ArmaVinculadaDesc);
+  if (d.CidadeGuia) partes.push(d.CidadeGuia + (d.UFGuia ? '/' + d.UFGuia : ''));
+  else if (d.NomeClubeTiro) partes.push(d.NomeClubeTiro);
+  if (d.NumeroGT) partes.push('N° GT ' + d.NumeroGT);
+  if (d.NomeFazenda) partes.push(d.NomeFazenda);
+  return partes.join(' · ');
+}
+// Registra uma ação de documento num log central (arquivo documentos_historico.json).
+// Sobrevive a exclusões e alimenta o botão "Histórico" da aba Documentos.
+async function registrarHistDoc(clienteId, doc, acao) {
+  try {
+    const agora = new Date();
+    const entrada = {
+      ts:            agora.toISOString(),
+      data:          agora.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
+      hora:          agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }),
+      usuario:       getCurrentUserName(),
+      clienteId:     String(clienteId),
+      docId:         doc && doc.id ? String(doc.id) : null,
+      tipo:          (doc && doc.TipoDocumento) || '',
+      identificacao: descricaoCurtaDoc(doc),
+      acao,
+    };
+    let lista = [];
+    try { const raw = await App.graph._readFile('documentos_historico'); if (Array.isArray(raw)) lista = raw; } catch (e) {}
+    lista.push(entrada);
+    if (lista.length > 5000) lista = lista.slice(-5000);
+    await App.graph._writeFile('documentos_historico', lista);
+  } catch (e) { console.warn('registrarHistDoc:', e); }
 }
 
 // Tipos que, ao registrar o número de protocolo, passam automaticamente para "Em Análise (Email)"
@@ -2421,7 +2461,10 @@ function renderPerfilDocumentos(docs, clienteId, cliente) {
   return `
     <div class="toolbar">
       <span style="font-size:13px;color:var(--text-muted)">${docs.length} documento(s)</span>
-      ${!isClienteInativo(cliente) ? `<button class="btn btn-primary" onclick="navigate('documentos/novo',{clienteId:'${clienteId}'})"><i class="bi bi-plus-lg"></i> Adicionar Documento</button>` : ''}
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-outline" onclick="verHistoricoDocumentos('${clienteId}')"><i class="bi bi-clock-history"></i> Histórico</button>
+        ${!isClienteInativo(cliente) ? `<button class="btn btn-primary" onclick="navigate('documentos/novo',{clienteId:'${clienteId}'})"><i class="bi bi-plus-lg"></i> Adicionar Documento</button>` : ''}
+      </div>
     </div>
     <div class="card">
       <div class="table-wrapper">
@@ -2431,23 +2474,31 @@ function renderPerfilDocumentos(docs, clienteId, cliente) {
             ? `<tr><td colspan="6"><div class="empty-state"><i class="bi bi-file-earmark-x"></i><p>Nenhum documento cadastrado.</p></div></td></tr>`
             : docs.map(d => {
                 const s = validadeStatus(d.DataValidade ? d.DataValidade.split('T')[0] : null);
+                const ehGuia = d.TipoDocumento === 'Guia de Tráfego';
+                const desconsiderada = guiaDesconsiderada(d);
                 let armaLocal = '—';
                 if (d.TipoDocumento === 'CRAF') {
                   armaLocal = d.ArmaVinculadaDesc ? esc(d.ArmaVinculadaDesc) : '—';
-                } else if (d.TipoDocumento === 'Guia de Tráfego') {
+                } else if (ehGuia) {
                   const arma = d.ArmaVinculadaDesc ? esc(d.ArmaVinculadaDesc) : '';
                   const loc = d.CidadeGuia ? esc(d.CidadeGuia) + (d.UFGuia ? '/' + esc(d.UFGuia) : '') : (d.NomeClubeTiro ? esc(d.NomeClubeTiro) : '');
                   const ngt = d.NumeroGT ? `N° GT: ${esc(d.NumeroGT)}` : '';
                   armaLocal = [arma, loc, ngt].filter(Boolean).join('<br>') || '—';
                 }
-                return `<tr>
+                const statusCell = desconsiderada
+                  ? `<span class="badge badge-gray" title="Não entra mais no controle de validades — fica apenas como histórico"><i class="bi bi-eye-slash me-1"></i>Desconsiderada</span>`
+                  : `<span class="badge ${s.cls}">${s.txt}</span>`;
+                return `<tr${desconsiderada ? ' style="opacity:.6"' : ''}>
                   <td><strong>${esc(d.TipoDocumento||'—')}</strong></td>
                   <td style="font-size:12px">${armaLocal}</td>
                   <td>${fmtDate(d.DataEmissao ? d.DataEmissao.split('T')[0] : '')}</td>
                   <td>${fmtDate(d.DataValidade ? d.DataValidade.split('T')[0] : '')}</td>
-                  <td><span class="badge ${s.cls}">${s.txt}</span></td>
+                  <td>${statusCell}</td>
                   <td><div class="btn-group">
                     ${d.LinkArquivo ? `<a href="${esc(d.LinkArquivo)}" target="_blank" class="btn btn-outline btn-sm"><i class="bi bi-box-arrow-up-right"></i></a>` : ''}
+                    ${ehGuia ? (desconsiderada
+                      ? `<button class="btn btn-outline btn-sm" onclick="reconsiderarGuia('${d.id}','${clienteId}')" title="Voltar a considerar no controle de validades"><i class="bi bi-arrow-counterclockwise"></i> Reconsiderar</button>`
+                      : `<button class="btn btn-outline btn-sm" onclick="desconsiderarGuia('${d.id}','${clienteId}')" title="Desconsiderar esta guia (sai do controle de validades)"><i class="bi bi-eye-slash"></i> Desconsiderar</button>`) : ''}
                     <button class="btn btn-outline btn-sm" onclick="navigate('documentos/editar',{clienteId:'${clienteId}',id:'${d.id}'})"><i class="bi bi-pencil"></i></button>
                     <button class="btn btn-ghost btn-sm" onclick="deletarDocumento('${d.id}','${clienteId}')"><i class="bi bi-trash" style="color:var(--danger)"></i></button>
                   </div></td>
@@ -2463,11 +2514,125 @@ async function deletarDocumento(id, clienteId) {
   if (!confirm('Excluir este documento?')) return;
   showLoading();
   try {
+    const doc = await App.graph.getItem(CONFIG.listas.documentos, id).catch(() => null);
     await App.graph.deleteItem(CONFIG.listas.documentos, id);
+    await registrarHistDoc(clienteId, doc || { id }, 'Excluído');
     App.invalidateCache('documentos');
     toast('Documento excluído.', 'success');
     navigate('clientes/perfil', { id: clienteId, tab: 'documentos' });
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+// Popup de confirmação reutilizável (estilizado). Resolve true/false.
+function confirmarModal({ titulo, mensagem, okLabel = 'Confirmar', okCor = '#2563eb', icone = 'bi-question-circle' }) {
+  return new Promise(resolve => {
+    document.getElementById('modal-confirmar-generico')?.remove();
+    const modal = document.createElement('div');
+    modal.id = 'modal-confirmar-generico';
+    modal.innerHTML = `
+      <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px">
+        <div style="background:#fff;border-radius:12px;padding:24px;max-width:400px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+          <h3 style="margin:0 0 12px;font-size:16px"><i class="bi ${icone} me-2" style="color:${okCor}"></i>${esc(titulo)}</h3>
+          <p style="font-size:13px;color:#374151;margin:0 0 18px;line-height:1.5">${esc(mensagem)}</p>
+          <div style="display:flex;justify-content:flex-end;gap:10px">
+            <button id="cmg-nao" class="btn btn-outline btn-sm">Cancelar</button>
+            <button id="cmg-sim" class="btn btn-sm" style="background:${okCor};color:#fff;border:none">${esc(okLabel)}</button>
+          </div>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    const fechar = (v) => { modal.remove(); resolve(v); };
+    modal.firstElementChild.addEventListener('click', ev => { if (ev.target === modal.firstElementChild) fechar(false); });
+    document.getElementById('cmg-nao').onclick = () => fechar(false);
+    document.getElementById('cmg-sim').onclick = () => fechar(true);
+  });
+}
+
+// Desconsiderar / reconsiderar uma Guia de Tráfego (sai/volta ao controle de validades)
+async function desconsiderarGuia(id, clienteId) {
+  const ok = await confirmarModal({
+    titulo: 'Desconsiderar Guia de Tráfego',
+    mensagem: 'Deseja desconsiderar esta guia? Ela deixará de aparecer no controle de validades e ficará apenas como histórico.',
+    okLabel: 'Desconsiderar', okCor: '#d97706', icone: 'bi-eye-slash',
+  });
+  if (!ok) return;
+  showLoading();
+  try {
+    const doc = await App.graph.getItem(CONFIG.listas.documentos, id).catch(() => null);
+    await App.graph.updateItem(CONFIG.listas.documentos, id, {
+      Desconsiderada: 'sim', DataDesconsiderada: hojeISO(), DesconsideradaPor: getCurrentUserName(),
+    });
+    await registrarHistDoc(clienteId, doc || { id, TipoDocumento: 'Guia de Tráfego' }, 'Desconsiderada');
+    App.invalidateCache('documentos');
+    toast('Guia desconsiderada.', 'success');
+    navigate('clientes/perfil', { id: clienteId, tab: 'documentos' });
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function reconsiderarGuia(id, clienteId) {
+  const ok = await confirmarModal({
+    titulo: 'Reconsiderar Guia de Tráfego',
+    mensagem: 'Deseja voltar a considerar esta guia no controle de validades?',
+    okLabel: 'Reconsiderar', okCor: '#2563eb', icone: 'bi-arrow-counterclockwise',
+  });
+  if (!ok) return;
+  showLoading();
+  try {
+    const doc = await App.graph.getItem(CONFIG.listas.documentos, id).catch(() => null);
+    await App.graph.updateItem(CONFIG.listas.documentos, id, {
+      Desconsiderada: 'nao', DataDesconsiderada: null, DesconsideradaPor: null,
+    });
+    await registrarHistDoc(clienteId, doc || { id, TipoDocumento: 'Guia de Tráfego' }, 'Reconsiderada');
+    App.invalidateCache('documentos');
+    toast('Guia reconsiderada.', 'success');
+    navigate('clientes/perfil', { id: clienteId, tab: 'documentos' });
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+// Popup com o histórico de ações dos documentos do cliente (operador, data e ação)
+async function verHistoricoDocumentos(clienteId) {
+  showLoading();
+  let lista = [];
+  try {
+    const raw = await App.graph._readFile('documentos_historico');
+    if (Array.isArray(raw)) lista = raw.filter(h => String(h.clienteId) === String(clienteId));
+  } catch(e) {} finally { hideLoading(); }
+  lista.sort((a, b) => String(b.ts || '').localeCompare(String(a.ts || '')));
+
+  const corAcao = {
+    'Cadastrado': '#16a34a', 'Editado': '#2563eb', 'Desconsiderada': '#d97706',
+    'Reconsiderada': '#0891b2', 'Excluído': '#dc2626',
+  };
+  const linhas = lista.length
+    ? lista.map(h => {
+        const cor = corAcao[h.acao] || 'var(--text-muted)';
+        const ident = [h.tipo, h.identificacao].filter(Boolean).map(esc).join(' · ');
+        return `<tr>
+          <td style="white-space:nowrap;font-size:12px">${esc(h.data || '')}${h.hora ? ' ' + esc(h.hora) : ''}</td>
+          <td><span class="badge" style="background:${cor};color:#fff;font-size:11px">${esc(h.acao || '—')}</span></td>
+          <td style="font-size:12px">${ident || '—'}</td>
+          <td style="font-size:12px"><span class="badge badge-blue">${esc(h.usuario || '—')}</span></td>
+        </tr>`;
+      }).join('')
+    : `<tr><td colspan="4"><div class="empty-state" style="padding:24px"><i class="bi bi-clock-history"></i><p>Nenhum registro de histórico ainda.</p></div></td></tr>`;
+
+  document.getElementById('modal-hist-docs')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modal-hist-docs';
+  modal.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this) this.remove()">
+      <div style="background:#fff;border-radius:14px;padding:24px;max-width:720px;width:100%;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+          <h3 style="margin:0;font-size:16px"><i class="bi bi-clock-history me-2"></i>Histórico de Documentos</h3>
+          <button onclick="document.getElementById('modal-hist-docs').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:#666;line-height:1">×</button>
+        </div>
+        <div class="table-wrapper"><table>
+          <thead><tr><th>Data</th><th>Ação</th><th>Documento</th><th>Operador</th></tr></thead>
+          <tbody>${linhas}</tbody>
+        </table></div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
 }
 
 // Tempo decorrido do processo: da Data de Protocolo até o Deferimento (ou até hoje, se não deferido).
@@ -3174,8 +3339,15 @@ async function salvarDocumento(e, clienteId, id) {
 
   showLoading();
   try {
-    if (id) { await App.graph.updateItem(CONFIG.listas.documentos, id, fields); toast('Documento atualizado!', 'success'); }
-    else     { await App.graph.createItem(CONFIG.listas.documentos, fields); toast('Documento cadastrado!', 'success'); }
+    if (id) {
+      await App.graph.updateItem(CONFIG.listas.documentos, id, fields);
+      await registrarHistDoc(clienteId, { id, ...fields }, 'Editado');
+      toast('Documento atualizado!', 'success');
+    } else {
+      const novo = await App.graph.createItem(CONFIG.listas.documentos, fields);
+      await registrarHistDoc(clienteId, novo, 'Cadastrado');
+      toast('Documento cadastrado!', 'success');
+    }
     App.invalidateCache('documentos');
     navigate('clientes/perfil', { id: clienteId, tab: 'documentos' });
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
@@ -7048,6 +7220,7 @@ async function renderValidades() {
   documentos.forEach(d => {
     if (!d.DataValidade) return;
     if (semAnaliseVenc.has(String(d.ClienteId))) return;
+    if (guiaDesconsiderada(d)) return;
     const iso = d.DataValidade.split('T')[0];
     const cli = clientes.find(c => String(c.id) === String(d.ClienteId));
     itens.push({ tipo: d.TipoDocumento, cliente: d.ClienteNome || '', data: iso, dias: daysBetween(iso), clienteId: d.ClienteId, celular: cli?.Celular || '', tab: 'documentos' });
