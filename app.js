@@ -905,6 +905,19 @@ const TIPOS_STATUS_EMAIL_AO_PROTOCOLAR = [
   'Correção de dados de arma',
   ...TIPOS_TRANSFERENCIA,
 ];
+// Tipos que, ao registrar o número de protocolo, passam automaticamente para "Aguardando Pagamento GRU"
+const TIPOS_STATUS_GRU_AO_PROTOCOLAR = [
+  'Guia de Tráfego',
+  'Aquisição de Arma SIGMA',
+  'Atualização de Documento de Identificação',
+  'Concessão/Renovação de CR',
+  'Alteração de Endereço',
+  'Inclusão de Atividade',
+  'Exclusão de Atividade',
+  'Renovação de CRAF',
+  'Segunda via de CRAF',
+  'Cancelamento de CR',
+];
 const RESPONSAVEIS = ['Andrieli', 'Geison', 'Janaína', 'Matheus', 'Priscila', 'Simone'];
 const TIPOS_SEM_GRU = ['Defesa de Notificação', 'Mudança de endereço SINARM PF', 'Porte de Arma PF', 'Correção de dados de arma', 'Comunicado de Furto/Extravio'];
 const FORMAS_PAGAMENTO_OPTS = ['Pix', 'Dinheiro', 'Cartão'];
@@ -6673,6 +6686,10 @@ async function salvarDatasProcesso(e, id) {
     });
     // Certos tipos passam automaticamente para "Em Análise (Email)" ao registrar o protocolo
     const mudaParaEmail = TIPOS_STATUS_EMAIL_AO_PROTOCOLAR.includes(proc.TipoProcesso) && proc.Status !== 'Em Análise (Email)';
+    // Outros tipos passam automaticamente para "Aguardando Pagamento GRU" (só se a GRU ainda não foi paga)
+    const mudaParaGRU = !mudaParaEmail && TIPOS_STATUS_GRU_AO_PROTOCOLAR.includes(proc.TipoProcesso)
+      && !proc.GruPaga && proc.Status !== 'Aguardando Pagamento GRU';
+    const novoStatusAuto = mudaParaEmail ? 'Em Análise (Email)' : (mudaParaGRU ? 'Aguardando Pagamento GRU' : null);
     // Ao registrar o protocolo, marca automaticamente todos os itens do checklist
     let checklistProt = null;
     try {
@@ -6687,12 +6704,12 @@ async function salvarDatasProcesso(e, id) {
       DataProtocoloSistema: dataProt,
     };
     if (checklistProt) updates.ChecklistJSON = checklistProt;
-    if (mudaParaEmail) {
-      updates.Status = 'Em Análise (Email)';
+    if (novoStatusAuto) {
+      updates.Status = novoStatusAuto;
       historico.push({
         data:    agora.toLocaleDateString('pt-BR'),
         hora:    agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-        status:  'Em Análise (Email)',
+        status:  novoStatusAuto,
         usuario: usuarioProt
       });
     }
@@ -6703,14 +6720,14 @@ async function salvarDatasProcesso(e, id) {
       window._processoDetalhe.NumeroProtocolo      = numProt;
       window._processoDetalhe.DataProtocoloSistema = dataProt;
       if (checklistProt) window._processoDetalhe.ChecklistJSON = checklistProt;
-      if (mudaParaEmail) window._processoDetalhe.Status = 'Em Análise (Email)';
+      if (novoStatusAuto) window._processoDetalhe.Status = novoStatusAuto;
     }
-    if (mudaParaEmail) {
-      const b = statusBadge('Em Análise (Email)');
+    if (novoStatusAuto) {
+      const b = statusBadge(novoStatusAuto);
       const badge = document.getElementById('status-badge-detalhe');
       if (badge) { badge.className = `badge ${b.cls}`; badge.textContent = b.txt; }
       const selStatus = document.getElementById('sel-status');
-      if (selStatus) selStatus.value = 'Em Análise (Email)';
+      if (selStatus) selStatus.value = novoStatusAuto;
     }
     const body = document.getElementById('historico-status-body');
     if (body) body.innerHTML = renderHistoricoStatus(historico, id);
@@ -7810,7 +7827,11 @@ async function renderPagamentosGRU() {
   const processos = await App.getProcessos();
 
   const STATUS_OCULTA_GRU = ['Parado', 'Processo Futuro', 'Aguardando Documentos', 'Aguardando Assinatura', 'Desistência Cliente'];
-  const gruPendentes = processos.filter(p => !p.GruPaga && !STATUS_FECHADOS.includes(p.Status) && !TIPOS_SEM_GRU.includes(p.TipoProcesso) && !STATUS_OCULTA_GRU.includes(p.Status));
+  // A GRU é independente do pagamento do cliente (orçamento/processo): só olha GruPaga.
+  // Processos já PROTOCOLADOS aparecem sempre (mesmo que o status estivesse num estado "oculto"),
+  // pois passaram da fase de documentos e a taxa da GRU fica pendente.
+  const gruPendentes = processos.filter(p => !p.GruPaga && !STATUS_FECHADOS.includes(p.Status) && !TIPOS_SEM_GRU.includes(p.TipoProcesso)
+    && (!STATUS_OCULTA_GRU.includes(p.Status) || processoTemProtocolo(p)));
   const el = document.getElementById('page-content');
 
   if (!gruPendentes.length) {
