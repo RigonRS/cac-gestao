@@ -7875,6 +7875,10 @@ async function renderPagamentosGRU() {
               <div>
                 <a style="cursor:pointer;color:var(--accent)" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.TipoProcesso||'—')}</a>
                 ${infoGRUProcesso(p) ? `<div style="font-size:11px;color:var(--text-muted);margin-top:1px">${esc(infoGRUProcesso(p))}</div>` : ''}
+                <div style="font-size:11px;color:var(--text-muted);margin-top:2px;display:flex;flex-wrap:wrap;align-items:center;gap:8px">
+                  ${p.Responsavel ? `<span><i class="bi bi-person me-1"></i>${esc(p.Responsavel)}</span>` : ''}
+                  ${p.NumeroProtocolo ? `<span><i class="bi bi-hash"></i>Protocolo: ${esc(p.NumeroProtocolo)}</span>` : ''}
+                </div>
               </div>
               <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
                 <div style="text-align:right;white-space:nowrap">
@@ -13388,6 +13392,7 @@ async function renderOrcamentos() {
 
     const emAberto = todos.filter(o => o.status !== 'Rejeitado' && statusPagamentoOrcamento(o) !== 'pago')
                           .sort((a,b) => (b.data||'').localeCompare(a.data||''));
+    window._orcEmAberto = emAberto; // usado pela impressão dos orçamentos em aberto
 
     function linhaOrc(o, modo) {
       // Cor do valor: verde=pago, vermelho=rejeitado, amarelo escuro=pendente de pagamento
@@ -13458,6 +13463,7 @@ async function renderOrcamentos() {
         <div class="card-header" style="display:flex;align-items:center;gap:10px">
           <h3 style="margin:0"><i class="bi bi-cash-stack me-2"></i>Orçamentos com valores em aberto</h3>
           <span class="badge" style="background:#fee2e2;color:#991b1b;font-size:12px">${lista.length}</span>
+          ${lista.length ? `<button class="btn btn-outline btn-sm" style="margin-left:auto" onclick="imprimirOrcamentosEmAberto()" title="Imprimir a lista de orçamentos com valores em aberto"><i class="bi bi-printer me-1"></i>Imprimir</button>` : ''}
         </div>
         <div class="card-body" style="padding:0">${body}</div>
       </div>`;
@@ -13475,6 +13481,45 @@ async function renderOrcamentos() {
   } catch(e) {
     document.getElementById('page-content').innerHTML = `<div class="empty-state"><i class="bi bi-exclamation-triangle"></i><p>${esc(e.message)}</p></div>`;
   } finally { hideLoading(); }
+}
+
+// Impressão da lista de orçamentos com valores em aberto (página Orçamentos)
+function imprimirOrcamentosEmAberto() {
+  const lista = window._orcEmAberto || [];
+  if (!lista.length) { toast('Nenhum orçamento com valores em aberto para imprimir.', 'warning'); return; }
+  const nomeSituacao = st => st === 'devedor' ? 'Devedor' : st === 'pago_parcial' ? 'Pago Parcial' : 'Em aberto';
+  let totalGeral = 0, totalAberto = 0;
+  const rows = lista.map(o => {
+    const st = statusPagamentoOrcamento(o);
+    const pend = parcelasPendentesOrcamento(o);
+    const emAbertoValor = (o.pagamento && o.pagamento.modalidade === 'parcelado') ? (Number(pend.total) || 0) : (Number(o.total) || 0);
+    totalGeral  += Number(o.total) || 0;
+    totalAberto += emAbertoValor;
+    const servicos = (o.itens || []).map(i => `${i.qtd > 1 ? i.qtd + '× ' : ''}${esc(i.tipo)}`).join('<br>');
+    return `<tr>
+      <td>${esc(o.numero || '—')}</td>
+      <td>${fmtDate(o.data)}</td>
+      <td>${esc(o.clienteNome || '—')}</td>
+      <td>${servicos}</td>
+      <td style="text-align:right">${fmtMoeda(o.total)}</td>
+      <td style="text-align:right">${fmtMoeda(emAbertoValor)}</td>
+      <td>${nomeSituacao(st)}</td>
+    </tr>`;
+  }).join('');
+  const html = `
+    <h1>Orçamentos com Valores em Aberto</h1>
+    <p style="text-align:center;font-size:10pt;margin-bottom:16px">Emitido em ${fmtDate(hojeISO())} · ${lista.length} orçamento(s)</p>
+    <table>
+      <thead><tr><th>Nº</th><th>Data</th><th>Cliente</th><th>Serviços</th><th style="text-align:right">Total</th><th style="text-align:right">Em aberto</th><th>Situação</th></tr></thead>
+      <tbody>${rows}</tbody>
+      <tr>
+        <td colspan="4" style="text-align:right;font-weight:bold">Totais</td>
+        <td style="text-align:right;font-weight:bold">${fmtMoeda(totalGeral)}</td>
+        <td style="text-align:right;font-weight:bold">${fmtMoeda(totalAberto)}</td>
+        <td></td>
+      </tr>
+    </table>`;
+  imprimirDocumento(html, 'Orçamentos com Valores em Aberto');
 }
 
 // ------------------------------------------------------------
