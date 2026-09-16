@@ -8724,6 +8724,7 @@ async function renderConfiguracoes(view) {
   if (view === 'checklists') { window._chkEdit = null; return renderConfigChecklists(); }
   if (view === 'msg-orcamento') return renderConfigMensagemOrcamento();
   if (view === 'info-portal') return renderConfigInfoPortal();
+  if (view === 'avisos-portal') return renderConfigAvisosPortal();
   if (view === 'prioridades') return renderConfigPrioridades();
 
   const el = document.getElementById('page-content');
@@ -8769,6 +8770,13 @@ async function renderConfiguracoes(view) {
           <i class="bi bi-info-circle" style="font-size:36px;color:#0891b2"></i>
           <h3 style="margin:12px 0 6px;font-size:16px">Informações do Portal</h3>
           <p style="font-size:13px;color:var(--text-muted);margin:0">Editar os cards de "Informações importantes" exibidos no Portal do Cliente.</p>
+        </div>
+      </div>
+      <div class="card" style="cursor:pointer" onclick="renderConfiguracoes('avisos-portal')">
+        <div class="card-body" style="text-align:center;padding:28px 16px">
+          <i class="bi bi-megaphone" style="font-size:36px;color:#d97706"></i>
+          <h3 style="margin:12px 0 6px;font-size:16px">Avisos do Portal</h3>
+          <p style="font-size:13px;color:var(--text-muted);margin:0">Mensagens de aviso exibidas no topo do Portal do Cliente (cor, fundo, negrito).</p>
         </div>
       </div>
     </div>`;
@@ -8846,6 +8854,116 @@ async function salvarInfoPortal() {
     await App.graph._writeFile('informacoes_portal', arr);
     window._infoPortalCards = arr;
     toast('Informações do Portal salvas!', 'success');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+// ============================================================
+// CONFIGURAÇÕES — AVISOS DO PORTAL (banner no topo do Portal do Cliente)
+// ============================================================
+const AVISO_PORTAL_PADRAO = { texto: 'AVISO: Confira seus endereços nos Dados Cadastrais e mantenha seu registro regular', cor: '#7c2d12', fundo: '#fef3c7', negrito: true, italico: false, tamanho: 14, alinhamento: 'center' };
+function _normalizarAviso(a) {
+  a = a || {};
+  return {
+    texto:       String(a.texto || ''),
+    cor:         /^#[0-9a-fA-F]{3,8}$/.test(a.cor || '')   ? a.cor   : '#7c2d12',
+    fundo:       /^#[0-9a-fA-F]{3,8}$/.test(a.fundo || '') ? a.fundo : '#fef3c7',
+    negrito:     !!a.negrito,
+    italico:     !!a.italico,
+    tamanho:     Math.min(28, Math.max(10, Number(a.tamanho) || 14)),
+    alinhamento: ['left','center','right'].includes(a.alinhamento) ? a.alinhamento : 'center',
+  };
+}
+function _estiloAviso(a) {
+  return `background:${a.fundo};color:${a.cor};font-weight:${a.negrito?'700':'400'};font-style:${a.italico?'italic':'normal'};font-size:${a.tamanho}px;text-align:${a.alinhamento};padding:12px 16px;border-radius:10px;line-height:1.4`;
+}
+
+async function renderConfigAvisosPortal() {
+  const el = document.getElementById('page-content');
+  el.innerHTML = `<div class="empty-state" style="padding:40px"><div class="spinner"></div></div>`;
+  let lista = [];
+  try { const raw = await App.graph._readFile('avisos_portal'); if (Array.isArray(raw)) lista = raw; } catch(e) {}
+  // Sem configuração ainda → começa com o aviso padrão (o admin pode editar/remover)
+  window._avisosPortal = (lista.length ? lista : [ { ...AVISO_PORTAL_PADRAO } ]).map(_normalizarAviso);
+  _renderAvisosPortalEditor();
+}
+
+function _renderAvisosPortalEditor() {
+  const el = document.getElementById('page-content');
+  const avisos = window._avisosPortal || [];
+  el.innerHTML = `
+    <button class="btn btn-ghost btn-sm" style="margin-bottom:12px" onclick="renderConfiguracoes('menu')"><i class="bi bi-arrow-left me-1"></i>Voltar</button>
+    <div class="card">
+      <div class="card-header">
+        <h3><i class="bi bi-megaphone me-2" style="color:#d97706"></i>Avisos do Portal do Cliente</h3>
+        <button class="btn btn-primary" onclick="salvarAvisosPortal()"><i class="bi bi-floppy me-1"></i>Salvar Alterações</button>
+      </div>
+      <div class="card-body">
+        <p style="font-size:12px;color:var(--text-muted);margin-bottom:14px">Estes avisos aparecem <strong>no topo do Portal</strong>, acima dos botões — na ordem abaixo. Personalize cor do texto, cor de fundo, negrito, itálico, tamanho e alinhamento. Valem para todos os clientes.</p>
+        <div id="avisos-portal-lista">
+          ${avisos.length ? avisos.map((a, i) => _avisoPortalHtml(a, i)).join('') : '<div class="empty-state" style="padding:20px">Nenhum aviso. Clique em "Adicionar aviso".</div>'}
+        </div>
+        <button class="btn btn-outline btn-sm" style="margin-top:12px" onclick="adicionarAvisoPortal()"><i class="bi bi-plus-lg me-1"></i>Adicionar aviso</button>
+      </div>
+    </div>`;
+}
+
+function _avisoPortalHtml(a, i) {
+  const total = (window._avisosPortal || []).length;
+  return `<div style="border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:14px;background:#f8fafc">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+      <span style="font-size:12px;font-weight:700;color:var(--text-muted);flex-shrink:0">#${i+1}</span>
+      <span style="flex:1;font-size:12px;color:var(--text-muted)">Pré-visualização abaixo</span>
+      <button class="btn btn-ghost btn-sm" style="padding:2px 6px" onclick="moverAvisoPortal(${i},-1)" ${i===0?'disabled':''} title="Subir"><i class="bi bi-arrow-up"></i></button>
+      <button class="btn btn-ghost btn-sm" style="padding:2px 6px" onclick="moverAvisoPortal(${i},1)" ${i===total-1?'disabled':''} title="Descer"><i class="bi bi-arrow-down"></i></button>
+      <button class="btn btn-ghost btn-sm" style="padding:2px 6px" onclick="removerAvisoPortal(${i})" title="Remover"><i class="bi bi-trash" style="color:var(--danger)"></i></button>
+    </div>
+    <div id="aviso-prev-${i}" style="${_estiloAviso(a)};margin-bottom:10px">${esc(a.texto) || '<span style="opacity:.5">(prévia do aviso)</span>'}</div>
+    <textarea rows="2" placeholder="Texto do aviso" oninput="window._avisosPortal[${i}].texto=this.value;_atualizarPreviewAviso(${i})" style="width:100%;box-sizing:border-box;font-size:13px;font-family:inherit;padding:10px;border:1px solid var(--border);border-radius:8px;resize:vertical">${esc(a.texto)}</textarea>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-top:10px;font-size:12px">
+      <label style="display:flex;align-items:center;gap:5px">Texto <input type="color" value="${a.cor}" onchange="window._avisosPortal[${i}].cor=this.value;_atualizarPreviewAviso(${i})" style="width:36px;height:26px;border:1px solid var(--border);border-radius:5px;padding:0;cursor:pointer"></label>
+      <label style="display:flex;align-items:center;gap:5px">Fundo <input type="color" value="${a.fundo}" onchange="window._avisosPortal[${i}].fundo=this.value;_atualizarPreviewAviso(${i})" style="width:36px;height:26px;border:1px solid var(--border);border-radius:5px;padding:0;cursor:pointer"></label>
+      <label class="checkbox-item" style="margin:0"><input type="checkbox" ${a.negrito?'checked':''} onchange="window._avisosPortal[${i}].negrito=this.checked;_atualizarPreviewAviso(${i})"> Negrito</label>
+      <label class="checkbox-item" style="margin:0"><input type="checkbox" ${a.italico?'checked':''} onchange="window._avisosPortal[${i}].italico=this.checked;_atualizarPreviewAviso(${i})"> Itálico</label>
+      <label style="display:flex;align-items:center;gap:5px">Tamanho <input type="number" min="10" max="28" value="${a.tamanho}" onchange="window._avisosPortal[${i}].tamanho=Math.min(28,Math.max(10,Number(this.value)||14));_atualizarPreviewAviso(${i})" style="width:56px;padding:4px 6px;border:1px solid var(--border);border-radius:5px"></label>
+      <label style="display:flex;align-items:center;gap:5px">Alinhar
+        <select onchange="window._avisosPortal[${i}].alinhamento=this.value;_atualizarPreviewAviso(${i})" style="padding:4px 6px;border:1px solid var(--border);border-radius:5px">
+          <option value="left" ${a.alinhamento==='left'?'selected':''}>Esquerda</option>
+          <option value="center" ${a.alinhamento==='center'?'selected':''}>Centro</option>
+          <option value="right" ${a.alinhamento==='right'?'selected':''}>Direita</option>
+        </select>
+      </label>
+    </div>
+  </div>`;
+}
+
+function _atualizarPreviewAviso(i) {
+  const a = (window._avisosPortal || [])[i]; if (!a) return;
+  const prev = document.getElementById(`aviso-prev-${i}`);
+  if (!prev) return;
+  prev.setAttribute('style', _estiloAviso(a) + ';margin-bottom:10px');
+  prev.innerHTML = esc(a.texto) || '<span style="opacity:.5">(prévia do aviso)</span>';
+}
+
+function adicionarAvisoPortal() {
+  window._avisosPortal = window._avisosPortal || [];
+  window._avisosPortal.push(_normalizarAviso({ ...AVISO_PORTAL_PADRAO, texto: '' }));
+  _renderAvisosPortalEditor();
+}
+function removerAvisoPortal(i) { window._avisosPortal.splice(i, 1); _renderAvisosPortalEditor(); }
+function moverAvisoPortal(i, dir) {
+  const arr = window._avisosPortal; const j = i + dir;
+  if (j < 0 || j >= arr.length) return;
+  [arr[i], arr[j]] = [arr[j], arr[i]];
+  _renderAvisosPortalEditor();
+}
+async function salvarAvisosPortal() {
+  const arr = (window._avisosPortal || []).map(_normalizarAviso).filter(a => a.texto.trim());
+  showLoading();
+  try {
+    await App.graph._writeFile('avisos_portal', arr);
+    window._avisosPortal = arr;
+    _renderAvisosPortalEditor();
+    toast('Avisos do Portal salvos!', 'success');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
