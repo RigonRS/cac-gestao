@@ -1203,14 +1203,48 @@ const CERTIDOES_CONFIG = [
 // ============================================================
 async function renderClientesList() {
   document.getElementById('page-title').textContent = 'Clientes';
-  const clientes = await App.getClientes();
+  const [clientes, clubes] = await Promise.all([App.getClientes(), App.getClubes().catch(() => [])]);
   clientes.sort((a, b) => (a.Title || '').localeCompare(b.Title || '', 'pt-BR'));
+  const clubesOrd = [...(Array.isArray(clubes) ? clubes : [])].sort((a, b) => (a.Title || '').localeCompare(b.Title || '', 'pt-BR'));
+  window._clientes_filtro = clientes;
 
+  const inputStyle = 'border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px';
   const el = document.getElementById('page-content');
   el.innerHTML = `
     <div class="toolbar">
       <div class="search-bar"><i class="bi bi-search"></i><input id="busca-cliente" placeholder="Buscar por nome ou CPF..." oninput="filtrarClientes()" /></div>
-      <button class="btn btn-primary" onclick="navigate('clientes/novo')"><i class="bi bi-plus-lg"></i> Novo Cliente</button>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-outline" onclick="toggleFiltrosClientes()"><i class="bi bi-funnel"></i> Filtros</button>
+        <button class="btn btn-primary" onclick="navigate('clientes/novo')"><i class="bi bi-plus-lg"></i> Novo Cliente</button>
+      </div>
+    </div>
+    <div class="card" id="filtros-clientes-avancados" hidden style="margin-bottom:12px">
+      <div class="card-body" style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-end;padding:16px">
+        <div>
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Mês de aniversário</label>
+          <select id="filtro-mes-aniv" onchange="filtrarClientes()" style="${inputStyle}">
+            <option value="">Todos</option>
+            ${NOMES_MESES_EXTENSO.map((m, i) => `<option value="${i + 1}">${esc(m)}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px">Clube de tiro</label>
+          <select id="filtro-clube" onchange="filtrarClientes()" style="${inputStyle}">
+            <option value="">Todos</option>
+            ${clubesOrd.map(cl => `<option value="${cl.id}">${esc(cl.Title || '—')}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px" title="Marque uma ou mais — mostra quem possui TODAS as marcadas">Categorias</label>
+          <div class="checkbox-group" style="display:flex;gap:12px;flex-wrap:wrap">
+            <label class="checkbox-item"><input type="checkbox" class="filtro-cat" value="Colecionador" onchange="filtrarClientes()"> Colecionador</label>
+            <label class="checkbox-item"><input type="checkbox" class="filtro-cat" value="Atirador" onchange="filtrarClientes()"> Atirador</label>
+            <label class="checkbox-item"><input type="checkbox" class="filtro-cat" value="Caçador" onchange="filtrarClientes()"> Caçador</label>
+          </div>
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="limparFiltrosClientes()"><i class="bi bi-x-circle"></i> Limpar filtros</button>
+        <span id="clientes-count" style="font-size:12px;color:var(--text-muted);margin-left:auto">${clientes.length} cliente(s)</span>
+      </div>
     </div>
     <div class="card">
       <div class="table-wrapper">
@@ -1223,7 +1257,18 @@ async function renderClientesList() {
         </table>
       </div>
     </div>`;
-  window._clientes_filtro = clientes;
+}
+
+function toggleFiltrosClientes() {
+  const p = document.getElementById('filtros-clientes-avancados');
+  if (p) p.hidden = !p.hidden;
+}
+
+function limparFiltrosClientes() {
+  const mes = document.getElementById('filtro-mes-aniv'); if (mes) mes.value = '';
+  const clube = document.getElementById('filtro-clube'); if (clube) clube.value = '';
+  document.querySelectorAll('.filtro-cat').forEach(c => { c.checked = false; });
+  filtrarClientes();
 }
 
 function checarCadastroCliente(c) {
@@ -1331,11 +1376,20 @@ function renderClientesRows(lista) {
 }
 
 function filtrarClientes() {
-  const q = document.getElementById('busca-cliente').value.toLowerCase();
-  const lista = q ? window._clientes_filtro.filter(c =>
-    (c.Title || '').toLowerCase().includes(q) || (c.CPF || '').includes(q)
-  ) : window._clientes_filtro;
+  const q       = (document.getElementById('busca-cliente')?.value || '').toLowerCase().trim();
+  const mes     = document.getElementById('filtro-mes-aniv')?.value || '';
+  const clubeId = document.getElementById('filtro-clube')?.value || '';
+  const cats    = Array.from(document.querySelectorAll('.filtro-cat:checked')).map(x => x.value);
+
+  let lista = window._clientes_filtro || [];
+  if (q)       lista = lista.filter(c => (c.Title || '').toLowerCase().includes(q) || (c.CPF || '').includes(q));
+  if (mes)     lista = lista.filter(c => { const iso = normISO(c.DataNascimento); return iso && parseInt(iso.slice(5, 7), 10) === parseInt(mes, 10); });
+  if (clubeId) lista = lista.filter(c => String(c.ClubeId || '') === String(clubeId));
+  if (cats.length) lista = lista.filter(c => { const cc = c.Categoria || ''; return cats.every(cat => cc.includes(cat)); });
+
   document.getElementById('tbody-clientes').innerHTML = renderClientesRows(lista);
+  const cnt = document.getElementById('clientes-count');
+  if (cnt) cnt.textContent = `${lista.length} cliente(s)`;
 }
 
 async function confirmarDeleteCliente(id, nome) {
