@@ -10077,8 +10077,10 @@ function waConectar() {
     });
     window._wa.socket = socket;
     // (Re)conectou ao gateway: puxa tudo de novo para recuperar o que chegou enquanto esteve offline
-    socket.on('connect', () => {
-      waCarregarChats();
+    socket.on('connect', async () => {
+      // Carrega a lista ANTES de recarregar a conversa aberta, para o agrupamento
+      // por telefone já estar disponível (evita carregar só uma metade do contato).
+      await waCarregarChats();
       if (window._wa.jidAtivo) waAtualizarConversaAtiva();
     });
     socket.on('status', e => {
@@ -10382,7 +10384,19 @@ function waGrupoDoJid(jid) {
   return (window._wa._grupos || []).find(g => (g.jids || [g.jid]).includes(jid)) || (window._wa.chats || []).find(x => x.jid === jid) || { jid };
 }
 function waJidsDoGrupo(jid) {
-  return (window._wa.gruposMap && window._wa.gruposMap[jid]) || [jid];
+  // Calcula as metades do contato NA HORA, pelo telefone, direto da lista de conversas
+  // (não depende do mapa pré-montado — evita corrida ao abrir/recarregar a conversa).
+  // Assim, abrir por @lid encontra a metade @s.whatsapp.net (mesmo telefone) e vice-versa.
+  const chats = window._wa.chats || [];
+  const telDe = (c) => (c && c.phone) ? String(c.phone).replace(/\D/g, '') : '';
+  const self = chats.find(c => c.jid === jid);
+  const t = telDe(self);
+  const key = t.length >= 8 ? t.slice(-8) : null;
+  const set = new Set([jid]);
+  if (key) chats.forEach(c => { const tc = telDe(c); if (tc.length >= 8 && tc.slice(-8) === key) set.add(c.jid); });
+  const doMapa = window._wa.gruposMap && window._wa.gruposMap[jid];
+  if (doMapa) doMapa.forEach(j => set.add(j));
+  return [...set];
 }
 function waJidPrincipal(jid) {
   const jids = waJidsDoGrupo(jid);
