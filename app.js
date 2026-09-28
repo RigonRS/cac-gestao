@@ -10370,21 +10370,24 @@ function waGrupos() {
     }
   }
   const arr = Object.values(grupos).sort((a, b) => (b.last_ts || 0) - (a.last_ts || 0));
-  const map = {}; arr.forEach(g => { map[g.jid] = g.jids; });
+  // Mapa jid -> todos os jids do grupo, indexado por TODOS os jids (não só o principal).
+  // Assim, abrir a conversa por qualquer metade do contato (@lid OU @s.whatsapp.net)
+  // carrega as mensagens de TODAS as metades — nenhuma mensagem fica escondida.
+  const map = {}; arr.forEach(g => { (g.jids || [g.jid]).forEach(j => { map[j] = g.jids; }); });
   window._wa.gruposMap = map;
   window._wa._grupos = arr;
   return arr;
 }
 function waGrupoDoJid(jid) {
-  return (window._wa._grupos || []).find(g => g.jid === jid) || (window._wa.chats || []).find(x => x.jid === jid) || { jid };
+  return (window._wa._grupos || []).find(g => (g.jids || [g.jid]).includes(jid)) || (window._wa.chats || []).find(x => x.jid === jid) || { jid };
 }
 function waJidsDoGrupo(jid) {
   return (window._wa.gruposMap && window._wa.gruposMap[jid]) || [jid];
 }
 function waJidPrincipal(jid) {
-  const map = window._wa.gruposMap || {};
-  for (const p in map) { if (map[p].includes(jid)) return p; }
-  return jid;
+  const jids = waJidsDoGrupo(jid);
+  // Prefere o jid de telefone (@s.whatsapp.net) para envio; senão, o primeiro do grupo.
+  return jids.find(j => String(j).endsWith('@s.whatsapp.net')) || jids[0] || jid;
 }
 
 function waRenderLista() {
