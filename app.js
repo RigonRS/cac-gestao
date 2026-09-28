@@ -2618,7 +2618,7 @@ function confirmarModal({ titulo, mensagem, okLabel = 'Confirmar', okCor = '#256
 }
 
 // Desconsiderar / reconsiderar uma Guia de Tráfego (sai/volta ao controle de validades)
-async function desconsiderarGuia(id, clienteId) {
+async function desconsiderarGuia(id, clienteId, origem) {
   const ok = await confirmarModal({
     titulo: 'Desconsiderar Guia de Tráfego',
     mensagem: 'Deseja desconsiderar esta guia? Ela deixará de aparecer no controle de validades e ficará apenas como histórico.',
@@ -2634,7 +2634,8 @@ async function desconsiderarGuia(id, clienteId) {
     await registrarHistDoc(clienteId, doc || { id, TipoDocumento: 'Guia de Tráfego' }, 'Desconsiderada');
     App.invalidateCache('documentos');
     toast('Guia desconsiderada.', 'success');
-    navigate('clientes/perfil', { id: clienteId, tab: 'documentos' });
+    if (origem === 'validades') await renderValidades();
+    else navigate('clientes/perfil', { id: clienteId, tab: 'documentos' });
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
@@ -3835,11 +3836,11 @@ async function renderMeusProcessos(tab = 'aprotocolar') {
   const processos = await App.getProcessos();
   const doUsuario = processos.filter(p => p.Responsavel === currentUser);
 
-  // Processos com GRU já paga OU com número de protocolo salvo saem de "A Protocolar"
-  // e passam para "Protocolados"
+  // Só o NÚMERO DE PROTOCOLO tira de "A Protocolar" e passa para "Protocolados".
+  // (GRU paga sozinha não conta — o processo pode ter GRU paga e ainda não estar protocolado.)
   const temProtocolo  = p => processoTemProtocolo(p);
-  const isAProtocolar = p => STATUS_A_PROTOCOLAR.includes(p.Status) && !p.GruPaga && !temProtocolo(p);
-  const isProtocolado = p => STATUS_PROTOCOLADOS.includes(p.Status) || ((p.GruPaga || temProtocolo(p)) && STATUS_A_PROTOCOLAR.includes(p.Status));
+  const isAProtocolar = p => STATUS_A_PROTOCOLAR.includes(p.Status) && !temProtocolo(p);
+  const isProtocolado = p => STATUS_PROTOCOLADOS.includes(p.Status) || (temProtocolo(p) && STATUS_A_PROTOCOLAR.includes(p.Status));
 
   let meus;
   if (tab === 'protocolados') {
@@ -7615,7 +7616,15 @@ async function renderValidades() {
     if (guiaDesconsiderada(d)) return;
     const iso = d.DataValidade.split('T')[0];
     const cli = clientes.find(c => String(c.id) === String(d.ClienteId));
-    itens.push({ tipo: d.TipoDocumento, cliente: d.ClienteNome || '', data: iso, dias: daysBetween(iso), clienteId: d.ClienteId, celular: cli?.Celular || '', tab: 'documentos' });
+    const item = { tipo: d.TipoDocumento, cliente: d.ClienteNome || '', data: iso, dias: daysBetween(iso), clienteId: d.ClienteId, celular: cli?.Celular || '', tab: 'documentos' };
+    if (d.TipoDocumento === 'Guia de Tráfego') {
+      item.eGuia = true;
+      item.docId = d.id;
+      item.armaGuia = d.ArmaVinculadaDesc || '';
+      item.tipoGuia = d.TipoGuia || '';
+      item.localGuia = d.NomeClubeTiro || [d.CidadeGuia, d.UFGuia].filter(Boolean).join('/') || d.EnderecoGuia || '';
+    }
+    itens.push(item);
   });
 
   clientes.forEach(c => {
@@ -7683,6 +7692,7 @@ async function renderValidades() {
           <thead><tr>
             <th onclick="sortValidades('cliente')" style="cursor:pointer;user-select:none;white-space:nowrap">Cliente <span id="sort-icon-cliente"></span></th>
             <th>Documento</th>
+            <th>Arma / Local / Tipo (Guia)</th>
             <th onclick="sortValidades('data')" style="cursor:pointer;user-select:none;white-space:nowrap">Vencimento <span id="sort-icon-data"></span></th>
             <th onclick="sortValidades('dias')" style="cursor:pointer;user-select:none;white-space:nowrap">Situação <span id="sort-icon-dias"></span></th>
             <th></th>
@@ -7755,7 +7765,7 @@ function filtrarValidades(limpar) {
   if (countEl) countEl.textContent = `${itens.length} item(s)`;
 
   if (itens.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state"><i class="bi bi-check-circle"></i><p>Nenhum documento encontrado.</p></div></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state"><i class="bi bi-check-circle"></i><p>Nenhum documento encontrado.</p></div></td></tr>`;
     return;
   }
 
@@ -7771,12 +7781,17 @@ function filtrarValidades(limpar) {
     const btnWa = celularLimpo
       ? `<a href="https://wa.me/55${celularLimpo}?text=${msgWa}" target="_blank" class="btn btn-outline btn-sm" title="Avisar via WhatsApp"><i class="bi bi-whatsapp" style="color:#25D366"></i></a>`
       : `<button class="btn btn-ghost btn-sm" disabled title="Sem telefone cadastrado"><i class="bi bi-whatsapp" style="color:#ccc"></i></button>`;
+    const detalhesGuia = item.eGuia ? esc([item.armaGuia, item.localGuia, item.tipoGuia].filter(Boolean).join(' · ')) : '';
+    const btnDesc = item.eGuia
+      ? `<button class="btn btn-ghost btn-sm" title="Desconsiderar guia das validades" onclick="desconsiderarGuia('${item.docId}','${item.clienteId}','validades')"><i class="bi bi-eye-slash" style="color:#d97706"></i></button>`
+      : '';
     return `<tr style="${c.row}">
       <td><a style="cursor:pointer;color:var(--accent);font-weight:600" onclick="navigate('clientes/perfil',{id:'${item.clienteId}',tab:'${item.tab}'})">${esc(item.cliente)}</a></td>
       <td>${esc(nomeDoc)}</td>
+      <td style="font-size:12px;color:var(--text-muted)">${detalhesGuia}</td>
       <td>${fmtDate(item.data)}</td>
       <td><span class="badge ${c.bg}">${label}</span></td>
-      <td>${btnWa}</td>
+      <td style="white-space:nowrap">${btnWa} ${btnDesc}</td>
     </tr>`;
   }).join('');
 }
