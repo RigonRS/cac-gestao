@@ -14765,26 +14765,70 @@ async function abrirCascataDemanda(demandaId, itemIdx) {
     const restantes = Math.max(0, item.qtd - criados);
     if (restantes < 1) { toast('Todos os processos deste item já foram criados.', 'info'); return; }
     const armas = (await App.getArmas()).filter(a => String(a.ClienteId) === String(d.clienteId));
+    // Prepara o contexto usado pelos campos da Guia (endereços do cliente + clubes)
+    const cliente = await App.graph.getItem(CONFIG.listas.clientes, d.clienteId).catch(() => null);
+    _processoClienteObj = cliente || null;
+    window._clubesCadastrados = await App.getClubes().catch(() => []);
     window._cascataDemanda = { demandaId, itemIdx, criados };
     const eGuia = item.tipo === 'Guia de Tráfego';
     const armaOpts = armas.map(a => `<option value="${a.id}|${esc(a.AtividadeCadastrada||'')}|${esc(a.Marca||'')}|${esc(a.Modelo||'')}">${a.Especie ? esc(a.Especie)+' · ' : ''}${esc(a.Marca||'')} ${esc(a.Modelo||'')}${a.NumeroSerie ? ' ('+esc(a.NumeroSerie)+')' : ''} — ${esc(a.AtividadeCadastrada||'')}</option>`).join('');
-    const guiaOpts = ['Caça','Caça-Treinamento Tiro','Tiro Esportivo','Mudança de Local de Acervo'].map(g => `<option value="${esc(g)}">${esc(g)}</option>`).join('');
-    const linhas = [...Array(restantes)].map((_, r) => `
-      <div style="display:flex;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);flex-wrap:wrap">
-        <span style="min-width:92px;font-weight:600;font-size:13px">Processo ${r+1}</span>
-        <select id="casc-arma-${r}" style="flex:1;min-width:220px;font-size:12px">
-          <option value="">— Selecionar arma (deixe em branco para pular) —</option>
-          ${armaOpts}
-        </select>
-        ${eGuia ? `<select id="casc-guia-${r}" style="min-width:180px;font-size:12px" title="Tipo de Guia">${guiaOpts}</select>` : ''}
-      </div>`).join('');
+    const clubeOpts = (window._clubesCadastrados || []).slice().sort((a,b)=>(a.Title||'').localeCompare(b.Title||'','pt-BR')).map(cl => `<option value="${cl.id}">${esc(cl.Title)}</option>`).join('');
+    const endOrigemOpts = buildEndOrigemGuiaOpts();
+    const endClienteOpts = buildEndClienteOpts();
+
+    // Linha simples (CRAF/2ª via): só a arma. Linha completa (Guia): todos os campos.
+    const rowHTML = (r) => {
+      const armaSel = `<select id="casc-arma-${r}" onchange="onCascArma(${r},this.value)" style="width:100%"><option value="">— Selecionar arma (deixe em branco para pular) —</option>${armaOpts}</select>`;
+      if (!eGuia) {
+        return `<div style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px">
+          <div style="font-weight:600;font-size:13px;margin-bottom:6px">Processo ${r+1}</div>
+          <label style="font-size:12px">Arma</label>${armaSel}
+        </div>`;
+      }
+      return `<div style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px">
+        <div style="font-weight:600;font-size:13px;margin-bottom:8px">Processo ${r+1}</div>
+        <div class="form-grid">
+          <div><label>Arma</label>${armaSel}</div>
+          <div><label>Tipo de Guia</label>
+            <select id="casc-guia-${r}" onchange="onCascGuiaTipo(${r},this.value)">
+              <option value="">Selecione...</option>
+              <option>Caça</option><option>Caça-Treinamento Tiro</option><option>Tiro Esportivo</option><option>Mudança de Local de Acervo</option>
+            </select>
+          </div>
+        </div>
+        <div id="casc-caca-${r}" style="display:none;margin-top:10px"><div class="form-grid">
+          <div><label>Cidade</label><input id="casc-cidade-${r}" /></div>
+          <div><label>UF</label><input id="casc-uf-${r}" maxlength="2" style="text-transform:uppercase" /></div>
+        </div></div>
+        <div id="casc-clube-${r}" style="display:none;margin-top:10px"><div class="form-grid">
+          <div style="grid-column:span 2"><label>Clube de Tiro</label>
+            <select id="casc-clubesel-${r}" onchange="preencherClubeCasc(${r},this.value)"><option value="">Digitar manualmente...</option>${clubeOpts}</select></div>
+          <div><label>Nome do Clube de Tiro</label><input id="casc-nomeClube-${r}" /></div>
+          <div><label>CR do Clube</label><input id="casc-crClube-${r}" /></div>
+          <div style="grid-column:span 2"><label>Endereço do Clube</label><input id="casc-enderecoClube-${r}" /></div>
+        </div></div>
+        ${endOrigemOpts ? `<div id="casc-origem-${r}" style="margin-top:10px"><div class="form-grid">
+          <div style="grid-column:span 2"><label>Endereço de Origem da Guia</label><select id="casc-endOrigem-${r}">${endOrigemOpts}</select></div>
+        </div></div>` : ''}
+        <div id="casc-mudanca-${r}" style="display:none;margin-top:10px"><div class="form-grid">
+          <div style="grid-column:span 2"><label>Endereço de Origem</label>
+            <select id="casc-mudsel-o-${r}" onchange="onCascMudanca(${r},'origem',this.value)"><option value="">Selecione...</option>${endClienteOpts}<option value="__manual__">Digitar manualmente...</option></select>
+            <input id="casc-endMudOrigem-${r}" placeholder="Endereço de origem" style="margin-top:6px" readonly /></div>
+          <div style="grid-column:span 2"><label>Endereço de Destino</label>
+            <select id="casc-mudsel-d-${r}" onchange="onCascMudanca(${r},'destino',this.value)"><option value="">Selecione...</option>${endClienteOpts}<option value="__manual__">Digitar manualmente...</option></select>
+            <input id="casc-endMudDestino-${r}" placeholder="Endereço de destino" style="margin-top:6px" readonly /></div>
+        </div></div>
+      </div>`;
+    };
+    const linhas = [...Array(restantes)].map((_, r) => rowHTML(r)).join('');
     const modal = document.createElement('div');
     modal.id = 'modal-cascata-demanda';
     modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
     modal.innerHTML = `
-      <div style="background:#fff;border-radius:12px;padding:22px;max-width:660px;width:100%;max-height:88vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+      <div style="background:#fff;border-radius:12px;padding:22px;max-width:700px;width:100%;max-height:88vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)">
         <h3 style="margin:0 0 4px;font-size:16px"><i class="bi bi-list-check me-2" style="color:var(--accent)"></i>Abrir Processos — ${esc(item.tipo)}</h3>
-        <p style="font-size:12.5px;color:var(--text-muted);margin:0 0 14px">Demanda ${esc(d.numero||'')} · ${esc(d.clienteNome||'')} · ${restantes} processo(s) a criar. Selecione a arma de cada um. Deixe em branco os que não quiser criar agora — a demanda continua aberta para eles.</p>
+        <p style="font-size:12.5px;color:var(--text-muted);margin:0 0 12px">Demanda ${esc(d.numero||'')} · ${esc(d.clienteNome||'')} · ${restantes} processo(s) a criar. Deixe a arma em branco nos que não quiser criar agora — a demanda continua aberta para eles.</p>
+        ${item.obs ? `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:12.5px;color:#92400e"><i class="bi bi-chat-left-text me-1"></i><strong>Observação da demanda:</strong> ${esc(item.obs)}</div>` : ''}
         ${linhas}
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
           <button class="btn btn-outline btn-sm" onclick="document.getElementById('modal-cascata-demanda').remove()">Cancelar</button>
@@ -14817,8 +14861,22 @@ async function criarProcessosCascata() {
     for (let r = 0; r < restantes; r++) {
       const arma = document.getElementById(`casc-arma-${r}`)?.value || '';
       if (!arma) { emBranco++; continue; }
-      const tipoGuia = eGuia ? (document.getElementById(`casc-guia-${r}`)?.value || '') : null;
-      paraCriar.push({ arma, tipoGuia });
+      let tipoGuia = null;
+      const dadosEsp = { armaId: arma };
+      if (eGuia) {
+        const g = (id) => (document.getElementById(id)?.value || '').trim();
+        tipoGuia = document.getElementById(`casc-guia-${r}`)?.value || '';
+        if (tipoGuia) dadosEsp.tipoGuia = tipoGuia;
+        const cidade = g(`casc-cidade-${r}`);          if (cidade) dadosEsp.cidadeGuia = cidade;
+        const uf = g(`casc-uf-${r}`);                   if (uf) dadosEsp.ufGuia = uf.toUpperCase();
+        const nomeClube = g(`casc-nomeClube-${r}`);     if (nomeClube) dadosEsp.nomeClube = nomeClube;
+        const crClube = g(`casc-crClube-${r}`);         if (crClube) dadosEsp.crClube = crClube;
+        const endClube = g(`casc-enderecoClube-${r}`);  if (endClube) dadosEsp.enderecoClube = endClube;
+        const endOrigem = g(`casc-endOrigem-${r}`);     if (endOrigem) dadosEsp.endOrigemGuia = endOrigem;
+        const endMudO = g(`casc-endMudOrigem-${r}`);    if (endMudO) dadosEsp.endMudancaOrigem = endMudO;
+        const endMudD = g(`casc-endMudDestino-${r}`);   if (endMudD) dadosEsp.endMudancaDestino = endMudD;
+      }
+      paraCriar.push({ arma, tipoGuia, dadosEsp });
     }
     if (!paraCriar.length) { toast('Selecione a arma de ao menos um processo.', 'warning'); return; }
     if (emBranco > 0) {
@@ -14836,8 +14894,7 @@ async function criarProcessosCascata() {
     let idxGlobal = criados;   // posição para o valor do CRAF (1º = R$450, demais = R$300)
     for (const linha of paraCriar) {
       const valorProc = eCraf ? (idxGlobal === 0 ? CRAF_RENOV_BASE : CRAF_RENOV_ADICIONAL) : (Number(item.valor) || 0);
-      const dadosEsp = { armaId: linha.arma };
-      if (eGuia && linha.tipoGuia) dadosEsp.tipoGuia = linha.tipoGuia;
+      const dadosEsp = linha.dadosEsp || { armaId: linha.arma };
       const checklist = buildChecklistItems(item.tipo, eGuia ? (linha.tipoGuia || null) : null);
       const fields = {
         Title:        `${item.tipo} — ${cliente.Title || ''}`,
@@ -14863,6 +14920,46 @@ async function criarProcessosCascata() {
     await verificarConclusaoDemanda(demandaId);
     await renderMinhasDemandas();
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+// Handlers das linhas de Guia na cascata (versão por-linha do formulário de processo)
+function onCascArma(r, val) {
+  const sel = document.getElementById(`casc-guia-${r}`);
+  if (!sel) return; // linhas de CRAF não têm tipo de guia
+  const atividade = (val || '').split('|')[1] || '';
+  let opts;
+  if (atividade === 'Caçador')       opts = ['Caça', 'Caça-Treinamento Tiro', 'Mudança de Local de Acervo'];
+  else if (atividade === 'Atirador') opts = ['Tiro Esportivo', 'Mudança de Local de Acervo'];
+  else                               opts = ['Caça', 'Caça-Treinamento Tiro', 'Tiro Esportivo', 'Mudança de Local de Acervo'];
+  const atual = sel.value;
+  sel.innerHTML = '<option value="">Selecione...</option>' + opts.map(o => `<option ${o === atual ? 'selected' : ''}>${o}</option>`).join('');
+  if (!opts.includes(atual)) { sel.value = ''; onCascGuiaTipo(r, ''); }
+}
+function onCascGuiaTipo(r, tipo) {
+  const show = (id, on) => { const el = document.getElementById(id); if (el) el.style.display = on ? '' : 'none'; };
+  const isMud = tipo === 'Mudança de Local de Acervo';
+  show(`casc-caca-${r}`, tipo === 'Caça');
+  show(`casc-clube-${r}`, tipo === 'Caça-Treinamento Tiro' || tipo === 'Tiro Esportivo');
+  show(`casc-mudanca-${r}`, isMud);
+  show(`casc-origem-${r}`, !isMud);
+}
+function preencherClubeCasc(r, clubeId) {
+  const nomeEl = document.getElementById(`casc-nomeClube-${r}`);
+  const crEl   = document.getElementById(`casc-crClube-${r}`);
+  const endEl  = document.getElementById(`casc-enderecoClube-${r}`);
+  if (!clubeId) { if (nomeEl) nomeEl.value=''; if (crEl) crEl.value=''; if (endEl) endEl.value=''; return; }
+  const cl = (window._clubesCadastrados || []).find(c => String(c.id) === String(clubeId));
+  if (!cl) return;
+  if (nomeEl) nomeEl.value = cl.Title || '';
+  if (crEl)   crEl.value   = cl.CertificadoRegistro || '';
+  if (endEl)  endEl.value  = cl.Endereco || '';
+}
+function onCascMudanca(r, qual, val) {
+  const inp = document.getElementById(qual === 'origem' ? `casc-endMudOrigem-${r}` : `casc-endMudDestino-${r}`);
+  if (!inp) return;
+  if (val === '__manual__') { inp.value = ''; inp.readOnly = false; inp.focus(); }
+  else if (val === '')      { inp.value = ''; inp.readOnly = true; }
+  else                      { inp.value = val; inp.readOnly = true; }
 }
 
 // ============================================================
