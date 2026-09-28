@@ -1954,6 +1954,7 @@ async function renderClientePerfil(id, tab = 'dados') {
     { key:'armas',      label:`Armas (${armas.length})`,       icon:'bi-shield-fill' },
     ...(isCacador ? [{ key:'ibama', label:'IBAMA', icon:'bi-tree-fill' }] : []),
     { key:'documentos',  label:`Documentos (${documentos.length})`, icon:'bi-file-earmark-text' },
+    { key:'emissao',     label:'Emissão Docs',                      icon:'bi-file-earmark-medical' },
     { key:'processos',   label:`Processos (${processos.length})`,   icon:'bi-folder2-open' },
     { key:'pagamentos',  label:'Pagamentos',                        icon:'bi-cash-coin' },
     { key:'orcamentos',  label:`Orçamentos (${numOrcamentos})`,     icon:'bi-calculator' },
@@ -1966,6 +1967,7 @@ async function renderClientePerfil(id, tab = 'dados') {
   else if (tab === 'armas')      tabContent = renderPerfilArmas(armas, id, cliente);
   else if (tab === 'ibama')      tabContent = renderPerfilIBAMA(cliente);
   else if (tab === 'documentos') tabContent = renderPerfilDocumentos(documentos, id, cliente);
+  else if (tab === 'emissao')    tabContent = renderPerfilEmissaoDocs(cliente, id);
   else if (tab === 'processos')  tabContent = renderPerfilProcessos(processos, id);
   else if (tab === 'pagamentos') { const _od = await _carregarOrcamentosDemandas(); const _cred = await _carregarCreditos(); tabContent = renderPerfilPagamentos(processos, id, _od.orcamentos, _od.demandas, _cred); }
   else if (tab === 'orcamentos') tabContent = await renderPerfilOrcamentos(id);
@@ -5043,7 +5045,9 @@ async function verificarConclusaoDemanda(demandaId) {
   } catch(e) { console.error('verificarConclusaoDemanda:', e); }
 }
 
-function _certidaoDataDeCliente(c) {
+function _certidaoDataDeCliente(c, usarEnd2) {
+  const s = usarEnd2 ? '2' : '1';
+  const ufField = usarEnd2 ? 'UF2Endereco' : 'UF1Endereco';
   return {
     cpf:            c.CPF || '',
     nome:           c.Title || '',
@@ -5053,13 +5057,13 @@ function _certidaoDataDeCliente(c) {
     rg:             c.RG || '',
     orgaoEmissor:   c.OrgaoEmissor || '',
     ufRG:           c.UFDoc || '',
-    endereco:       c.Endereco1 || '',
-    numero:         c.Numero1 || '',
-    complemento:    c.Complemento1 || '',
-    bairro:         c.Bairro1 || '',
-    cidade:         c.Cidade1 || '',
-    uf:             c.UF1Endereco || '',
-    cep:            c.CEP1 || '',
+    endereco:       c['Endereco' + s] || '',
+    numero:         c['Numero' + s] || '',
+    complemento:    c['Complemento' + s] || '',
+    bairro:         c['Bairro' + s] || '',
+    cidade:         c['Cidade' + s] || '',
+    uf:             c[ufField] || '',
+    cep:            c['CEP' + s] || '',
   };
 }
 
@@ -5249,6 +5253,196 @@ async function gerarProcuracao() {
       </div>`;
     imprimirDocumento(html, 'Procuração', '@page{margin:0}');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+// ============================================================
+// EMISSÃO DE DOCUMENTOS — aba no perfil do cliente
+// Emite direto pelos dados do cliente (sem depender de um processo aberto).
+// Se o cliente tiver 2 endereços cadastrados, pergunta qual usar.
+// ============================================================
+const DOCS_EMISSAO = [
+  { tipo: 'cert:Federal',       label: 'Certidão Federal',    sub: 'Justiça Federal (TRF4)',       icon: 'bi-box-arrow-up-right', acao: 'Emitir',   usaEndereco: true },
+  { tipo: 'cert:Estadual',      label: 'Certidão Estadual',   sub: 'Justiça Estadual (TJRS)',      icon: 'bi-box-arrow-up-right', acao: 'Emitir',   usaEndereco: true },
+  { tipo: 'cert:Militar',       label: 'Certidão Militar',    sub: 'Justiça Militar (STM)',        icon: 'bi-box-arrow-up-right', acao: 'Emitir',   usaEndereco: true },
+  { tipo: 'cert:Eleitoral',     label: 'Certidão Eleitoral',  sub: 'Crimes Eleitorais (TSE)',      icon: 'bi-box-arrow-up-right', acao: 'Emitir',   usaEndereco: true },
+  { tipo: 'cert:Polícia Civil', label: 'Certidão Civil',      sub: 'Polícia Civil (RS)',           icon: 'bi-box-arrow-up-right', acao: 'Emitir',   usaEndereco: true },
+  { tipo: 'procuracao',         label: 'Procuração',          sub: 'Documento assinado (PDF)',     icon: 'bi-file-earmark-text',  acao: 'Gerar PDF', usaEndereco: true },
+  { tipo: 'anexoC',             label: 'Anexo C',             sub: 'Declaração (PDF)',             icon: 'bi-file-earmark-text',  acao: 'Gerar PDF', usaEndereco: true },
+  { tipo: 'dsa',                label: 'DSA',                 sub: 'Segurança do Acervo (PDF)',    icon: 'bi-file-earmark-text',  acao: 'Gerar PDF', usaEndereco: true },
+];
+
+// true se o cliente tem um 2º endereço com conteúdo (logradouro ou cidade preenchidos)
+function _temSegundoEndereco(c) {
+  return !!((c.Endereco2 || '').trim() || (c.Cidade2 || '').trim());
+}
+// Resumo curto de um endereço do cliente (para exibir na escolha)
+function _enderecoResumoCliente(c, usarEnd2) {
+  const s = usarEnd2 ? '2' : '1';
+  const uf = usarEnd2 ? (c.UF2Endereco || '') : (c.UF1Endereco || '');
+  return [c['Endereco' + s], c['Numero' + s], c['Bairro' + s], c['Cidade' + s], uf, c['CEP' + s]].filter(Boolean).join(', ') || '(vazio)';
+}
+// Dados do cliente para preencher os documentos (Anexo C / DSA / Procuração), escolhendo o endereço
+function _clienteDocData(c, usarEnd2) {
+  const s = usarEnd2 ? '2' : '1';
+  const ufField = usarEnd2 ? 'UF2Endereco' : 'UF1Endereco';
+  return {
+    nome: c.Title || '', cpf: c.CPF || '',
+    nat: c.Naturalidade || '', ufNat: c.UFNaturalidade || '',
+    dataNasc: c.DataNascimento ? fmtDate(c.DataNascimento) : '',
+    profissao: c.Profissao || '',
+    rg: c.RG || '', orgao: c.OrgaoEmissor || '', ufRG: c.UFDoc || '',
+    end: c['Endereco' + s] || '', num: c['Numero' + s] || '', compl: c['Complemento' + s] || '',
+    bairro: c['Bairro' + s] || '', cidade: c['Cidade' + s] || '',
+    uf: c[ufField] || '', cep: c['CEP' + s] || '',
+    nacionalidade: c.Nacionalidade || '', categoria: c.Categoria || '',
+  };
+}
+function _nacionalidadeExtenso(nac) {
+  return (nac || '').toLowerCase().includes('brasil') ? 'Brasileiro(a)' : (nac || '');
+}
+
+function renderPerfilEmissaoDocs(cliente, id) {
+  window._clienteEmissaoDocs = cliente;              // usado pelos botões desta aba
+  const temEnd2 = _temSegundoEndereco(cliente);
+  const cards = DOCS_EMISSAO.map(d => `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border:1px solid var(--border);border-radius:8px;background:#fff">
+      <div style="display:flex;align-items:center;gap:10px;min-width:0">
+        <i class="bi ${d.icon}" style="font-size:18px;color:var(--accent)"></i>
+        <div style="min-width:0">
+          <div style="font-weight:600;font-size:14px">${esc(d.label)}</div>
+          <div style="font-size:12px;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(d.sub)}</div>
+        </div>
+      </div>
+      <button class="btn btn-sm" style="background:var(--accent);color:#fff;border:none;white-space:nowrap" onclick="emitirDocCliente('${escJs(d.tipo)}')"><i class="bi ${d.icon} me-1"></i>${esc(d.acao)}</button>
+    </div>`).join('');
+
+  return `
+    <div class="card">
+      <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+        <h3><i class="bi bi-file-earmark-medical me-2"></i>Emissão de Documentos</h3>
+        <button class="btn btn-sm" onclick="togglePainelCertidoes()" title="Instalar bookmarklet de certidões" style="background:#b45309;color:#fff;border-color:#b45309"><i class="bi bi-bookmark-plus me-1"></i>Bookmarklet Certidões</button>
+      </div>
+      <div id="painel-certidoes" style="display:none;border-top:1px solid var(--border)"></div>
+      <div class="card-body">
+        ${temEnd2 ? `<div style="background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;border-radius:8px;padding:8px 12px;font-size:12.5px;margin-bottom:12px"><i class="bi bi-info-circle me-1"></i>Este cliente tem <strong>2 endereços</strong> cadastrados. Ao emitir, será perguntado qual usar.</div>` : ''}
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px">
+          ${cards}
+        </div>
+        <div style="font-size:11.5px;color:var(--text-muted);margin-top:14px"><i class="bi bi-lightbulb me-1"></i>As <strong>Certidões</strong> abrem o site oficial e copiam os dados do cliente — cole com o bookmarklet. <strong>Procuração</strong>, <strong>Anexo C</strong> e <strong>DSA</strong> geram o PDF pronto para impressão.</div>
+      </div>
+    </div>`;
+}
+
+// Ponto de entrada dos botões: decide se pergunta o endereço antes de emitir
+function emitirDocCliente(tipo) {
+  const c = window._clienteEmissaoDocs;
+  if (!c) { toast('Cliente não carregado.', 'warning'); return; }
+  if (!_temSegundoEndereco(c)) { _executarEmissaoCliente(tipo, false); return; }
+  const modal = document.createElement('div');
+  modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center';
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:10px;padding:22px;max-width:460px;width:92%;box-shadow:0 8px 32px rgba(0,0,0,.2)">
+      <h3 style="margin:0 0 8px;font-size:16px"><i class="bi bi-geo-alt me-2" style="color:var(--accent)"></i>Qual endereço utilizar?</h3>
+      <p style="font-size:13px;color:var(--text-muted);margin:0 0 16px">O cliente possui 2 endereços cadastrados. Escolha qual usar neste documento.</p>
+      <button class="btn btn-outline" style="width:100%;text-align:left;margin-bottom:8px;display:block;padding:10px 12px" onclick="this.closest('[style*=fixed]').remove();_executarEmissaoCliente('${escJs(tipo)}',false)">
+        <strong>1° Endereço</strong><br><span style="font-size:12px;color:var(--text-muted)">${esc(_enderecoResumoCliente(c, false))}</span>
+      </button>
+      <button class="btn btn-outline" style="width:100%;text-align:left;margin-bottom:12px;display:block;padding:10px 12px" onclick="this.closest('[style*=fixed]').remove();_executarEmissaoCliente('${escJs(tipo)}',true)">
+        <strong>2° Endereço</strong><br><span style="font-size:12px;color:var(--text-muted)">${esc(_enderecoResumoCliente(c, true))}</span>
+      </button>
+      <div style="text-align:right"><button class="btn btn-outline btn-sm" onclick="this.closest('[style*=fixed]').remove()">Cancelar</button></div>
+    </div>`;
+  document.body.appendChild(modal);
+  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+}
+
+async function _executarEmissaoCliente(tipo, usarEnd2) {
+  const c = window._clienteEmissaoDocs;
+  if (!c) return;
+  try {
+    if (tipo.startsWith('cert:')) return await _abrirCertidaoCliente(tipo.slice(5), c, usarEnd2);
+    if (tipo === 'anexoC')     return await _gerarAnexoCCliente(c, usarEnd2);
+    if (tipo === 'dsa')        return await _gerarDSACliente(c, usarEnd2);
+    if (tipo === 'procuracao') return await _gerarProcuracaoCliente(c, usarEnd2);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function _abrirCertidaoCliente(keyword, c, usarEnd2) {
+  const cfg = CERTIDOES_CONFIG.find(x => x.keyword === keyword);
+  if (!cfg) return;
+  const data = _certidaoDataDeCliente(c, usarEnd2);
+  try { await navigator.clipboard.writeText(JSON.stringify(data)); } catch (e) {}
+  window.open(cfg.url, '_blank');
+  toast(`Dados de ${data.nome || data.cpf} copiados. Use o bookmarklet no site.`, 'info');
+}
+
+async function _gerarAnexoCCliente(c, usarEnd2) {
+  showLoading();
+  try {
+    const d = _clienteDocData(c, usarEnd2);
+    const endFmt = [d.end, d.num ? `n° ${d.num}` : '', d.compl, d.bairro, d.cidade, d.uf, d.cep ? `CEP ${d.cep}` : ''].filter(Boolean).join(', ');
+    const hoje = hojeISO();
+    const html = `
+      <h2>DECLARAÇÃO DE INEXISTÊNCIA DE INQUÉRITOS POLICIAIS<br>OU PROCESSOS CRIMINAIS</h2>
+      <p>Eu, <strong>${esc(d.nome)}</strong>, ${esc(_nacionalidadeExtenso(d.nacionalidade))}, ${esc(d.profissao)}, natural de
+      ${esc(d.nat)}${d.ufNat ? '/' + esc(d.ufNat) : ''}, nascido em ${esc(d.dataNasc)}, com endereço em
+      ${esc(endFmt)}, portador do RG ${esc(d.rg)}${d.orgao ? ' ' + esc(d.orgao) : ''}${d.ufRG ? '/' + esc(d.ufRG) : ''} e CPF nº ${esc(d.cpf)},
+      declaro que não existem inquéritos policiais ou processos criminais em meu nome, tanto no estado de domicílio quanto nos demais entes federativos.</p>
+      <p style="text-align:center;margin-top:48px">${esc(d.cidade)}${d.uf ? '/' + esc(d.uf) : ''}, ${dataPorExtenso(hoje)}</p>
+      <div class="assinatura"><div class="assinatura-linha"></div><div><strong>${esc(d.nome)}</strong></div><div>REQUERENTE</div></div>`;
+    imprimirDocumento(html, 'Anexo C — Declaração');
+  } finally { hideLoading(); }
+}
+
+async function _gerarDSACliente(c, usarEnd2) {
+  showLoading();
+  try {
+    const d = _clienteDocData(c, usarEnd2);
+    const categorias = (d.categoria || 'CAC').split(',').map(s => s.trim()).filter(Boolean).join(', ') || 'CAC';
+    const endFmt = [d.end, d.num ? `n° ${d.num}` : '', d.compl, d.bairro, d.cidade, d.uf, d.cep ? `CEP ${d.cep}` : ''].filter(Boolean).join(', ');
+    const hoje = hojeISO();
+    const html = `
+      <h2>DECLARAÇÃO DE SEGURANÇA DO ACERVO (DSA) — ENDEREÇO DE ACERVO</h2>
+      <p>Eu, <strong>${esc(d.nome)}</strong>, ${esc(_nacionalidadeExtenso(d.nacionalidade))}, ${esc(d.profissao)}, natural de
+      ${esc(d.nat)}${d.ufNat ? '/' + esc(d.ufNat) : ''}, nascido em ${esc(d.dataNasc)}, com endereço em
+      ${esc(endFmt)}, portador do RG ${esc(d.rg)}${d.orgao ? ' ' + esc(d.orgao) : ''}${d.ufRG ? '/' + esc(d.ufRG) : ''} e CPF nº ${esc(d.cpf)},
+      DECLARO, para os devidos fins <strong>JUNTO À POLÍCIA FEDERAL</strong> que o local de guarda do meu acervo de
+      <strong>${esc(categorias)}</strong> possui cofre ou lugar seguro, com tranca, para armazenamento das armas de fogo desmuniciadas de que sou proprietário,
+      e de que adotarei as medidas necessárias para impedir que menor de dezoito anos de idade ou pessoa civilmente incapaz se apodere de arma de fogo sob
+      minha posse ou de minha propriedade, observado o disposto no art. 13 da Lei nº 10.826, de 2003.</p>
+      <p style="text-align:center;margin-top:48px">${esc(d.cidade)}${d.uf ? '/' + esc(d.uf) : ''}, ${dataPorExtenso(hoje)}</p>
+      <div class="assinatura"><div class="assinatura-linha"></div><div><strong>${esc(d.nome)}</strong></div><div>REQUERENTE</div></div>`;
+    imprimirDocumento(html, 'DSA — Declaração de Segurança do Acervo');
+  } finally { hideLoading(); }
+}
+
+async function _gerarProcuracaoCliente(c, usarEnd2) {
+  showLoading();
+  try {
+    const d = _clienteDocData(c, usarEnd2);
+    const endFmt = [d.end, d.num ? `n° ${d.num}` : '', d.compl, d.bairro, d.cidade, d.uf, d.cep ? `CEP ${d.cep}` : ''].filter(Boolean).join(', ');
+    const hoje = hojeISO();
+    const html = `
+      <div style="text-align:right;font-size:10pt;color:#555;margin-bottom:8px">Data de Emissão: ${fmtDate(hoje)}</div>
+      <h1>PROCURAÇÃO</h1>
+      <p><strong>Outorgante</strong> Eu, <strong>${esc(d.nome)}</strong>, ${esc(_nacionalidadeExtenso(d.nacionalidade))}, ${esc(d.profissao)},
+      natural de ${esc(d.nat)}${d.ufNat ? '/' + esc(d.ufNat) : ''}, nascido em ${esc(d.dataNasc)},
+      com endereço em ${esc(endFmt)},
+      portador do RG ${esc(d.rg)}${d.orgao ? ' ' + esc(d.orgao) : ''}${d.ufRG ? '/' + esc(d.ufRG) : ''} e CPF nº ${esc(d.cpf)}.</p>
+      <p><strong>Outorgado:</strong> <strong>Simone Barp Pegoraro</strong>, brasileira, solteira, Contadora, com endereço comercial na rua Itararé, 18, sala 101, Petrópolis, Vacaria-RS, CEP 95211-101, portadora do RG 1085506374 SSP/RS e CPF de nº 018.699.740-00.</p>
+      <p>Pelo presente instrumento particular de mandato a parte que assina, denominada outorgante, nomeia e constitui como procurador o outorgado
+      acima qualificado, outorgando-lhe os poderes necessários para representá-lo junto aos seguintes órgãos: Comando da 3ª Região Militar e
+      Polícia Federal-SINARM, em seu Serviço de Fiscalização de Produtos Controlados, para promoção da entrega dos documentos de solicitação de
+      concessão de alteração, apostilamento em Certificado de Registro, da promoção e da entrega da concessão de guia de tráfego dos produtos
+      controlados constantes dos acervos por esse órgão controlado, bem como a retirada dos despachos (e/ou documentos) referentes às concessões
+      elencadas, exclusivamente, sendo vedado seu substabelecimento.</p>
+      <p style="text-align:center;margin-top:48px">${esc(d.cidade)}${d.uf ? '/' + esc(d.uf) : ''}, ${dataPorExtenso(hoje)}</p>
+      <div class="assinatura"><div class="assinatura-linha"></div><div><strong>${esc(d.nome)}</strong></div></div>
+      <div style="page-break-before:always;page-break-after:avoid;margin:0;padding:0;overflow:hidden">
+        <embed src="procuracao-doc.pdf" type="application/pdf" width="100%" height="1050px" style="border:none;display:block" />
+      </div>`;
+    imprimirDocumento(html, 'Procuração', '@page{margin:0}');
+  } finally { hideLoading(); }
 }
 
 // Quando o vendedor está cadastrado no sistema (proc_vendedorSistema='sim'), os campos manuais
@@ -5693,6 +5887,7 @@ async function renderProcessoDetalhe(id) {
     .map(s => `<option value="${s}" ${processo.Status===s?'selected':''}>${s}</option>`).join('');
 
   const jaDeferido = processo.Status === 'Deferido';
+  const podeReverter = jaDeferido && isAdminUser();   // botão "Reverter Deferimento" (amarelo, só admin)
   const fnRestituir = jaDeferido ? 'alertaJaDeferido' : 'restituirProcesso';
   const fnRegistrar = jaDeferido ? 'alertaJaDeferido' : 'registrarStatusHistorico';
   const fnDeferir   = jaDeferido ? 'alertaJaDeferido' : 'deferirProcesso';
@@ -5899,9 +6094,13 @@ async function renderProcessoDetalhe(id) {
               </button>
             </div>
             <div style="margin-top:8px">
+              ${podeReverter ? `
+              <button onclick="reverterDeferimento('${id}')" style="background:#f59e0b;color:#fff;border:none;width:100%;border-radius:6px;padding:8px 12px;cursor:pointer;font-size:13px;font-weight:500;display:flex;align-items:center;justify-content:center;gap:6px" title="Reabre o processo e desfaz as alterações do deferimento (apenas administradores)">
+                <i class="bi bi-arrow-counterclockwise"></i> Reverter Deferimento
+              </button>` : `
               <button onclick="${fnDeferir}('${id}')" style="background:#16a34a;color:#fff;border:none;width:100%;border-radius:6px;padding:8px 12px;cursor:pointer;font-size:13px;font-weight:500;display:flex;align-items:center;justify-content:center;gap:6px${jaDeferido?';opacity:.5':''}">
                 <i class="bi bi-check-circle"></i> Deferir Processo
-              </button>
+              </button>`}
             </div>
           </div>
         </div>
@@ -6212,6 +6411,9 @@ async function deferirProcesso(id) {
     window._novosAutoCriados = []; // coleta processos gerados automaticamente p/ avisar o operador
     showLoading();
     try {
+      // --- Registro de reversão: guarda o estado anterior para o "Reverter Deferimento" (admin). ---
+      const _statusAntes = p.Status;                          // status antes de virar "Deferido"
+      const _dadosEspAntes = p.DadosEspecificosJSON || null;   // dados do processo antes do deferimento
       // Registra no histórico
       const historico = JSON.parse(p.HistoricoStatus || '[]');
       historico.push({ status: 'Deferido', data: dataDef, usuario: getCurrentUserName(), obs: '' });
@@ -6228,6 +6430,21 @@ async function deferirProcesso(id) {
       // Auto-ações ao deferir
       const tipo = p.TipoProcesso;
       const dados = p.DadosEspecificosJSON ? JSON.parse(p.DadosEspecificosJSON) : {};
+
+      // --- Snapshot para reversão (antes de qualquer alteração automática) ---
+      const _rev = { statusAntes: _statusAntes, dadosEspAntes: _dadosEspAntes, clienteAntes: null, armasAntes: [], criados: [] };
+      try {
+        const _cli = await App.graph.getItem(CONFIG.listas.clientes, p.ClienteId);
+        _rev.clienteAntes = _snapshotClienteReversao(_cli);
+      } catch (e) {}
+      const _candArmaIds = [dados.armaId, dados.armaIdVendedor, dados.armaIdMesmoTitular]
+        .map(x => String(x || '').split('|')[0]).filter(Boolean);
+      for (const _aid of [...new Set(_candArmaIds)]) {
+        try { const _a = await App.graph.getItem(CONFIG.listas.armas, _aid); _rev.armasAntes.push({ id: String(_aid), fields: _snapshotArmaReversao(_a) }); } catch (e) {}
+      }
+      let _armasIdsBase = [], _docsIdsBase = [];
+      try { _armasIdsBase = (await App.getArmas()).map(a => String(a.id)); } catch (e) {}
+      try { _docsIdsBase  = (await App.getDocumentos()).map(d => String(d.id)); } catch (e) {}
       if (tipo === 'Aquisição de Arma PF') {
         // Salvar arma no acervo do cliente
         try {
@@ -6519,6 +6736,18 @@ async function deferirProcesso(id) {
         toast('Processo deferido!', 'success');
       }
 
+      // --- Fecha o registro de reversão: descobre o que foi criado e salva. ---
+      try {
+        const _armasAgora = await App.getArmas();
+        for (const a of _armasAgora) if (!_armasIdsBase.includes(String(a.id))) _rev.criados.push({ lista: 'armas', id: String(a.id) });
+      } catch (e) {}
+      try {
+        const _docsAgora = await App.getDocumentos();
+        for (const d of _docsAgora) if (!_docsIdsBase.includes(String(d.id))) _rev.criados.push({ lista: 'documentos', id: String(d.id) });
+      } catch (e) {}
+      for (const np of (window._novosAutoCriados || [])) if (np && np.id) _rev.criados.push({ lista: 'processos', id: String(np.id) });
+      try { await _salvarReversaoDeferimento(id, _rev); } catch (e) {}
+
       liberarProcessosFuturos(id);
       await renderProcessoDetalhe(id);
       if (window._novosAutoCriados && window._novosAutoCriados.length) {
@@ -6526,6 +6755,98 @@ async function deferirProcesso(id) {
       }
     } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
   };
+}
+
+// ============================================================
+// REVERTER DEFERIMENTO (apenas administradores)
+// Desfaz o que o deferimento fez usando o registro salvo em deferimentos_reversao.json
+// ============================================================
+function _snapshotClienteReversao(c) {
+  const campos = ['Categoria', 'DataExpedicaoRG', 'DataValidadeRGouCNH',
+    'Endereco1', 'Numero1', 'Complemento1', 'Bairro1', 'Cidade1', 'UF1Endereco', 'CEP1',
+    'Endereco2', 'Numero2', 'Complemento2', 'Bairro2', 'Cidade2', 'UF2Endereco', 'CEP2'];
+  const o = {};
+  for (const k of campos) o[k] = (c[k] !== undefined ? c[k] : '');
+  return o;
+}
+function _snapshotArmaReversao(a) {
+  const campos = ['Title', 'ClienteId', 'ClienteNome', 'Especie', 'Calibre', 'Marca', 'Modelo',
+    'NumeroSerie', 'NumeroSINARM', 'AtividadeCadastrada', 'GrupoCalibre', 'PaisFabricacao',
+    'CapacidadeTiro', 'NumeroCanos', 'AlmaCano', 'NumeroRaias', 'SentidoRaias', 'Acabamento',
+    'Funcionamento', 'StatusArma', 'OrgaoCadastro', 'DataAquisicao'];
+  const o = {};
+  for (const k of campos) if (a[k] !== undefined) o[k] = a[k];
+  return o;
+}
+async function _lerReversoesDeferimento() {
+  try { const d = await App.graph._readFile('deferimentos_reversao'); return (d && typeof d === 'object' && !Array.isArray(d)) ? d : {}; } catch (e) { return {}; }
+}
+async function _lerReversaoDeferimento(id) { const d = await _lerReversoesDeferimento(); return d[String(id)] || null; }
+async function _salvarReversaoDeferimento(id, rev) { const d = await _lerReversoesDeferimento(); d[String(id)] = rev; await App.graph._writeFile('deferimentos_reversao', d); }
+async function _removerReversaoDeferimento(id) { const d = await _lerReversoesDeferimento(); delete d[String(id)]; await App.graph._writeFile('deferimentos_reversao', d); }
+
+async function reverterDeferimento(id) {
+  if (!isAdminUser()) { toast('Apenas administradores podem reverter um deferimento.', 'warning'); return; }
+  const p = window._processoDetalhe;
+  if (!p) return;
+  const ok = await confirmarModal({
+    titulo: 'Reverter Deferimento',
+    mensagem: 'Deseja reverter o deferimento? O processo volta ao status anterior e as alterações feitas no deferimento (documentos incluídos, mudanças no cadastro do cliente e processos gerados automaticamente) serão desfeitas.',
+    okLabel: 'Reverter', okCor: '#f59e0b', icone: 'bi-arrow-counterclockwise',
+  });
+  if (!ok) return;
+  showLoading();
+  try {
+    const rev = await _lerReversaoDeferimento(id);
+
+    // 1) Exclui os itens criados no deferimento (documentos, armas, processos automáticos)
+    if (rev && Array.isArray(rev.criados)) {
+      for (const it of rev.criados) {
+        const lista = CONFIG.listas[it.lista];
+        if (!lista) continue;
+        try { await App.graph.deleteItem(lista, it.id); } catch (e) {}
+      }
+    }
+
+    // 2) Restaura os campos do cliente (categoria, endereços, documento de identificação)
+    if (rev && rev.clienteAntes) {
+      try { await App.graph.updateItem(CONFIG.listas.clientes, p.ClienteId, rev.clienteAntes); } catch (e) {}
+    }
+
+    // 3) Restaura (ou recria, se foi removida) as armas alteradas no deferimento
+    if (rev && Array.isArray(rev.armasAntes) && rev.armasAntes.length) {
+      let _armasAtuais = [];
+      try { _armasAtuais = await App.getArmas(); } catch (e) {}
+      for (const a of rev.armasAntes) {
+        const existe = _armasAtuais.some(x => String(x.id) === String(a.id));
+        try {
+          if (existe) await App.graph.updateItem(CONFIG.listas.armas, a.id, a.fields);
+          else await App.graph.createItem(CONFIG.listas.armas, a.fields);
+        } catch (e) {}
+      }
+    }
+
+    // 4) Reabre o processo no último status anterior ao deferimento
+    const historico = JSON.parse(p.HistoricoStatus || '[]');
+    for (let i = historico.length - 1; i >= 0; i--) { if (historico[i].status === 'Deferido') { historico.splice(i, 1); break; } }
+    const statusAlvo = (rev && rev.statusAntes) || (historico.length ? historico[historico.length - 1].status : 'Parado');
+    historico.push({ status: statusAlvo, data: hojeISO(), usuario: getCurrentUserName(), obs: 'Deferimento revertido' });
+    const updProc = { Status: statusAlvo, DataDeferimento: null, HistoricoStatus: JSON.stringify(historico) };
+    if (rev && rev.dadosEspAntes != null) updProc.DadosEspecificosJSON = rev.dadosEspAntes;
+    await App.graph.updateItem(CONFIG.listas.processos, id, updProc);
+
+    try { await _removerReversaoDeferimento(id); } catch (e) {}
+    App.invalidateCache('processos'); App.invalidateCache('armas'); App.invalidateCache('documentos'); App.invalidateCache('clientes');
+    if (window._processoDetalhe) {
+      window._processoDetalhe.Status = statusAlvo;
+      window._processoDetalhe.HistoricoStatus = JSON.stringify(historico);
+      if (rev && rev.dadosEspAntes != null) window._processoDetalhe.DadosEspecificosJSON = rev.dadosEspAntes;
+    }
+    try { registrarMovimentacao('Reverter Deferimento', `${p.TipoProcesso || ''} — ${p.ClienteNome || ''}`); } catch (e) {}
+    if (!rev) toast('Processo reaberto. Atenção: foi deferido antes do registro automático — confira manualmente documentos e cadastro do cliente.', 'warning');
+    else toast('Deferimento revertido. Processo reaberto no status anterior.', 'success');
+    await renderProcessoDetalhe(id);
+  } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 // Popup avisando o operador dos processos criados automaticamente ao deferir,
