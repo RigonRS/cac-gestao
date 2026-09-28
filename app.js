@@ -10067,7 +10067,14 @@ async function renderWhatsApp() {
 
 function waConectar() {
   waIdToken().then(token => {
-    const socket = io(CONFIG.waGatewayUrl, { auth: { token }, transports: ['websocket', 'polling'] });
+    // auth como FUNÇÃO: o socket.io chama isto a cada (re)conexão, então sempre envia um
+    // token NOVO (o MSAL renova sozinho). Corrige a tela "congelar" e parar de atualizar
+    // sozinha depois de um tempo aberta — antes o token antigo expirava (~1h) e a
+    // reconexão era recusada pelo servidor, deixando a página sem novidades até o F5.
+    const socket = io(CONFIG.waGatewayUrl, {
+      auth: (cb) => { waIdToken().then(t => cb({ token: t })).catch(() => cb({ token })); },
+      transports: ['websocket', 'polling'],
+    });
     window._wa.socket = socket;
     // (Re)conectou ao gateway: puxa tudo de novo para recuperar o que chegou enquanto esteve offline
     socket.on('connect', () => {
