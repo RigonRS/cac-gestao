@@ -12928,9 +12928,13 @@ async function salvarClube(e, id) {
 // ============================================================
 async function novoOrcamentoComVerificacao(clienteId) {
   try {
-    const processos = await App.getProcessos();
+    const [processos, _od] = await Promise.all([App.getProcessos(), _carregarOrcamentosDemandas()]);
+    const orcamentos = (_od && _od.orcamentos) || [];
+    const demandas   = (_od && _od.demandas) || [];
     const doCliente = processos.filter(p => String(p.ClienteId) === String(clienteId));
-    const temDebito = doCliente.some(p => calcPagamento(p).pendente > 0);
+    // calcPagamentoCliente considera o pagamento feito via ORÇAMENTO (modelo por orçamento);
+    // usar calcPagamento puro dava falso "débito" para processos pagos no orçamento.
+    const temDebito = doCliente.some(p => calcPagamentoCliente(p, orcamentos, demandas).pendente > 0);
     if (temDebito) {
       const continuar = confirm('Esse cliente possui débitos em aberto!\n\nDeseja continuar mesmo assim?');
       if (!continuar) return;
@@ -13005,9 +13009,13 @@ async function renderOrcamentoForm(clienteId = null, orcId = null) {
                     <select id="orc-qty-${i}" style="width:65px" onchange="atualizarOrcamento()">
                       ${[...Array(20)].map((_,n) => `<option value="${n+1}">${n+1}x</option>`).join('')}
                     </select>
-                    <span style="font-size:12px;color:var(--text-muted)">R$</span>
-                    <input type="number" id="orc-valor-${i}" value="${valor}" step="0.01" min="0" title="Valor unitário (padrão: ${fmtMoeda(valor)}) — alterar aqui vale só para este orçamento" style="width:90px;font-size:12px" oninput="atualizarOrcamento()" />
-                    <span style="font-size:11px;color:var(--text-muted)">/ un.</span>
+                    ${tipo === 'Renovação de CRAF'
+                      ? `<span style="font-size:11px;color:var(--text-muted)">1ª R$ 450,00 + R$ 300,00 por adicional</span>
+                         <input type="hidden" id="orc-valor-${i}" value="${CRAF_RENOV_BASE}" />`
+                      : `<span style="font-size:12px;color:var(--text-muted)">R$</span>
+                         <input type="number" id="orc-valor-${i}" value="${valor}" step="0.01" min="0" title="Valor unitário (padrão: ${fmtMoeda(valor)}) — alterar aqui vale só para este orçamento" style="width:90px;font-size:12px" oninput="atualizarOrcamento()" />
+                         <span style="font-size:11px;color:var(--text-muted)">/ un.</span>`
+                    }
                   </div>
                   <span id="orc-sub-${i}" style="font-weight:600;font-size:13px;min-width:90px;text-align:right;color:var(--accent)"></span>
                 </div>
@@ -13217,6 +13225,16 @@ async function onOrcClienteChange(value) {
   } catch(e) { panel.style.display = 'none'; }
 }
 
+// Renovação de CRAF tem regra própria: 1ª R$450 + R$300 por CRAF adicional
+// (1x=450, 2x=750, 3x=1050...). Os demais serviços seguem quantidade × valor unitário.
+const CRAF_RENOV_BASE = 450;
+const CRAF_RENOV_ADICIONAL = 300;
+function subtotalOrcItem(tipo, qtd, valorUnit) {
+  const q = Math.max(1, parseInt(qtd) || 1);
+  if (tipo === 'Renovação de CRAF') return CRAF_RENOV_BASE + (q - 1) * CRAF_RENOV_ADICIONAL;
+  return q * (Number(valorUnit) || 0);
+}
+
 function atualizarOrcamento() {
   const sel = document.getElementById('orc-cliente-sel');
   const parts = (sel?.value || '').split('|');
@@ -13231,7 +13249,7 @@ function atualizarOrcamento() {
     if (!chk?.checked) return;
     const qtd = parseInt(document.getElementById(`orc-qty-${i}`)?.value || '1');
     const valor = parseFloat(document.getElementById(`orc-valor-${i}`)?.value) || 0;
-    const subtotal = qtd * valor;
+    const subtotal = subtotalOrcItem(tipo, qtd, valor);
     total += subtotal;
     if (sub) sub.textContent = fmtMoeda(subtotal);
     linhas.push({ tipo, qtd, valor, subtotal });
@@ -13511,7 +13529,7 @@ async function salvarOrcamento() {
     if (!chkEl?.checked) return;
     const qtd = parseInt(document.getElementById(`orc-qty-${i}`)?.value || '1');
     const valor = parseFloat(document.getElementById(`orc-valor-${i}`)?.value) || 0;
-    const subtotal = qtd * valor;
+    const subtotal = subtotalOrcItem(tipo, qtd, valor);
     total += subtotal;
     const obs = (document.getElementById(`orc-obs-${i}`)?.value || '').trim();
     linhas.push({ tipo, qtd, valor, subtotal, ...(obs ? { obs } : {}) });
@@ -14136,22 +14154,28 @@ function onPagCreditoChange(pfx) {
 
 function renderParcelasEditor(orcId, pg) {
   const hoje = hojeISO();
+  const travado = !!pg.travado;               // true = parcelas salvas -> campos travados
+  const dis = travado ? 'disabled' : '';
   const linhas = pg.parcelas.map((pc, i) => {
     const atrasada = !pc.pago && pc.dataVencimento && pc.dataVencimento < hoje;
     return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);flex-wrap:wrap">
       <div style="min-width:150px"><strong>Parcela ${i+1}/${pg.parcelas.length}</strong><div style="font-size:11px;color:${atrasada?'#dc2626':'var(--text-muted)'}">Venc: ${fmtDate(pc.dataVencimento)}${atrasada?' · atrasada':''}</div></div>
       <div style="min-width:90px;font-weight:600">${fmtMoeda(pc.valor)}</div>
-      <label class="checkbox-item" style="margin:0"><input type="checkbox" id="parc-${orcId}-${i}" ${pc.pago?'checked':''} onchange="onParcelaPagoToggle('${orcId}',${i},this.checked)"> Pago</label>
-      <input type="date" id="parc-data-${orcId}-${i}" value="${esc(pc.dataPagamento||'')}" style="display:${pc.pago?'':'none'};font-size:12px;padding:4px 8px" title="Data de pagamento">
+      <label class="checkbox-item" style="margin:0"><input type="checkbox" id="parc-${orcId}-${i}" ${pc.pago?'checked':''} ${dis} onchange="onParcelaPagoToggle('${orcId}',${i},this.checked)"> Pago</label>
+      <input type="date" id="parc-data-${orcId}-${i}" value="${esc(pc.dataPagamento||'')}" ${dis} style="display:${pc.pago?'':'none'};font-size:12px;padding:4px 8px" title="Data de pagamento">
     </div>`;
   }).join('');
   const entradaTxt = pg.temEntrada ? `<div style="font-size:12px;margin-bottom:8px">Entrada: <strong>${fmtMoeda(pg.valorEntrada||0)}</strong></div>` : '';
   return `<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">${esc(pg.formaPagamento||'')} · ${pg.vezes}x de ${fmtMoeda(pg.valorParcela)}</div>
     ${entradaTxt}
     ${linhas}
-    <div style="display:flex;justify-content:space-between;gap:8px;margin-top:16px">
-      <button class="btn btn-outline btn-sm" onclick="removerPagamentoOrcamento('${orcId}')">Redefinir pagamento</button>
-      <button class="btn btn-primary btn-sm" onclick="salvarParcelasOrcamento('${orcId}')"><i class="bi bi-floppy me-1"></i>Salvar Parcelas</button>
+    <div style="display:flex;justify-content:space-between;gap:8px;margin-top:16px;align-items:center;flex-wrap:wrap">
+      ${travado
+        ? `<button class="btn btn-outline btn-sm" onclick="liberarParcelasOrcamento('${orcId}')"><i class="bi bi-unlock me-1"></i>Redefinir pagamento</button>
+           <span style="font-size:12px;color:#16a34a;font-weight:600"><i class="bi bi-lock-fill me-1"></i>Parcelas salvas (travadas)</span>`
+        : `<button class="btn btn-outline btn-sm" onclick="removerPagamentoOrcamento('${orcId}')">Remover pagamento</button>
+           <button class="btn btn-primary btn-sm" onclick="salvarParcelasOrcamento('${orcId}')"><i class="bi bi-floppy me-1"></i>Salvar Parcelas</button>`
+      }
     </div>`;
 }
 
@@ -14219,10 +14243,26 @@ async function salvarParcelasOrcamento(orcId) {
         pc.pago = chk?.checked || false;
         pc.dataPagamento = pc.pago ? (dt?.value || null) : null;
       });
+      pg.travado = true;   // ao salvar, trava os campos (só o "Redefinir pagamento" libera)
     }
     await App.graph._writeFile('orcamentos', arr);
     document.getElementById('modal-pag-orc')?.remove();
-    toast('Parcelas atualizadas.', 'success');
+    toast('Parcelas salvas e travadas.', 'success');
+    await _refreshAposPagamentoOrc();
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+// Libera as parcelas travadas para edição (sem apagar o pagamento).
+async function liberarParcelasOrcamento(orcId) {
+  showLoading();
+  try {
+    const lista = await App.graph._readFile('orcamentos').catch(() => []);
+    const arr = Array.isArray(lista) ? lista : [];
+    const idx = arr.findIndex(o => String(o.id) === String(orcId));
+    if (idx < 0) throw new Error('Orçamento não encontrado.');
+    if (arr[idx].pagamento) arr[idx].pagamento.travado = false;
+    await App.graph._writeFile('orcamentos', arr);
+    toast('Parcelas liberadas para edição.', 'success');
     await _refreshAposPagamentoOrc();
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
@@ -14643,22 +14683,30 @@ async function renderMinhasDemandas() {
     const concluidas = todas.filter(d => d.status === 'Concluída');
 
     function buildCard(d) {
-      const itensHtml = (d.itens||[]).map(item => {
+      const itensHtml = (d.itens||[]).map((item, itemIdx) => {
         const criados = processos.filter(p => p.demandaId && String(p.demandaId) === String(d.id) && p.TipoProcesso === item.tipo).length;
         const concluido = criados >= item.qtd;
+        const restantes = item.qtd - criados;
+        const eCraf = item.tipo === 'Renovação de CRAF';
+        // Tipos que ganham criação em cascata quando há mais de um a abrir
+        const eCascataTipo = ['Guia de Tráfego', 'Renovação de CRAF', 'Segunda via de CRAF'].includes(item.tipo);
+        const usaCascata = eCascataTipo && restantes > 1 && d.status === 'Aberta';
+        // Valor do próximo processo (CRAF: 1º = R$450, demais = R$300)
+        const valUnitProx = eCraf ? (criados === 0 ? CRAF_RENOV_BASE : CRAF_RENOV_ADICIONAL) : (item.valor||0);
+        const valorTxt = eCraf ? '1ª R$ 450,00 + R$ 300,00 por adicional' : `${fmtMoeda(item.valor||0)} cada`;
         const obsBtn = item.obs ? `<button class="btn btn-ghost btn-sm" style="padding:0 2px" title="${esc(item.obs)}"><i class="bi bi-eye" style="color:var(--accent)"></i></button>` : '';
         return `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);gap:12px;flex-wrap:wrap">
           <div>
             <div style="font-weight:600;font-size:13px;display:flex;align-items:center;gap:2px">${esc(item.tipo)}${obsBtn}</div>
             <div style="font-size:12px;color:var(--text-muted);margin-top:2px">
-              ${criados} de ${item.qtd} processo(s) criado(s) · ${fmtMoeda(item.valor||0)} cada
+              ${criados} de ${item.qtd} processo(s) criado(s) · ${valorTxt}
               ${concluido ? '<span class="badge badge-green" style="margin-left:6px">Concluído</span>' : ''}
             </div>
           </div>
           ${!concluido && d.status === 'Aberta'
-            ? `<button class="btn btn-primary btn-sm" onclick="navigate('processos/novo',{clienteId:'${d.clienteId}',demandaId:'${d.id}',demandaNumero:'${escJs(d.numero||'')}',tipoProcesso:encodeURIComponent('${escJs(item.tipo)}'),valorDemanda:'${item.valor||0}',dataOrcamento:'${escJs(d.orcamentoData||'')}'})">
-                <i class="bi bi-plus-lg me-1"></i>Abrir Processo
-              </button>`
+            ? (usaCascata
+                ? `<button class="btn btn-primary btn-sm" onclick="abrirCascataDemanda('${d.id}',${itemIdx})"><i class="bi bi-list-check me-1"></i>Abrir Processos (${restantes})</button>`
+                : `<button class="btn btn-primary btn-sm" onclick="navigate('processos/novo',{clienteId:'${d.clienteId}',demandaId:'${d.id}',demandaNumero:'${escJs(d.numero||'')}',tipoProcesso:encodeURIComponent('${escJs(item.tipo)}'),valorDemanda:'${valUnitProx}',dataOrcamento:'${escJs(d.orcamentoData||'')}'})"><i class="bi bi-plus-lg me-1"></i>Abrir Processo</button>`)
             : `<button class="btn btn-outline btn-sm" disabled>${concluido ? 'Concluído' : 'Encerrada'}</button>`}
         </div>`;
       }).join('');
@@ -14697,6 +14745,124 @@ async function renderMinhasDemandas() {
 
     document.getElementById('page-content').innerHTML = resumoHtml + secaoAberta + secaoConcluida;
   } catch(e) { document.getElementById('page-content').innerHTML = `<div class="empty-state"><i class="bi bi-exclamation-triangle"></i><p>${esc(e.message)}</p></div>`; } finally { hideLoading(); }
+}
+
+// ============================================================
+// CRIAÇÃO EM CASCATA — abre vários processos de uma demanda de uma vez
+// (Guia de Tráfego / Renovação de CRAF / Segunda via de CRAF com qtd > 1).
+// ============================================================
+async function abrirCascataDemanda(demandaId, itemIdx) {
+  showLoading();
+  try {
+    const demandasRaw = await App.graph._readFile('demandas').catch(() => []);
+    const demandas = Array.isArray(demandasRaw) ? demandasRaw : [];
+    const d = demandas.find(x => String(x.id) === String(demandaId));
+    if (!d) throw new Error('Demanda não encontrada.');
+    const item = (d.itens || [])[itemIdx];
+    if (!item) throw new Error('Item da demanda não encontrado.');
+    const processos = await App.getProcessos();
+    const criados = processos.filter(p => p.demandaId && String(p.demandaId) === String(d.id) && p.TipoProcesso === item.tipo).length;
+    const restantes = Math.max(0, item.qtd - criados);
+    if (restantes < 1) { toast('Todos os processos deste item já foram criados.', 'info'); return; }
+    const armas = (await App.getArmas()).filter(a => String(a.ClienteId) === String(d.clienteId));
+    window._cascataDemanda = { demandaId, itemIdx, criados };
+    const eGuia = item.tipo === 'Guia de Tráfego';
+    const armaOpts = armas.map(a => `<option value="${a.id}|${esc(a.AtividadeCadastrada||'')}|${esc(a.Marca||'')}|${esc(a.Modelo||'')}">${a.Especie ? esc(a.Especie)+' · ' : ''}${esc(a.Marca||'')} ${esc(a.Modelo||'')}${a.NumeroSerie ? ' ('+esc(a.NumeroSerie)+')' : ''} — ${esc(a.AtividadeCadastrada||'')}</option>`).join('');
+    const guiaOpts = ['Caça','Caça-Treinamento Tiro','Tiro Esportivo','Mudança de Local de Acervo'].map(g => `<option value="${esc(g)}">${esc(g)}</option>`).join('');
+    const linhas = [...Array(restantes)].map((_, r) => `
+      <div style="display:flex;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);flex-wrap:wrap">
+        <span style="min-width:92px;font-weight:600;font-size:13px">Processo ${r+1}</span>
+        <select id="casc-arma-${r}" style="flex:1;min-width:220px;font-size:12px">
+          <option value="">— Selecionar arma (deixe em branco para pular) —</option>
+          ${armaOpts}
+        </select>
+        ${eGuia ? `<select id="casc-guia-${r}" style="min-width:180px;font-size:12px" title="Tipo de Guia">${guiaOpts}</select>` : ''}
+      </div>`).join('');
+    const modal = document.createElement('div');
+    modal.id = 'modal-cascata-demanda';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+    modal.innerHTML = `
+      <div style="background:#fff;border-radius:12px;padding:22px;max-width:660px;width:100%;max-height:88vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+        <h3 style="margin:0 0 4px;font-size:16px"><i class="bi bi-list-check me-2" style="color:var(--accent)"></i>Abrir Processos — ${esc(item.tipo)}</h3>
+        <p style="font-size:12.5px;color:var(--text-muted);margin:0 0 14px">Demanda ${esc(d.numero||'')} · ${esc(d.clienteNome||'')} · ${restantes} processo(s) a criar. Selecione a arma de cada um. Deixe em branco os que não quiser criar agora — a demanda continua aberta para eles.</p>
+        ${linhas}
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
+          <button class="btn btn-outline btn-sm" onclick="document.getElementById('modal-cascata-demanda').remove()">Cancelar</button>
+          <button class="btn btn-primary btn-sm" onclick="criarProcessosCascata()"><i class="bi bi-plus-lg me-1"></i>Criar Processos</button>
+        </div>
+      </div>`;
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+    document.body.appendChild(modal);
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function criarProcessosCascata() {
+  const ctx = window._cascataDemanda;
+  if (!ctx) return;
+  const { demandaId, itemIdx, criados } = ctx;
+  try {
+    const demandasRaw = await App.graph._readFile('demandas').catch(() => []);
+    const demandas = Array.isArray(demandasRaw) ? demandasRaw : [];
+    const d = demandas.find(x => String(x.id) === String(demandaId));
+    if (!d) throw new Error('Demanda não encontrada.');
+    const item = (d.itens || [])[itemIdx];
+    if (!item) throw new Error('Item da demanda não encontrado.');
+    const restantes = Math.max(0, item.qtd - criados);
+    const eGuia = item.tipo === 'Guia de Tráfego';
+    const eCraf = item.tipo === 'Renovação de CRAF';
+
+    // Coleta as linhas preenchidas (arma selecionada). Em branco = pular.
+    const paraCriar = [];
+    let emBranco = 0;
+    for (let r = 0; r < restantes; r++) {
+      const arma = document.getElementById(`casc-arma-${r}`)?.value || '';
+      if (!arma) { emBranco++; continue; }
+      const tipoGuia = eGuia ? (document.getElementById(`casc-guia-${r}`)?.value || '') : null;
+      paraCriar.push({ arma, tipoGuia });
+    }
+    if (!paraCriar.length) { toast('Selecione a arma de ao menos um processo.', 'warning'); return; }
+    if (emBranco > 0) {
+      const ok = await confirmarModal({
+        titulo: 'Processos em branco',
+        mensagem: `${emBranco} processo(s) ficaram sem arma e não serão criados agora. A demanda continua aberta para eles. Deseja prosseguir e criar os ${paraCriar.length} preenchido(s)?`,
+        okLabel: 'Criar preenchidos', okCor: '#16a34a', icone: 'bi-plus-circle',
+      });
+      if (!ok) return;
+    }
+
+    showLoading();
+    const cliente = await App.graph.getItem(CONFIG.listas.clientes, d.clienteId);
+    const hoje = hojeISO();
+    let idxGlobal = criados;   // posição para o valor do CRAF (1º = R$450, demais = R$300)
+    for (const linha of paraCriar) {
+      const valorProc = eCraf ? (idxGlobal === 0 ? CRAF_RENOV_BASE : CRAF_RENOV_ADICIONAL) : (Number(item.valor) || 0);
+      const dadosEsp = { armaId: linha.arma };
+      if (eGuia && linha.tipoGuia) dadosEsp.tipoGuia = linha.tipoGuia;
+      const checklist = buildChecklistItems(item.tipo, eGuia ? (linha.tipoGuia || null) : null);
+      const fields = {
+        Title:        `${item.tipo} — ${cliente.Title || ''}`,
+        ClienteId:    d.clienteId,
+        ClienteNome:  cliente.Title || d.clienteNome || '',
+        TipoProcesso: item.tipo,
+        Responsavel:  d.operador || '',
+        DataAbertura: hoje,
+        Status:       'Parado',
+        ValorProcesso: valorProc,
+        ChecklistJSON: JSON.stringify(checklist),
+        DadosEspecificosJSON: JSON.stringify(dadosEsp),
+        demandaId:    String(demandaId),
+        demandaNumero: d.numero || null,
+        HistoricoStatus: JSON.stringify([{ data: new Date().toLocaleDateString('pt-BR'), hora: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }), status: 'Parado', usuario: getCurrentUserName() }]),
+      };
+      await App.graph.createItem(CONFIG.listas.processos, fields);
+      idxGlobal++;
+    }
+    App.invalidateCache('processos');
+    document.getElementById('modal-cascata-demanda')?.remove();
+    toast(`${paraCriar.length} processo(s) criado(s).`, 'success');
+    await verificarConclusaoDemanda(demandaId);
+    await renderMinhasDemandas();
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 // ============================================================
