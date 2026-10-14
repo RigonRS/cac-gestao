@@ -379,6 +379,16 @@ function _extraMantemDesconto5(p) {
   return !!(iso && iso < EXTRA_CORTE_SEM_5); // true = mantém o 5% (comportamento antigo)
 }
 
+// A partir de Setembro/2026 a fórmula do extra muda para:
+//   (Valor pago do processo − desconto 5%/proporcional − Valor das taxas) × porcentagem
+// Ou seja: o desconto incide sobre o VALOR do processo, e a taxa é subtraída CHEIA
+// (antes o desconto também reduzia a parte da taxa).
+const EXTRA_CORTE_NOVO = '2026-09-01';
+function _extraFormulaNova(p) {
+  const iso = getDataDeferido(p);
+  return !!(iso && iso >= EXTRA_CORTE_NOVO);
+}
+
 // Extra (comissão) de um processo. O desconto do orçamento é aplicado de forma
 // PROPORCIONAL sobre (valor cheio − taxa), para que a comissão caia na mesma
 // proporção do desconto (e não seja penalizada a mais pela taxa fixa).
@@ -387,10 +397,17 @@ function extraProcesso(p, orcamentos, demandas, responsavel) {
   // Ajuste manual salvo (via botão de olho na página de Extras) tem prioridade
   const aj = window._extrasAjustes && window._extrasAjustes[_ajusteExtraKey(p.id, responsavel)];
   if (aj && Number.isFinite(Number(aj.extra))) return Number(aj.extra);
-  const taxa  = TAXAS_PROCESSO[p.TipoProcesso] || 0;
+  const taxa = TAXAS_PROCESSO[p.TipoProcesso] || 0;
+  const frac = fracaoExtraProcesso(p.TipoProcesso, responsavel);
+  if (_extraFormulaNova(p)) {
+    // Set/2026+: (valor do processo com desconto 5%/proporcional − taxa cheia) × %
+    const valorComDesc = valorProcessoParaExtras(p, orcamentos, demandas);
+    return Math.max(0, valorComDesc - taxa) * frac;
+  }
+  // Até Ago/2026: desconto proporcional sobre (valor cheio − taxa)
   const cheio = valorCheioProcessoExtras(p, orcamentos, demandas);
   const ratio = ratioExtraProcesso(p, orcamentos, demandas, _extraMantemDesconto5(p));
-  return Math.max(0, cheio - taxa) * ratio * fracaoExtraProcesso(p.TipoProcesso, responsavel);
+  return Math.max(0, cheio - taxa) * ratio * frac;
 }
 
 function fmtMoeda(v) {
@@ -8689,18 +8706,24 @@ function verCalculoExtra(id, responsavel) {
   if (!p) { toast('Processo não encontrado.', 'error'); return; }
   const admin = isAdminUser(); // apenas administradores podem editar o valor do extra
   const orc = window._extrasOrc || [], dem = window._extrasDem || [];
+  const eNovo  = _extraFormulaNova(p);
   const cheio  = valorCheioProcessoExtras(p, orc, dem);
+  const valorComDesc = valorProcessoParaExtras(p, orc, dem);
   const taxa   = TAXAS_PROCESSO[p.TipoProcesso] || 0;
   const ratio  = ratioExtraProcesso(p, orc, dem, _extraMantemDesconto5(p));
   const fracao = fracaoExtraProcesso(p.TipoProcesso, responsavel);
-  const pctPadrao = ratio * fracao * 100;
+  // Na fórmula nova (Set/2026+) o desconto já está no valor e a taxa é cheia,
+  // então a porcentagem aplicada é só a do operador (sem o fator de desconto).
+  const baseValor = eNovo ? valorComDesc : cheio;
+  const pctPadrao = eNovo ? (fracao * 100) : (ratio * fracao * 100);
+  const extraAuto = eNovo ? (Math.max(0, valorComDesc - taxa) * fracao) : (Math.max(0, cheio - taxa) * ratio * fracao);
   const key = _ajusteExtraKey(id, responsavel);
   const aj = (window._extrasAjustes || {})[key];
-  const vVal  = aj ? Number(aj.valor) : cheio;
+  const vVal  = aj ? Number(aj.valor) : baseValor;
   const vTaxa = aj ? Number(aj.taxa)  : taxa;
   const vPct  = aj ? Number(aj.percentual) : Math.round(pctPadrao * 10000) / 10000;
   const extraAtual = Math.max(0, vVal - vTaxa) * vPct / 100;
-  const temDesconto = Math.abs(ratio - 1) > 0.0001;
+  const temDesconto = eNovo ? (Math.abs(valorComDesc - cheio) > 0.005) : (Math.abs(ratio - 1) > 0.0001);
 
   document.getElementById('modal-calculo-extra')?.remove();
   const modal = document.createElement('div');
@@ -8720,12 +8743,19 @@ function verCalculoExtra(id, responsavel) {
 
         <div style="background:var(--bg-secondary);border-radius:8px;padding:10px 12px;margin-bottom:16px">
           <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:4px">Cálculo automático</div>
-          ${linhaInfo('Valor cheio do processo', fmtMoeda(cheio))}
-          ${linhaInfo('Desconto de taxas', '− ' + fmtMoeda(taxa))}
-          ${temDesconto ? linhaInfo('Desconto do orçamento', (Math.round((1-ratio)*10000)/100).toString().replace('.', ',') + '%') : ''}
-          ${linhaInfo('Percentual do extra (base)', (Math.round(fracao*10000)/100).toString().replace('.', ',') + '%')}
-          ${linhaInfo('→ Porcentagem aplicada', (Math.round(pctPadrao*100)/100).toString().replace('.', ',') + '%')}
-          ${linhaInfo('Extra calculado', fmtMoeda(Math.max(0, cheio - taxa) * ratio * fracao))}
+          ${eNovo
+            ? `${linhaInfo('Valor do processo', fmtMoeda(cheio))}
+               ${temDesconto ? linhaInfo('Valor com desconto (5%/proporcional)', fmtMoeda(valorComDesc)) : ''}
+               ${linhaInfo('Desconto de taxas', '− ' + fmtMoeda(taxa))}
+               ${linhaInfo('Porcentagem do extra', (Math.round(fracao*10000)/100).toString().replace('.', ',') + '%')}
+               ${linhaInfo('Extra calculado', fmtMoeda(extraAuto))}`
+            : `${linhaInfo('Valor cheio do processo', fmtMoeda(cheio))}
+               ${linhaInfo('Desconto de taxas', '− ' + fmtMoeda(taxa))}
+               ${temDesconto ? linhaInfo('Desconto do orçamento', (Math.round((1-ratio)*10000)/100).toString().replace('.', ',') + '%') : ''}
+               ${linhaInfo('Percentual do extra (base)', (Math.round(fracao*10000)/100).toString().replace('.', ',') + '%')}
+               ${linhaInfo('→ Porcentagem aplicada', (Math.round(pctPadrao*100)/100).toString().replace('.', ',') + '%')}
+               ${linhaInfo('Extra calculado', fmtMoeda(extraAuto))}`
+          }
         </div>
 
         ${admin ? `
