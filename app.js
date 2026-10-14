@@ -8443,11 +8443,38 @@ function getUltimoPagamentoProcesso(p) {
   } catch(e) { return null; }
 }
 
+// Texto de pagamento a partir do ORÇAMENTO atrelado (modelo novo) — data, forma e parcelas.
+function pagamentoInfoOrcamentoTxt(orc) {
+  const pg = orc && orc.pagamento;
+  if (!pg || !pg.modalidade) return '';
+  if (pg.modalidade === 'avista') {
+    return [pg.dataPagamento ? `Pago em ${fmtDate(pg.dataPagamento)}` : 'Pago à vista', pg.formaPagamento || null, pg.banco || null].filter(Boolean).join(' · ');
+  }
+  if (pg.modalidade === 'parcelado') {
+    if (pg.formaPagamento === 'Cartão') return `Cartão · ${pg.vezes}x`;
+    const parcelas = pg.parcelas || [];
+    const pagas = parcelas.filter(x => x.pago);
+    const comData = pagas.filter(x => x.dataPagamento);
+    if (comData.length) {
+      const ultima = comData.reduce((a, b) => (a.dataPagamento > b.dataPagamento ? a : b));
+      return [`Pago em ${fmtDate(ultima.dataPagamento)}`, `${pagas.length}/${parcelas.length} parcela(s)`, pg.formaPagamento || null].filter(Boolean).join(' · ');
+    }
+    if (pagas.length) return [`${pagas.length}/${parcelas.length} parcela(s) paga(s)`, pg.formaPagamento || null].filter(Boolean).join(' · ');
+  }
+  return '';
+}
+
 function infoPagamentoProcessoTxt(p) {
   const info = getUltimoPagamentoProcesso(p);
-  if (!info) return '';
-  const partes = [info.dataPagamento ? `Pago em ${fmtDate(info.dataPagamento)}` : null, info.formaPagamento || null, info.banco || null].filter(Boolean);
-  return partes.join(' · ');
+  if (info) {
+    return [info.dataPagamento ? `Pago em ${fmtDate(info.dataPagamento)}` : null, info.formaPagamento || null, info.banco || null].filter(Boolean).join(' · ');
+  }
+  // Processo atrelado a orçamento (modelo novo): pega a data/forma do pagamento do orçamento
+  if (p && p.demandaId) {
+    const orc = orcamentoDoProcesso(p, window._extrasOrc || [], window._extrasDem || []);
+    return pagamentoInfoOrcamentoTxt(orc);
+  }
+  return '';
 }
 
 function rodapePagoMesHtml(responsavel, mes, pagoMes) {
@@ -12083,7 +12110,7 @@ function renderPagamentoViaOrcamento(orc) {
     <div class="card-body">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
         <div>
-          <div style="font-size:13px">Orçamento <strong>${esc(orc.numero||'—')}</strong> · Total ${fmtMoeda(orc.total)}</div>
+          <div style="font-size:13px">Orçamento <a style="cursor:pointer;color:var(--accent);font-weight:700;text-decoration:underline" onclick="verDetalhesOrcamento('${orc.id}')" title="Ver detalhes do orçamento">${esc(orc.numero||'—')}</a> · Total ${fmtMoeda(orc.total)}</div>
           <div style="font-size:12px;color:var(--text-muted);margin-top:2px">${detalhe}</div>
         </div>
         <span class="badge ${b.cls}" style="font-size:12px">${b.txt}</span>
@@ -12093,6 +12120,82 @@ function renderPagamentoViaOrcamento(orc) {
       </div>
     </div>
   </div>`;
+}
+
+// Popup com todas as informações do orçamento (itens, valores, pagamento e forma)
+async function verDetalhesOrcamento(orcId) {
+  showLoading();
+  try {
+    const lista = await App.graph._readFile('orcamentos').catch(() => []);
+    const orc = (Array.isArray(lista) ? lista : []).find(o => String(o.id) === String(orcId));
+    if (!orc) throw new Error('Orçamento não encontrado.');
+    const itens = orc.itens || [];
+    const subUnit = it => Number(it.subtotal != null ? it.subtotal : ((it.qtd || 1) * (it.valor || 0))) || 0;
+    const subtotal = itens.reduce((s, it) => s + subUnit(it), 0);
+    const itensHtml = itens.map(it => `<tr>
+      <td style="padding:4px 6px">${esc(it.tipo || '—')}${it.obs ? `<div style="font-size:11px;color:var(--text-muted)">${esc(it.obs)}</div>` : ''}</td>
+      <td style="padding:4px 6px;text-align:center">${it.qtd || 1}x</td>
+      <td style="padding:4px 6px;text-align:right">${fmtMoeda(it.valor || 0)}</td>
+      <td style="padding:4px 6px;text-align:right;font-weight:600">${fmtMoeda(subUnit(it))}</td>
+    </tr>`).join('');
+
+    const pg = orc.pagamento;
+    let pagHtml;
+    if (!pg || !pg.modalidade) {
+      pagHtml = '<div style="color:var(--text-muted);font-size:13px">Pagamento ainda não registrado.</div>';
+    } else if (pg.modalidade === 'avista') {
+      pagHtml = `<div style="font-size:13px"><strong>À vista</strong>${pg.desconto5 ? ' (5% de desconto)' : ''}${pg.dataPagamento ? ` · Pago em ${fmtDate(pg.dataPagamento)}` : ''}</div>
+        <div style="font-size:12px;color:var(--text-muted)">Forma: ${esc(pg.formaPagamento || '—')}${pg.banco ? ' · ' + esc(pg.banco) : ''}</div>`;
+    } else if (pg.modalidade === 'parcelado' && pg.formaPagamento === 'Cartão') {
+      pagHtml = `<div style="font-size:13px"><strong>Cartão</strong> · ${pg.vezes}x</div>`;
+    } else {
+      const parcelas = pg.parcelas || [];
+      const parcHtml = parcelas.map((pc, i) => `<div style="display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:3px 0;border-bottom:1px solid var(--border)">
+        <span>Parcela ${i + 1}/${parcelas.length} · venc. ${fmtDate(pc.dataVencimento)}</span>
+        <span style="white-space:nowrap">${fmtMoeda(pc.valor)} · ${pc.pago ? `<span style="color:#16a34a">pago${pc.dataPagamento ? ' em ' + fmtDate(pc.dataPagamento) : ''}</span>` : '<span style="color:#dc2626">pendente</span>'}</span>
+      </div>`).join('');
+      pagHtml = `<div style="font-size:13px"><strong>Parcelado</strong> · Forma: ${esc(pg.formaPagamento || '—')}${pg.banco ? ' · ' + esc(pg.banco) : ''}</div>
+        ${pg.temEntrada ? `<div style="font-size:12px;color:var(--text-muted)">Entrada: ${fmtMoeda(pg.valorEntrada || 0)}</div>` : ''}
+        <div style="margin-top:6px">${parcHtml}</div>`;
+    }
+
+    document.getElementById('modal-detalhes-orc')?.remove();
+    const modal = document.createElement('div');
+    modal.id = 'modal-detalhes-orc';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+    modal.innerHTML = `
+      <div style="background:#fff;border-radius:12px;padding:22px;max-width:560px;width:100%;max-height:88vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+          <h3 style="margin:0;font-size:16px"><i class="bi bi-calculator me-2" style="color:var(--accent)"></i>Orçamento ${esc(orc.numero || '—')}</h3>
+          <button onclick="document.getElementById('modal-detalhes-orc').remove()" style="background:none;border:none;font-size:22px;color:#666;cursor:pointer;line-height:1">×</button>
+        </div>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:14px">${esc(orc.clienteNome || '')}${orc.data ? ' · ' + fmtDate(orc.data) : ''}</div>
+
+        <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:4px">Serviços</div>
+        <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:12px">
+          <thead><tr style="color:var(--text-muted);font-size:11px;text-align:left">
+            <th style="padding:4px 6px">Serviço</th><th style="padding:4px 6px;text-align:center">Qtd</th><th style="padding:4px 6px;text-align:right">Unit.</th><th style="padding:4px 6px;text-align:right">Subtotal</th>
+          </tr></thead>
+          <tbody>${itensHtml}</tbody>
+        </table>
+
+        <div style="border-top:1px solid var(--border);padding-top:8px;font-size:13px">
+          <div style="display:flex;justify-content:space-between;padding:2px 0"><span style="color:var(--text-muted)">Subtotal</span><span>${fmtMoeda(subtotal)}</span></div>
+          ${orc.desconto ? `<div style="display:flex;justify-content:space-between;padding:2px 0;color:#dc2626"><span>Desconto</span><span>− ${fmtMoeda(orc.desconto)}</span></div>` : ''}
+          ${orc.creditoHaver ? `<div style="display:flex;justify-content:space-between;padding:2px 0;color:#16a34a"><span>Crédito em haver</span><span>− ${fmtMoeda(orc.creditoHaver)}</span></div>` : ''}
+          <div style="display:flex;justify-content:space-between;padding:4px 0;font-weight:700;font-size:15px;border-top:1px solid var(--border);margin-top:4px"><span>Total</span><span style="color:var(--accent)">${fmtMoeda(orc.total)}</span></div>
+        </div>
+
+        <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin:14px 0 6px">Pagamento</div>
+        ${pagHtml}
+
+        <div style="text-align:right;margin-top:16px">
+          <button class="btn btn-outline btn-sm" onclick="document.getElementById('modal-detalhes-orc').remove()">Fechar</button>
+        </div>
+      </div>`;
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+    document.body.appendChild(modal);
+  } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 function renderDadosPagamento(p) {
