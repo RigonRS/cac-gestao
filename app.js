@@ -502,9 +502,37 @@ function setActiveNav(page) {
   });
 }
 
+// Bolinhas de notificação no menu lateral (demandas/processos/GRU em aberto, etc.)
+function _setBadgeSidebar(id, n) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (n > 0) { el.textContent = n > 99 ? '99+' : String(n); el.style.display = ''; }
+  else { el.textContent = ''; el.style.display = 'none'; }
+}
+async function atualizarBadgesSidebar() {
+  try {
+    const user = getCurrentUserName();
+    const [processos, demandasRaw] = await Promise.all([
+      App.getProcessos().catch(() => []),
+      App.graph._readFile('demandas').catch(() => []),
+    ]);
+    const demandas = Array.isArray(demandasRaw) ? demandasRaw : [];
+    const minhasDemandas  = demandas.filter(d => d.operador === user && d.status === 'Aberta').length;
+    const aguardandoDeleg = demandas.filter(d => d.status === 'Aguardando Delegação').length;
+    const meusProcessos   = processos.filter(p => p.Responsavel === user && !STATUS_FECHADOS.includes(p.Status)).length;
+    const gruPendentes    = processos.filter(p => !p.GruPaga && !STATUS_FECHADOS.includes(p.Status) && !TIPOS_SEM_GRU.includes(p.TipoProcesso)
+      && (!STATUS_OCULTA_GRU.includes(p.Status) || processoTemProtocolo(p))).length;
+    _setBadgeSidebar('badge-minhas-demandas',   minhasDemandas);
+    _setBadgeSidebar('badge-meus-processos',    meusProcessos);
+    _setBadgeSidebar('badge-pagamentos-gru',    gruPendentes);
+    _setBadgeSidebar('badge-controle-demandas', aguardandoDeleg);
+  } catch (e) {}
+}
+
 async function renderPage() {
   const { page, params } = getRoute();
   setActiveNav(page.split('/')[0]);
+  atualizarBadgesSidebar();   // atualiza as bolinhas de notificação do menu (não bloqueia)
   document.getElementById('page-content').innerHTML = '';
   const btnBack = document.getElementById('btn-back-nav');
   if (btnBack) btnBack.style.display = (window._navStack && window._navStack.length > 0) ? '' : 'none';
@@ -5153,7 +5181,7 @@ async function abrirGRU(tipo) {
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
-function _dadosComprador(c, dados, usaComp) {
+function _dadosComprador(c, dados, usaComp, usarEnd2) {
   if (usaComp) {
     return {
       nome: dados.nomeComprador||'', cpf: dados.cpfComprador||'',
@@ -5172,105 +5200,151 @@ function _dadosComprador(c, dados, usaComp) {
       cep: dados.cepResidComprador || dados.cepComercialComprador || '',
     };
   }
+  const s = usarEnd2 ? '2' : '1';
+  const ufField = usarEnd2 ? 'UF2Endereco' : 'UF1Endereco';
   return {
     nome: c.Title||'', cpf: c.CPF||'',
     nat: c.Naturalidade||'', ufNat: c.UFNaturalidade||'',
     dataNasc: c.DataNascimento ? fmtDate(c.DataNascimento) : '',
     profissao: c.Profissao||'',
     rg: c.RG||'', orgao: c.OrgaoEmissor||'', ufRG: c.UFDoc||'',
-    end: c.Endereco1||'', num: c.Numero1||'', compl: c.Complemento1||'',
-    bairro: c.Bairro1||'', cidade: c.Cidade1||'',
-    uf: c.UF1Endereco||'', cep: c.CEP1||'',
+    end: c['Endereco'+s]||'', num: c['Numero'+s]||'', compl: c['Complemento'+s]||'',
+    bairro: c['Bairro'+s]||'', cidade: c['Cidade'+s]||'',
+    uf: c[ufField]||'', cep: c['CEP'+s]||'',
   };
+}
+
+// Pergunta qual endereço do cliente usar (quando houver 2 cadastrados).
+// Resolve com false (1° endereço), true (2° endereço) ou undefined (cancelado).
+function escolherEnderecoClientePromise(c) {
+  return new Promise(resolve => {
+    if (!c || !_temSegundoEndereco(c)) { resolve(false); return; }
+    const modal = document.createElement('div');
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10001;display:flex;align-items:center;justify-content:center;padding:16px';
+    modal.innerHTML = `
+      <div style="background:#fff;border-radius:10px;padding:22px;max-width:460px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,.2)">
+        <h3 style="margin:0 0 8px;font-size:16px"><i class="bi bi-geo-alt me-2" style="color:var(--accent)"></i>Qual endereço utilizar?</h3>
+        <p style="font-size:13px;color:var(--text-muted);margin:0 0 16px">O cliente possui 2 endereços cadastrados. Escolha qual usar para gerar este documento.</p>
+        <button class="btn btn-outline" style="width:100%;text-align:left;margin-bottom:8px;display:block;padding:10px 12px" data-end="1">
+          <strong>1° Endereço</strong><br><span style="font-size:12px;color:var(--text-muted)">${esc(_enderecoResumoCliente(c, false))}</span>
+        </button>
+        <button class="btn btn-outline" style="width:100%;text-align:left;margin-bottom:12px;display:block;padding:10px 12px" data-end="2">
+          <strong>2° Endereço</strong><br><span style="font-size:12px;color:var(--text-muted)">${esc(_enderecoResumoCliente(c, true))}</span>
+        </button>
+        <div style="text-align:right"><button class="btn btn-outline btn-sm" data-cancel="1">Cancelar</button></div>
+      </div>`;
+    document.body.appendChild(modal);
+    const done = (v) => { modal.remove(); resolve(v); };
+    modal.querySelector('[data-end="1"]').onclick = () => done(false);
+    modal.querySelector('[data-end="2"]').onclick = () => done(true);
+    modal.querySelector('[data-cancel="1"]').onclick = () => done(undefined);
+    modal.addEventListener('click', e => { if (e.target === modal) done(undefined); });
+  });
+}
+// Versão por callback: executa fn(usarEnd2) a menos que o usuário cancele.
+function comEscolhaEnderecoCliente(c, fn) {
+  escolherEnderecoClientePromise(c).then(v => { if (v !== undefined) fn(v); });
 }
 
 async function gerarAnexoC() {
   const p = window._processoDetalhe;
   if (!p) return;
-  showLoading();
-  try {
-    const dados = p.DadosEspecificosJSON ? JSON.parse(p.DadosEspecificosJSON) : {};
-    const eTransf  = TIPOS_TRANSFERENCIA.includes(p.TipoProcesso);
-    const usaComp  = eTransf && dados.clienteVende === 'sim';
-    const c = window._clienteDetalhe || {};
-    const d = _dadosComprador(c, dados, usaComp);
-    const endFmt = [d.end, d.num ? `n° ${d.num}` : '', d.compl, d.bairro, d.cidade, d.uf, d.cep ? `CEP ${d.cep}` : ''].filter(Boolean).join(', ');
-    const hoje = hojeISO();
-    const html = `
-      <h2>DECLARAÇÃO DE INEXISTÊNCIA DE INQUÉRITOS POLICIAIS<br>OU PROCESSOS CRIMINAIS</h2>
-      <p>Eu, <strong>${esc(d.nome)}</strong>, ${esc(usaComp ? 'Brasileiro(a)' : ((c.Nacionalidade||'').toLowerCase().includes('brasil') ? 'Brasileiro(a)' : (c.Nacionalidade||'')))}, ${esc(d.profissao)}, natural de
-      ${esc(d.nat)}${d.ufNat ? '/' + esc(d.ufNat) : ''}, nascido em ${esc(d.dataNasc)}, com endereço em
-      ${esc(endFmt)}, portador do RG ${esc(d.rg)}${d.orgao ? ' ' + esc(d.orgao) : ''}${d.ufRG ? '/' + esc(d.ufRG) : ''} e CPF nº ${esc(d.cpf)},
-      declaro que não existem inquéritos policiais ou processos criminais em meu nome, tanto no estado de domicílio quanto nos demais entes federativos.</p>
-      <p style="text-align:center;margin-top:48px">${esc(d.cidade)}${d.uf ? '/' + esc(d.uf) : ''}, ${dataPorExtenso(hoje)}</p>
-      <div class="assinatura"><div class="assinatura-linha"></div><div><strong>${esc(d.nome)}</strong></div><div>REQUERENTE</div></div>`;
-    imprimirDocumento(html, 'Anexo C — Declaração');
-  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+  const dados = p.DadosEspecificosJSON ? JSON.parse(p.DadosEspecificosJSON) : {};
+  const eTransf  = TIPOS_TRANSFERENCIA.includes(p.TipoProcesso);
+  const usaComp  = eTransf && dados.clienteVende === 'sim';
+  const c = window._clienteDetalhe || {};
+  const gerar = (usarEnd2) => {
+    showLoading();
+    try {
+      const d = _dadosComprador(c, dados, usaComp, usarEnd2);
+      const endFmt = [d.end, d.num ? `n° ${d.num}` : '', d.compl, d.bairro, d.cidade, d.uf, d.cep ? `CEP ${d.cep}` : ''].filter(Boolean).join(', ');
+      const hoje = hojeISO();
+      const html = `
+        <h2>DECLARAÇÃO DE INEXISTÊNCIA DE INQUÉRITOS POLICIAIS<br>OU PROCESSOS CRIMINAIS</h2>
+        <p>Eu, <strong>${esc(d.nome)}</strong>, ${esc(usaComp ? 'Brasileiro(a)' : ((c.Nacionalidade||'').toLowerCase().includes('brasil') ? 'Brasileiro(a)' : (c.Nacionalidade||'')))}, ${esc(d.profissao)}, natural de
+        ${esc(d.nat)}${d.ufNat ? '/' + esc(d.ufNat) : ''}, nascido em ${esc(d.dataNasc)}, com endereço em
+        ${esc(endFmt)}, portador do RG ${esc(d.rg)}${d.orgao ? ' ' + esc(d.orgao) : ''}${d.ufRG ? '/' + esc(d.ufRG) : ''} e CPF nº ${esc(d.cpf)},
+        declaro que não existem inquéritos policiais ou processos criminais em meu nome, tanto no estado de domicílio quanto nos demais entes federativos.</p>
+        <p style="text-align:center;margin-top:48px">${esc(d.cidade)}${d.uf ? '/' + esc(d.uf) : ''}, ${dataPorExtenso(hoje)}</p>
+        <div class="assinatura"><div class="assinatura-linha"></div><div><strong>${esc(d.nome)}</strong></div><div>REQUERENTE</div></div>`;
+      imprimirDocumento(html, 'Anexo C — Declaração');
+    } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+  };
+  if (!usaComp && _temSegundoEndereco(c)) comEscolhaEnderecoCliente(c, gerar);
+  else gerar(false);
 }
 
 async function gerarDSA(usarComprador) {
   const p = window._processoDetalhe;
   if (!p) return;
-  showLoading();
-  try {
-    const dados = p.DadosEspecificosJSON ? JSON.parse(p.DadosEspecificosJSON) : {};
-    const eTransf  = TIPOS_TRANSFERENCIA.includes(p.TipoProcesso);
-    const usaComp  = usarComprador && eTransf && dados.clienteVende === 'sim';
-    const c = window._clienteDetalhe || {};
-    const d = _dadosComprador(c, dados, usaComp);
-    const categorias = usaComp
-      ? [dados.habCacador, dados.habAtirador, dados.habColecionador].filter(Boolean).join(', ') || 'CAC'
-      : (c.Categoria || 'CAC').split(',').map(s => s.trim()).join(', ');
-    const endFmt = [d.end, d.num ? `n° ${d.num}` : '', d.compl, d.bairro, d.cidade, d.uf, d.cep ? `CEP ${d.cep}` : ''].filter(Boolean).join(', ');
-    const hoje = hojeISO();
-    const html = `
-      <h2>DECLARAÇÃO DE SEGURANÇA DO ACERVO (DSA) — ENDEREÇO DE ACERVO</h2>
-      <p>Eu, <strong>${esc(d.nome)}</strong>, ${esc(usaComp ? 'Brasileiro(a)' : ((c.Nacionalidade||'').toLowerCase().includes('brasil') ? 'Brasileiro(a)' : (c.Nacionalidade||'')))}, ${esc(d.profissao)}, natural de
-      ${esc(d.nat)}${d.ufNat ? '/' + esc(d.ufNat) : ''}, nascido em ${esc(d.dataNasc)}, com endereço em
-      ${esc(endFmt)}, portador do RG ${esc(d.rg)}${d.orgao ? ' ' + esc(d.orgao) : ''}${d.ufRG ? '/' + esc(d.ufRG) : ''} e CPF nº ${esc(d.cpf)},
-      DECLARO, para fins de <strong>${esc(p.TipoProcesso)} NA POLÍCIA FEDERAL</strong> que o local de guarda do meu acervo de
-      <strong>${esc(categorias)}</strong> possui cofre ou lugar seguro, com tranca, para armazenamento das armas de fogo desmuniciadas de que sou proprietário,
-      e de que adotarei as medidas necessárias para impedir que menor de dezoito anos de idade ou pessoa civilmente incapaz se apodere de arma de fogo sob
-      minha posse ou de minha propriedade, observado o disposto no art. 13 da Lei nº 10.826, de 2003.</p>
-      <p style="text-align:center;margin-top:48px">${esc(d.cidade)}${d.uf ? '/' + esc(d.uf) : ''}, ${dataPorExtenso(hoje)}</p>
-      <div class="assinatura"><div class="assinatura-linha"></div><div><strong>${esc(d.nome)}</strong></div><div>REQUERENTE</div></div>`;
-    imprimirDocumento(html, 'DSA — Declaração de Segurança do Acervo');
-  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+  const dados = p.DadosEspecificosJSON ? JSON.parse(p.DadosEspecificosJSON) : {};
+  const eTransf  = TIPOS_TRANSFERENCIA.includes(p.TipoProcesso);
+  const usaComp  = usarComprador && eTransf && dados.clienteVende === 'sim';
+  const c = window._clienteDetalhe || {};
+  const gerar = (usarEnd2) => {
+    showLoading();
+    try {
+      const d = _dadosComprador(c, dados, usaComp, usarEnd2);
+      const categorias = usaComp
+        ? [dados.habCacador, dados.habAtirador, dados.habColecionador].filter(Boolean).join(', ') || 'CAC'
+        : (c.Categoria || 'CAC').split(',').map(s => s.trim()).join(', ');
+      const endFmt = [d.end, d.num ? `n° ${d.num}` : '', d.compl, d.bairro, d.cidade, d.uf, d.cep ? `CEP ${d.cep}` : ''].filter(Boolean).join(', ');
+      const hoje = hojeISO();
+      const html = `
+        <h2>DECLARAÇÃO DE SEGURANÇA DO ACERVO (DSA) — ENDEREÇO DE ACERVO</h2>
+        <p>Eu, <strong>${esc(d.nome)}</strong>, ${esc(usaComp ? 'Brasileiro(a)' : ((c.Nacionalidade||'').toLowerCase().includes('brasil') ? 'Brasileiro(a)' : (c.Nacionalidade||'')))}, ${esc(d.profissao)}, natural de
+        ${esc(d.nat)}${d.ufNat ? '/' + esc(d.ufNat) : ''}, nascido em ${esc(d.dataNasc)}, com endereço em
+        ${esc(endFmt)}, portador do RG ${esc(d.rg)}${d.orgao ? ' ' + esc(d.orgao) : ''}${d.ufRG ? '/' + esc(d.ufRG) : ''} e CPF nº ${esc(d.cpf)},
+        DECLARO, para fins de <strong>${esc(p.TipoProcesso)} NA POLÍCIA FEDERAL</strong> que o local de guarda do meu acervo de
+        <strong>${esc(categorias)}</strong> possui cofre ou lugar seguro, com tranca, para armazenamento das armas de fogo desmuniciadas de que sou proprietário,
+        e de que adotarei as medidas necessárias para impedir que menor de dezoito anos de idade ou pessoa civilmente incapaz se apodere de arma de fogo sob
+        minha posse ou de minha propriedade, observado o disposto no art. 13 da Lei nº 10.826, de 2003.</p>
+        <p style="text-align:center;margin-top:48px">${esc(d.cidade)}${d.uf ? '/' + esc(d.uf) : ''}, ${dataPorExtenso(hoje)}</p>
+        <div class="assinatura"><div class="assinatura-linha"></div><div><strong>${esc(d.nome)}</strong></div><div>REQUERENTE</div></div>`;
+      imprimirDocumento(html, 'DSA — Declaração de Segurança do Acervo');
+    } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+  };
+  if (!usaComp && _temSegundoEndereco(c)) comEscolhaEnderecoCliente(c, gerar);
+  else gerar(false);
 }
 
 async function gerarProcuracao() {
   const p = window._processoDetalhe;
   if (!p) return;
-  showLoading();
-  try {
-    const dados = p.DadosEspecificosJSON ? JSON.parse(p.DadosEspecificosJSON) : {};
-    const eTransf  = TIPOS_TRANSFERENCIA.includes(p.TipoProcesso);
-    const usaComp  = eTransf && dados.clienteVende === 'sim';
-    const c = window._clienteDetalhe || {};
-    const d = _dadosComprador(c, dados, usaComp);
-    const endFmt = [d.end, d.num ? `n° ${d.num}` : '', d.compl, d.bairro, d.cidade, d.uf, d.cep ? `CEP ${d.cep}` : ''].filter(Boolean).join(', ');
-    const hoje = hojeISO();
-    const html = `
-      <div style="text-align:right;font-size:10pt;color:#555;margin-bottom:8px">Data de Emissão: ${fmtDate(hoje)}</div>
-      <h1>PROCURAÇÃO</h1>
-      <p><strong>Outorgante</strong> Eu, <strong>${esc(d.nome)}</strong>, ${esc(usaComp ? 'Brasileiro(a)' : ((c.Nacionalidade||'').toLowerCase().includes('brasil') ? 'Brasileiro(a)' : (c.Nacionalidade||'')))}, ${esc(d.profissao)},
-      natural de ${esc(d.nat)}${d.ufNat ? '/' + esc(d.ufNat) : ''}, nascido em ${esc(d.dataNasc)},
-      com endereço em ${esc(endFmt)},
-      portador do RG ${esc(d.rg)}${d.orgao ? ' ' + esc(d.orgao) : ''}${d.ufRG ? '/' + esc(d.ufRG) : ''} e CPF nº ${esc(d.cpf)}.</p>
-      <p><strong>Outorgado:</strong> <strong>Simone Barp Pegoraro</strong>, brasileira, solteira, Contadora, com endereço comercial na rua Itararé, 18, sala 101, Petrópolis, Vacaria-RS, CEP 95211-101, portadora do RG 1085506374 SSP/RS e CPF de nº 018.699.740-00.</p>
-      <p>Pelo presente instrumento particular de mandato a parte que assina, denominada outorgante, nomeia e constitui como procurador o outorgado
-      acima qualificado, outorgando-lhe os poderes necessários para representá-lo junto aos seguintes órgãos: Comando da 3ª Região Militar e
-      Polícia Federal-SINARM, em seu Serviço de Fiscalização de Produtos Controlados, para promoção da entrega dos documentos de solicitação de
-      concessão de alteração, apostilamento em Certificado de Registro, da promoção e da entrega da concessão de guia de tráfego dos produtos
-      controlados constantes dos acervos por esse órgão controlado, bem como a retirada dos despachos (e/ou documentos) referentes às concessões
-      elencadas, exclusivamente, sendo vedado seu substabelecimento.</p>
-      <p style="text-align:center;margin-top:48px">${esc(d.cidade)}${d.uf ? '/' + esc(d.uf) : ''}, ${dataPorExtenso(hoje)}</p>
-      <div class="assinatura"><div class="assinatura-linha"></div><div><strong>${esc(d.nome)}</strong></div></div>
-      <div style="page-break-before:always;page-break-after:avoid;margin:0;padding:0;overflow:hidden">
-        <embed src="procuracao-doc.pdf" type="application/pdf" width="100%" height="1050px" style="border:none;display:block" />
-      </div>`;
-    imprimirDocumento(html, 'Procuração', '@page{margin:0}');
-  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+  const dados = p.DadosEspecificosJSON ? JSON.parse(p.DadosEspecificosJSON) : {};
+  const eTransf  = TIPOS_TRANSFERENCIA.includes(p.TipoProcesso);
+  const usaComp  = eTransf && dados.clienteVende === 'sim';
+  const c = window._clienteDetalhe || {};
+  const gerar = (usarEnd2) => {
+    showLoading();
+    try {
+      const d = _dadosComprador(c, dados, usaComp, usarEnd2);
+      const endFmt = [d.end, d.num ? `n° ${d.num}` : '', d.compl, d.bairro, d.cidade, d.uf, d.cep ? `CEP ${d.cep}` : ''].filter(Boolean).join(', ');
+      const hoje = hojeISO();
+      const html = `
+        <div style="text-align:right;font-size:10pt;color:#555;margin-bottom:8px">Data de Emissão: ${fmtDate(hoje)}</div>
+        <h1>PROCURAÇÃO</h1>
+        <p><strong>Outorgante</strong> Eu, <strong>${esc(d.nome)}</strong>, ${esc(usaComp ? 'Brasileiro(a)' : ((c.Nacionalidade||'').toLowerCase().includes('brasil') ? 'Brasileiro(a)' : (c.Nacionalidade||'')))}, ${esc(d.profissao)},
+        natural de ${esc(d.nat)}${d.ufNat ? '/' + esc(d.ufNat) : ''}, nascido em ${esc(d.dataNasc)},
+        com endereço em ${esc(endFmt)},
+        portador do RG ${esc(d.rg)}${d.orgao ? ' ' + esc(d.orgao) : ''}${d.ufRG ? '/' + esc(d.ufRG) : ''} e CPF nº ${esc(d.cpf)}.</p>
+        <p><strong>Outorgado:</strong> <strong>Simone Barp Pegoraro</strong>, brasileira, solteira, Contadora, com endereço comercial na rua Itararé, 18, sala 101, Petrópolis, Vacaria-RS, CEP 95211-101, portadora do RG 1085506374 SSP/RS e CPF de nº 018.699.740-00.</p>
+        <p>Pelo presente instrumento particular de mandato a parte que assina, denominada outorgante, nomeia e constitui como procurador o outorgado
+        acima qualificado, outorgando-lhe os poderes necessários para representá-lo junto aos seguintes órgãos: Comando da 3ª Região Militar e
+        Polícia Federal-SINARM, em seu Serviço de Fiscalização de Produtos Controlados, para promoção da entrega dos documentos de solicitação de
+        concessão de alteração, apostilamento em Certificado de Registro, da promoção e da entrega da concessão de guia de tráfego dos produtos
+        controlados constantes dos acervos por esse órgão controlado, bem como a retirada dos despachos (e/ou documentos) referentes às concessões
+        elencadas, exclusivamente, sendo vedado seu substabelecimento.</p>
+        <p style="text-align:center;margin-top:48px">${esc(d.cidade)}${d.uf ? '/' + esc(d.uf) : ''}, ${dataPorExtenso(hoje)}</p>
+        <div class="assinatura"><div class="assinatura-linha"></div><div><strong>${esc(d.nome)}</strong></div></div>
+        <div style="page-break-before:always;page-break-after:avoid;margin:0;padding:0;overflow:hidden">
+          <embed src="procuracao-doc.pdf" type="application/pdf" width="100%" height="1050px" style="border:none;display:block" />
+        </div>`;
+      imprimirDocumento(html, 'Procuração', '@page{margin:0}');
+    } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+  };
+  if (!usaComp && _temSegundoEndereco(c)) comEscolhaEnderecoCliente(c, gerar);
+  else gerar(false);
 }
 
 // ============================================================
@@ -5501,14 +5575,18 @@ async function resolverVendedorEArmaCadastrados(dados) {
 async function gerarTermoTransferencia() {
   const p = window._processoDetalhe;
   if (!p) return;
+  const c = window._clienteDetalhe || {};
+  const usarEnd2 = await escolherEnderecoClientePromise(c);   // pergunta qual endereço (se houver 2)
+  if (usarEnd2 === undefined) return;
+  const s = usarEnd2 ? '2' : '1';
+  const ufF = usarEnd2 ? 'UF2Endereco' : 'UF1Endereco';
   showLoading();
   try {
     const dados = p.DadosEspecificosJSON ? JSON.parse(p.DadosEspecificosJSON) : {};
-    const c = window._clienteDetalhe || {};
     const eTransf = TIPOS_TRANSFERENCIA.includes(p.TipoProcesso);
     const _ef = (...parts) => parts.filter(Boolean).join(', ');
-    const clienteEnd = _ef(c.Endereco1||'', c.Numero1 ? `n° ${c.Numero1}` : '', c.Complemento1||'', c.Bairro1||'', c.Cidade1||'', c.UF1Endereco||'', c.CEP1 ? `CEP ${c.CEP1}` : '');
-    const clienteCU = [c.Cidade1||'', c.UF1Endereco||''].filter(Boolean).join('/');
+    const clienteEnd = _ef(c['Endereco'+s]||'', c['Numero'+s] ? `n° ${c['Numero'+s]}` : '', c['Complemento'+s]||'', c['Bairro'+s]||'', c['Cidade'+s]||'', c[ufF]||'', c['CEP'+s] ? `CEP ${c['CEP'+s]}` : '');
+    const clienteCU = [c['Cidade'+s]||'', c[ufF]||''].filter(Boolean).join('/');
     let vend = {}, comp = {}, arm = {};
     if (dados.mesmoTitular === 'sim') {
       vend = { nome: c.Title||'', cpf: c.CPF||'', endereco: clienteEnd, cidadeUF: clienteCU };
@@ -5558,12 +5636,16 @@ async function gerarTermoTransferencia() {
 async function gerarRequerimento() {
   const p = window._processoDetalhe;
   if (!p) return;
+  const c = window._clienteDetalhe || {};
+  const usarEnd2 = await escolherEnderecoClientePromise(c);   // pergunta qual endereço (se houver 2)
+  if (usarEnd2 === undefined) return;                          // cancelado
+  const s = usarEnd2 ? '2' : '1';
+  const ufF = usarEnd2 ? 'UF2Endereco' : 'UF1Endereco';
   showLoading();
   try {
     const dados = p.DadosEspecificosJSON ? JSON.parse(p.DadosEspecificosJSON) : {};
     const isTransf  = TIPOS_TRANSFERENCIA.includes(p.TipoProcesso);
     const isMudanca = p.TipoProcesso === 'Mudança de Acervo';
-    const c = window._clienteDetalhe || {};
 
     let t = 0, tOutros = '';
     if (p.TipoProcesso === 'Transferência de Arma SINARM x SIGMA')  t = 1;
@@ -5581,8 +5663,8 @@ async function gerarRequerimento() {
       v = { nome:c.Title||'', cpf:c.CPF||'',
         rg:`${c.RG||''}${c.OrgaoEmissor?' '+c.OrgaoEmissor:''}${c.UFDoc?'/'+c.UFDoc:''}`,
         cr:c.NumeroCR||'', telefone:c.Celular||'',
-        end:c.Endereco1||'', num:c.Numero1||'', cep:c.CEP1||'',
-        uf:c.UF1Endereco||'', municipio:c.Cidade1||'', bairro:c.Bairro1||'' };
+        end:c['Endereco'+s]||'', num:c['Numero'+s]||'', cep:c['CEP'+s]||'',
+        uf:c[ufF]||'', municipio:c['Cidade'+s]||'', bairro:c['Bairro'+s]||'' };
       vendHabs = clienteHabs;
       vendEmail = c.Email||'';
     } else if (isTransf && vendCadastrado) {
@@ -5610,9 +5692,9 @@ async function gerarRequerimento() {
         paisNasc:'Brasil', ufNasc:c.UFNaturalidade||'', municipioNasc:c.Naturalidade||'',
         estadoCivil:c.EstadoCivil||'', profissao:c.Profissao||'',
         empresa:dados.empresaAdicional||'', cnpj:dados.cnpjCpfAdicional||'',
-        endResid:c.Endereco1||'', numResid:c.Numero1||'',
-        municipioResid:c.Cidade1||'', bairroResid:c.Bairro1||'',
-        ufResid:c.UF1Endereco||'', cepResid:c.CEP1||'',
+        endResid:c['Endereco'+s]||'', numResid:c['Numero'+s]||'',
+        municipioResid:c['Cidade'+s]||'', bairroResid:c['Bairro'+s]||'',
+        ufResid:c[ufF]||'', cepResid:c['CEP'+s]||'',
         endCom:dados.endComercialAdicional||'', numCom:dados.numComercialAdicional||'',
         municipioCom:dados.municipioComercialAdicional||'', bairroCom:dados.bairroComercialAdicional||'',
         ufCom:dados.ufComercialAdicional||'', cepCom:dados.cepComercialAdicional||'' };
@@ -5642,9 +5724,9 @@ async function gerarRequerimento() {
         paisNasc:'Brasil', ufNasc:c.UFNaturalidade||'', municipioNasc:c.Naturalidade||'',
         estadoCivil:c.EstadoCivil||'', profissao:c.Profissao||'',
         empresa:dados.empresaAdicional||'', cnpj:dados.cnpjCpfAdicional||'',
-        endResid:c.Endereco1||'', numResid:c.Numero1||'',
-        municipioResid:c.Cidade1||'', bairroResid:c.Bairro1||'',
-        ufResid:c.UF1Endereco||'', cepResid:c.CEP1||'',
+        endResid:c['Endereco'+s]||'', numResid:c['Numero'+s]||'',
+        municipioResid:c['Cidade'+s]||'', bairroResid:c['Bairro'+s]||'',
+        ufResid:c[ufF]||'', cepResid:c['CEP'+s]||'',
         endCom:dados.endComercialAdicional||'', numCom:dados.numComercialAdicional||'',
         municipioCom:dados.municipioComercialAdicional||'', bairroCom:dados.bairroComercialAdicional||'',
         ufCom:dados.ufComercialAdicional||'', cepCom:dados.cepComercialAdicional||'' };
