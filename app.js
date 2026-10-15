@@ -2236,11 +2236,14 @@ function renderPerfilIBAMA(c) {
                     <td>${esc(s.CPFProprietario||'—')}</td>
                     <td>${esc(s.TelefoneProprietario||'—')}</td>
                     <td>${esc(s.CidadeSimaf||'')}${s.UFSimaf?' - '+esc(s.UFSimaf):''}</td>
-                    <td><span class="badge ${vs.cls}">${vs.txt}</span></td>
+                    <td>${s.Desconsiderada === 'sim' ? '<span class="badge badge-gray" title="Fora do controle de validades">Desconsiderada</span>' : `<span class="badge ${vs.cls}">${vs.txt}</span>`}</td>
                     <td style="white-space:nowrap">
                       <button class="btn btn-ghost btn-sm" onclick="gerarAutorizacaoCaca('${c.id}',${i})" title="Gerar Autorização de Caça"><i class="bi bi-file-earmark-pdf" style="color:#dc2626"></i></button>
                       <button class="btn btn-ghost btn-sm" onclick="renovarSIMAF('${c.id}',${i})" title="Renovar Validade"><i class="bi bi-arrow-clockwise" style="color:#16a34a"></i></button>
                       <button class="btn btn-ghost btn-sm" onclick="editarSIMAF('${c.id}',${i})" title="Editar"><i class="bi bi-pencil" style="color:var(--accent)"></i></button>
+                      ${s.Desconsiderada === 'sim'
+                        ? `<button class="btn btn-ghost btn-sm" onclick="reconsiderarSIMAF('${c.id}',${i})" title="Voltar a considerar nas validades"><i class="bi bi-eye" style="color:#2563eb"></i></button>`
+                        : `<button class="btn btn-ghost btn-sm" onclick="desconsiderarSIMAF('${c.id}',${i})" title="Desconsiderar das validades"><i class="bi bi-eye-slash" style="color:#d97706"></i></button>`}
                       <button class="btn btn-ghost btn-sm" onclick="deletarSIMAF('${c.id}',${i})" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>
                     </td>
                   </tr>`;
@@ -2520,10 +2523,12 @@ function renderPerfilArmas(armas, clienteId, cliente) {
       ${!isClienteInativo(cliente) ? `
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         ${isExtrasUser() ? `<button class="btn btn-outline" onclick="abrirImportSinarm('${clienteId}')"><i class="bi bi-download"></i> Importar do SINARM</button>` : ''}
+        ${isExtrasUser() ? `<button class="btn btn-outline" onclick="abrirImportSisgcorp('${clienteId}')"><i class="bi bi-download"></i> Importar do SISGCORP</button>` : ''}
         <button class="btn btn-primary" onclick="navigate('armas/novo',{clienteId:'${clienteId}'})"><i class="bi bi-plus-lg"></i> Adicionar Arma</button>
       </div>` : ''}
     </div>
     <div id="painel-sinarm-armas" style="display:none;margin-bottom:14px"></div>
+    <div id="painel-sisgcorp-armas" style="display:none;margin-bottom:14px"></div>
     ${resumoBlock}
     <div class="card">
       <div class="table-wrapper">
@@ -2682,8 +2687,16 @@ async function desconsiderarGuia(id, clienteId, origem) {
     await registrarHistDoc(clienteId, doc || { id, TipoDocumento: 'Guia de Tráfego' }, 'Desconsiderada');
     App.invalidateCache('documentos');
     toast('Guia desconsiderada.', 'success');
-    if (origem === 'validades') await renderValidades();
-    else navigate('clientes/perfil', { id: clienteId, tab: 'documentos' });
+    // re-renderiza direto (navigate ao mesmo hash não dispara re-render)
+    if (origem === 'validades') {
+      // preserva os filtros selecionados ao recarregar a página de Validades
+      window._validadesFiltroSalvo = {
+        cliente: document.getElementById('filtro-cliente')?.value || '',
+        tipo: document.getElementById('filtro-tipo')?.value || '',
+        situacao: document.getElementById('filtro-situacao')?.value || '',
+      };
+      await renderValidades();
+    } else await renderClientePerfil(clienteId, 'documentos');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
@@ -2703,7 +2716,7 @@ async function reconsiderarGuia(id, clienteId) {
     await registrarHistDoc(clienteId, doc || { id, TipoDocumento: 'Guia de Tráfego' }, 'Reconsiderada');
     App.invalidateCache('documentos');
     toast('Guia reconsiderada.', 'success');
-    navigate('clientes/perfil', { id: clienteId, tab: 'documentos' });
+    await renderClientePerfil(clienteId, 'documentos');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
@@ -6179,6 +6192,7 @@ async function renderProcessoDetalhe(id) {
               </div>
               ${processo.DataPagamentoGRU ? `<div style="font-size:12px;color:var(--text-muted)">Data: <strong>${fmtDate(processo.DataPagamentoGRU.split('T')[0])}</strong></div>` : ''}
               <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#16a34a;margin-top:6px"><i class="bi bi-lock-fill"></i> Pagamento registrado</div>
+              ${isAdminUser() ? `<div style="margin-top:8px"><button class="btn btn-ghost btn-sm" style="color:#dc2626;padding:2px 8px;font-size:12px" onclick="reverterPagamentoGRU('${id}')"><i class="bi bi-arrow-counterclockwise me-1"></i>Reverter pagamento</button></div>` : ''}
               ` : `
               <label class="checkbox-item" style="font-size:13px;font-weight:600">
                 <input type="checkbox" id="chk-gru-paga" ${processo.GruPaga ? 'checked' : ''} onchange="onGruPagaChange('${id}',this.checked)" />
@@ -6871,8 +6885,13 @@ async function deferirProcesso(id) {
 
       liberarProcessosFuturos(id);
       await renderProcessoDetalhe(id);
-      if (window._novosAutoCriados && window._novosAutoCriados.length) {
-        mostrarPopupProcessosAuto(window._novosAutoCriados.slice());
+      const _autos = window._novosAutoCriados ? window._novosAutoCriados.slice() : [];
+      const _guias = _autos.filter(x => x.tipo === 'Guia de Tráfego');
+      if (_guias.length) {
+        // Guias de Tráfego criadas: abre a cascata para escolher o tipo de cada uma
+        abrirCascataGuiasCriadas(_guias.map(x => x.id), p.ClienteId);
+      } else if (_autos.length) {
+        mostrarPopupProcessosAuto(_autos);
       }
     } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
   };
@@ -7720,6 +7739,36 @@ async function salvarPagamentoGRUHistorico(id) {
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
+// Reverte/exclui um pagamento de GRU já registrado (apenas administradores).
+async function reverterPagamentoGRU(id) {
+  if (!isAdminUser()) { toast('Apenas administradores podem reverter o pagamento da GRU.', 'warning'); return; }
+  const ok = await confirmarModal({
+    titulo: 'Reverter Pagamento da GRU',
+    mensagem: 'Deseja reverter/excluir o pagamento registrado da GRU? O processo volta a aparecer em Pagamentos de GRU como pendente.',
+    okLabel: 'Reverter', okCor: '#dc2626', icone: 'bi-arrow-counterclockwise',
+  });
+  if (!ok) return;
+  showLoading();
+  try {
+    const proc = await App.graph.getItem(CONFIG.listas.processos, id);
+    let historico = [];
+    try { historico = JSON.parse(proc.HistoricoStatus || '[]'); } catch (e) {}
+    historico = historico.filter(h => !String((h && h.status) || '').startsWith('Pagamento GRU'));
+    await App.graph.updateItem(CONFIG.listas.processos, id, {
+      GruPaga: false, DataPagamentoGRU: null, HistoricoStatus: JSON.stringify(historico),
+    });
+    App.invalidateCache('processos');
+    if (window._processoDetalhe) {
+      window._processoDetalhe.GruPaga = false;
+      window._processoDetalhe.DataPagamentoGRU = null;
+      window._processoDetalhe.HistoricoStatus = JSON.stringify(historico);
+    }
+    try { registrarMovimentacao('Reverter Pagamento GRU', `${proc.TipoProcesso || ''} — ${proc.ClienteNome || ''}`); } catch (e) {}
+    toast('Pagamento da GRU revertido.', 'success');
+    await renderProcessoDetalhe(id);
+  } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
 // ============================================================
 // VALIDADES
 // ============================================================
@@ -7757,10 +7806,12 @@ async function renderValidades() {
       const iso = c.DataValidadeCTF.split('T')[0];
       itens.push({ tipo: 'CTF', cliente: c.Title, data: iso, dias: daysBetween(iso), clienteId: c.id, celular: c.Celular || '', tab: 'dados' });
     }
-    if (c.SIMAFs) {
+    // CTF marcado como "Não Renovar": todos os SIMAFs saem do controle de validades.
+    if (c.SIMAFs && c.NaoRenovarCTF !== 'sim') {
       try {
         JSON.parse(c.SIMAFs).forEach(s => {
           if (!s.DataValidade) return;
+          if (s.Desconsiderada === 'sim') return;   // SIMAF desconsiderado manualmente também sai
           const iso = s.DataValidade.split('T')[0];
           itens.push({ tipo: 'SIMAF', cliente: c.Title, data: iso, dias: daysBetween(iso), clienteId: c.id, celular: c.Celular || '', tab: 'dados', descricao: s.NomeFazenda ? `SIMAF — ${s.NomeFazenda}` : 'SIMAF' });
         });
@@ -7822,6 +7873,14 @@ async function renderValidades() {
       </div>
     </div>`;
 
+  // Restaura os filtros preservados (ex.: após desconsiderar um documento)
+  const _fs = window._validadesFiltroSalvo;
+  if (_fs) {
+    const fc = document.getElementById('filtro-cliente');  if (fc) fc.value = _fs.cliente || '';
+    const ft = document.getElementById('filtro-tipo');     if (ft) ft.value = _fs.tipo || '';
+    const fsi = document.getElementById('filtro-situacao'); if (fsi) fsi.value = _fs.situacao || '';
+    window._validadesFiltroSalvo = null;
+  }
   filtrarValidades();
 }
 
@@ -8378,7 +8437,10 @@ async function renderPagamentosGRU() {
       </div>
       <div class="card-body" style="padding:0">
         ${gruGrupos.map(g => `<div style="padding:12px 20px;border-bottom:1px solid var(--border)">
-          <a style="font-size:14px;font-weight:700;cursor:pointer;color:var(--accent)" onclick="navigate('clientes/perfil',{id:'${g.clienteId}'})">${esc(g.nome)}</a>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+            <a style="font-size:14px;font-weight:700;cursor:pointer;color:var(--accent)" onclick="navigate('clientes/perfil',{id:'${g.clienteId}'})">${esc(g.nome)}</a>
+            <span style="font-size:13px;font-weight:700;color:#16a34a" title="Total das taxas de GRU deste cliente"><i class="bi bi-receipt me-1"></i>${fmtMoeda(g.processos.reduce((s,p)=>s+taxaProcesso(p),0))}</span>
+          </div>
           <div style="padding-left:12px;border-left:3px solid var(--border);margin-top:6px">
             ${g.processos.map(p => `<div style="padding:5px 0;font-size:13px;display:flex;justify-content:space-between;align-items:center;gap:10px">
               <div>
@@ -12806,6 +12868,37 @@ async function deletarSIMAF(clienteId, index) {
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
+async function desconsiderarSIMAF(clienteId, index) {
+  const ok = await confirmarModal({
+    titulo: 'Desconsiderar SIMAF',
+    mensagem: 'Deseja desconsiderar este SIMAF? Ele deixará de aparecer no controle de validades (continua cadastrado na aba IBAMA).',
+    okLabel: 'Desconsiderar', okCor: '#d97706', icone: 'bi-eye-slash',
+  });
+  if (!ok) return;
+  showLoading();
+  try {
+    const cliente = await App.graph.getItem(CONFIG.listas.clientes, clienteId);
+    const simafList = JSON.parse(cliente.SIMAFs || '[]');
+    if (simafList[index]) { simafList[index].Desconsiderada = 'sim'; simafList[index].DataDesconsiderada = hojeISO(); }
+    await App.graph.updateItem(CONFIG.listas.clientes, clienteId, { SIMAFs: JSON.stringify(simafList) });
+    App.invalidateCache('clientes');
+    toast('SIMAF desconsiderado.', 'success');
+    await renderClientePerfil(clienteId, 'ibama');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+async function reconsiderarSIMAF(clienteId, index) {
+  showLoading();
+  try {
+    const cliente = await App.graph.getItem(CONFIG.listas.clientes, clienteId);
+    const simafList = JSON.parse(cliente.SIMAFs || '[]');
+    if (simafList[index]) { simafList[index].Desconsiderada = ''; simafList[index].DataDesconsiderada = null; }
+    await App.graph.updateItem(CONFIG.listas.clientes, clienteId, { SIMAFs: JSON.stringify(simafList) });
+    App.invalidateCache('clientes');
+    toast('SIMAF voltou ao controle de validades.', 'success');
+    await renderClientePerfil(clienteId, 'ibama');
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
 // ============================================================
 // REGISTRO DE MOVIMENTAÇÕES
 // ============================================================
@@ -15014,7 +15107,7 @@ async function abrirCascataDemanda(demandaId, itemIdx) {
     const criados = processos.filter(p => p.demandaId && String(p.demandaId) === String(d.id) && p.TipoProcesso === item.tipo).length;
     const restantes = Math.max(0, item.qtd - criados);
     if (restantes < 1) { toast('Todos os processos deste item já foram criados.', 'info'); return; }
-    const armas = (await App.getArmas()).filter(a => String(a.ClienteId) === String(d.clienteId));
+    const armas = (await App.getArmas()).filter(a => String(a.ClienteId) === String(d.clienteId) && !armaForaDeUso(a));
     // Prepara o contexto usado pelos campos da Guia (endereços do cliente + clubes)
     const cliente = await App.graph.getItem(CONFIG.listas.clientes, d.clienteId).catch(() => null);
     _processoClienteObj = cliente || null;
@@ -15210,6 +15303,127 @@ function onCascMudanca(r, qual, val) {
   if (val === '__manual__') { inp.value = ''; inp.readOnly = false; inp.focus(); }
   else if (val === '')      { inp.value = ''; inp.readOnly = true; }
   else                      { inp.value = val; inp.readOnly = true; }
+}
+
+// ============================================================
+// CASCATA DAS GUIAS CRIADAS NO DEFERIMENTO — escolher o tipo de cada guia
+// (reaproveita os campos e handlers da cascata de demanda; aqui ATUALIZA as
+//  guias já criadas em vez de criar novas).
+// ============================================================
+async function abrirCascataGuiasCriadas(guiaIds, clienteId) {
+  if (!guiaIds || !guiaIds.length) return;
+  showLoading();
+  try {
+    const [armasAll, clubes, cliente] = await Promise.all([
+      App.getArmas(), App.getClubes().catch(() => []), App.graph.getItem(CONFIG.listas.clientes, clienteId).catch(() => null),
+    ]);
+    _processoClienteObj = cliente || null;
+    window._clubesCadastrados = clubes || [];
+    const guias = [];
+    for (const gid of guiaIds) {
+      try { guias.push(await App.graph.getItem(CONFIG.listas.processos, gid)); } catch (e) {}
+    }
+    if (!guias.length) { hideLoading(); return; }
+    window._cascataGuias = { guiaIds: guias.map(g => String(g.id)) };
+    const armas = armasAll.filter(a => String(a.ClienteId) === String(clienteId) && !armaForaDeUso(a));
+    const clubeOpts = (clubes || []).slice().sort((a, b) => (a.Title || '').localeCompare(b.Title || '', 'pt-BR')).map(cl => `<option value="${cl.id}">${esc(cl.Title)}</option>`).join('');
+    const endOrigemOpts = buildEndOrigemGuiaOpts();
+    const endClienteOpts = buildEndClienteOpts();
+    const armaOptsFor = (sel) => armas.map(a => {
+      const val = `${a.id}|${esc(a.AtividadeCadastrada || '')}|${esc(a.Marca || '')}|${esc(a.Modelo || '')}`;
+      const selected = (String(sel || '').split('|')[0] === String(a.id)) ? 'selected' : '';
+      return `<option value="${val}" ${selected}>${a.Especie ? esc(a.Especie) + ' · ' : ''}${esc(a.Marca || '')} ${esc(a.Modelo || '')}${a.NumeroSerie ? ' (' + esc(a.NumeroSerie) + ')' : ''} — ${esc(a.AtividadeCadastrada || '')}</option>`;
+    }).join('');
+    const rowHTML = (r, armaVal) => `
+      <div style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px">
+        <div style="font-weight:600;font-size:13px;margin-bottom:8px">Guia ${r + 1}</div>
+        <div class="form-grid">
+          <div><label>Arma</label><select id="casc-arma-${r}" onchange="onCascArma(${r},this.value)" style="width:100%"><option value="">Selecione...</option>${armaOptsFor(armaVal)}</select></div>
+          <div><label>Tipo de Guia</label>
+            <select id="casc-guia-${r}" onchange="onCascGuiaTipo(${r},this.value)">
+              <option value="">Selecione...</option>
+              <option>Caça</option><option>Caça-Treinamento Tiro</option><option>Tiro Esportivo</option><option>Mudança de Local de Acervo</option>
+            </select>
+          </div>
+        </div>
+        <div id="casc-caca-${r}" style="display:none;margin-top:10px"><div class="form-grid">
+          <div><label>Cidade</label><input id="casc-cidade-${r}" /></div>
+          <div><label>UF</label><input id="casc-uf-${r}" maxlength="2" style="text-transform:uppercase" /></div>
+        </div></div>
+        <div id="casc-clube-${r}" style="display:none;margin-top:10px"><div class="form-grid">
+          <div style="grid-column:span 2"><label>Clube de Tiro</label>
+            <select id="casc-clubesel-${r}" onchange="preencherClubeCasc(${r},this.value)"><option value="">Digitar manualmente...</option>${clubeOpts}</select></div>
+          <div><label>Nome do Clube de Tiro</label><input id="casc-nomeClube-${r}" /></div>
+          <div><label>CR do Clube</label><input id="casc-crClube-${r}" /></div>
+          <div style="grid-column:span 2"><label>Endereço do Clube</label><input id="casc-enderecoClube-${r}" /></div>
+        </div></div>
+        ${endOrigemOpts ? `<div id="casc-origem-${r}" style="margin-top:10px"><div class="form-grid">
+          <div style="grid-column:span 2"><label>Endereço de Origem da Guia</label><select id="casc-endOrigem-${r}">${endOrigemOpts}</select></div>
+        </div></div>` : ''}
+        <div id="casc-mudanca-${r}" style="display:none;margin-top:10px"><div class="form-grid">
+          <div style="grid-column:span 2"><label>Endereço de Origem</label>
+            <select id="casc-mudsel-o-${r}" onchange="onCascMudanca(${r},'origem',this.value)"><option value="">Selecione...</option>${endClienteOpts}<option value="__manual__">Digitar manualmente...</option></select>
+            <input id="casc-endMudOrigem-${r}" placeholder="Endereço de origem" style="margin-top:6px" readonly /></div>
+          <div style="grid-column:span 2"><label>Endereço de Destino</label>
+            <select id="casc-mudsel-d-${r}" onchange="onCascMudanca(${r},'destino',this.value)"><option value="">Selecione...</option>${endClienteOpts}<option value="__manual__">Digitar manualmente...</option></select>
+            <input id="casc-endMudDestino-${r}" placeholder="Endereço de destino" style="margin-top:6px" readonly /></div>
+        </div></div>
+      </div>`;
+    const linhas = guias.map((g, r) => rowHTML(r, (_dadosEsp(g) || {}).armaId || '')).join('');
+    document.getElementById('modal-cascata-guias')?.remove();
+    const modal = document.createElement('div');
+    modal.id = 'modal-cascata-guias';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px';
+    modal.innerHTML = `
+      <div style="background:#fff;border-radius:12px;padding:22px;max-width:700px;width:100%;max-height:88vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+        <h3 style="margin:0 0 4px;font-size:16px"><i class="bi bi-list-check me-2" style="color:var(--accent)"></i>Guias de Tráfego criadas — selecione o tipo</h3>
+        <p style="font-size:12.5px;color:var(--text-muted);margin:0 0 12px">O deferimento criou ${guias.length} Guia(s) de Tráfego. Selecione o tipo de guia e preencha os dados para já deixá-las completas. (Pode fazer depois pelo processo, se preferir.)</p>
+        ${linhas}
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
+          <button class="btn btn-outline btn-sm" onclick="document.getElementById('modal-cascata-guias').remove()">Depois</button>
+          <button class="btn btn-primary btn-sm" onclick="salvarCascataGuias()"><i class="bi bi-floppy me-1"></i>Salvar Guias</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+  } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+async function salvarCascataGuias() {
+  const ctx = window._cascataGuias;
+  if (!ctx) return;
+  const { guiaIds } = ctx;
+  showLoading();
+  try {
+    let n = 0;
+    for (let r = 0; r < guiaIds.length; r++) {
+      const arma = document.getElementById(`casc-arma-${r}`)?.value || '';
+      const tipoGuia = document.getElementById(`casc-guia-${r}`)?.value || '';
+      if (!tipoGuia && !arma) continue;   // linha intocada: pula
+      const proc = await App.graph.getItem(CONFIG.listas.processos, guiaIds[r]).catch(() => null);
+      if (!proc) continue;
+      const dadosEsp = { ...(_dadosEsp(proc) || {}) };
+      const g = (id) => (document.getElementById(id)?.value || '').trim();
+      if (arma) dadosEsp.armaId = arma;
+      if (tipoGuia) dadosEsp.tipoGuia = tipoGuia;
+      const cidade = g(`casc-cidade-${r}`);          if (cidade) dadosEsp.cidadeGuia = cidade;
+      const uf = g(`casc-uf-${r}`);                   if (uf) dadosEsp.ufGuia = uf.toUpperCase();
+      const nomeClube = g(`casc-nomeClube-${r}`);     if (nomeClube) dadosEsp.nomeClube = nomeClube;
+      const crClube = g(`casc-crClube-${r}`);         if (crClube) dadosEsp.crClube = crClube;
+      const endClube = g(`casc-enderecoClube-${r}`);  if (endClube) dadosEsp.enderecoClube = endClube;
+      const endOrigem = g(`casc-endOrigem-${r}`);     if (endOrigem) dadosEsp.endOrigemGuia = endOrigem;
+      const endMudO = g(`casc-endMudOrigem-${r}`);    if (endMudO) dadosEsp.endMudancaOrigem = endMudO;
+      const endMudD = g(`casc-endMudDestino-${r}`);   if (endMudD) dadosEsp.endMudancaDestino = endMudD;
+      const checklist = buildChecklistItems('Guia de Tráfego', tipoGuia || null);
+      await App.graph.updateItem(CONFIG.listas.processos, guiaIds[r], {
+        DadosEspecificosJSON: JSON.stringify(dadosEsp),
+        ChecklistJSON: JSON.stringify(checklist),
+      });
+      n++;
+    }
+    App.invalidateCache('processos');
+    document.getElementById('modal-cascata-guias')?.remove();
+    toast(n ? `${n} guia(s) atualizada(s).` : 'Nenhuma guia alterada.', n ? 'success' : 'info');
+  } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 // ============================================================
@@ -15873,7 +16087,7 @@ function mapearArmaSinarm(raw) {
     DataAquisicao,
     StatusArma,
     OrgaoCadastro:  'PF - Exército',
-    NumeroSIGMA:    null, NumeroSINARM: null, NumeroRegistro: null,
+    NumeroSIGMA:    val('numeroSigma', 'Número SIGMA', 'Numero SIGMA') || null, NumeroSINARM: null, NumeroRegistro: null,
     AtividadeCadastrada,
     Modelo:         val('modelo', 'Modelo'),
     Calibre,
@@ -16186,5 +16400,101 @@ function abrirImportSinarm(clienteId) {
     </div>`;
   const link = document.getElementById('bm-armas-link');
   if (link) link.href = getBookmarkletArmasHref();
+  painel.style.display = '';
+}
+
+// ============================================================
+// IMPORTAÇÃO DO SISGCORP (Exército) — bookmarklet do acervo
+// Série = Nº da Arma; marca/modelo da lista "Meu Acervo"; o resto do detalhe (olho azul / Editar Acervo).
+// Produz o mesmo formato da importação do SINARM e reaproveita a tela #armas/importar.
+// ============================================================
+const _BM_ARMAS_SISGCORP = `(async function(){
+var H='__CAC_URL__';
+if(!location.host.includes('eb.mil.br')){alert('Use este favorito na pagina do SISGCORP (sisgcorp.eb.mil.br), na tela Acervo > Visualizar (Meu Acervo).');return;}
+function up(s){return (s||'').normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').toUpperCase().trim();}
+function tx(el){return el?(el.textContent||'').replace(/\\s+/g,' ').trim():'';}
+function sleep(ms){return new Promise(function(r){setTimeout(r,ms);});}
+async function waitFor(fn,ms){var t=Date.now();while(Date.now()-t<(ms||7000)){var r=fn();if(r)return r;await sleep(150);}return null;}
+function realClick(el){if(!el)return;var r=el.getBoundingClientRect?el.getBoundingClientRect():{left:0,top:0,width:0,height:0};var o={bubbles:true,cancelable:true,view:window,clientX:r.left+r.width/2,clientY:r.top+r.height/2};['pointerover','mouseover','pointerdown','mousedown','focus','pointerup','mouseup','click'].forEach(function(t){try{el.dispatchEvent(t==='focus'?new FocusEvent(t,{bubbles:true}):new MouseEvent(t,o));}catch(e){}});}
+function valByLabel(labels){var fields=Array.from(document.querySelectorAll('input,select,textarea'));for(var i=0;i<fields.length;i++){var el=fields[i];if(el.type==='hidden'||el.type==='button'||el.type==='submit')continue;var lbl='';var p=el.closest('div,mat-form-field,.form-group,.p-field,.field,td,li');if(p){var l=p.querySelector('label,mat-label,.ui-outputlabel,legend,small,span');if(l)lbl=tx(l);}if(!lbl)lbl=el.getAttribute('aria-label')||el.getAttribute('placeholder')||el.name||'';var U=up(lbl);for(var j=0;j<labels.length;j++){if(U&&U.indexOf(up(labels[j]))>=0){var val=(el.value||'').trim();if(!val&&el.tagName==='SELECT'&&el.selectedIndex>=0)val=tx(el.options[el.selectedIndex]);return val;}}}return '';}
+function modalAberto(){return /EDITAR ACERVO/.test(up(document.body.innerText||''));}
+function acharFechar(){var bs=Array.from(document.querySelectorAll('button,a'));for(var i=0;i<bs.length;i++){if(up(tx(bs[i]))==='FECHAR')return bs[i];}return null;}
+function acharOlhoLinha(tr){var cand=tr.querySelectorAll('button,a,[role=button],i,span,mat-icon,em,svg');for(var i=0;i<cand.length;i++){var el=cand[i];var cls=String(el.className&&el.className.baseVal!==undefined?el.className.baseVal:(el.className||''));var s=(cls+' '+((el.getAttribute&&el.getAttribute('title'))||'')+' '+((el.getAttribute&&el.getAttribute('aria-label'))||'')).toLowerCase();if(/eye|olho|visualiz|visibility|detalh|edit|pencil/.test(s))return el.closest('button,a,[role=button]')||el;}return null;}
+var trs=Array.from(document.querySelectorAll('table tr'));var header=null;
+for(var i=0;i<trs.length;i++){var h=up(tx(trs[i]));if(h.indexOf('DA ARMA')>=0&&h.indexOf('MARCA')>=0&&h.indexOf('MODELO')>=0){header=trs[i];break;}}
+if(!header){alert('Nao encontrei a tabela do acervo. Abra "Acervo > Visualizar" (a lista Meu Acervo) e tente de novo.');return;}
+var ths=Array.from(header.querySelectorAll('th,td')).map(tx);
+function col(nomes){for(var k=0;k<ths.length;k++){var U=up(ths[k]);for(var j=0;j<nomes.length;j++){if(U.indexOf(up(nomes[j]))>=0)return k;}}return -1;}
+var cSerie=col(['DA ARMA']),cMarca=col(['MARCA']),cModelo=col(['MODELO']),cEspecie=col(['ESPECIE']),cPais=col(['PAIS']),cAquis=col(['AQUISICAO']),cAtiv=col(['ATIVIDADE']);
+var body=header.parentElement;var dataRows=Array.from(body.querySelectorAll('tr')).filter(function(tr){return tr!==header&&tr.querySelectorAll('td').length>=3;});
+if(!dataRows.length){alert('Nao encontrei armas na lista Meu Acervo.');return;}
+var ov=document.createElement('div');ov.style.cssText='position:fixed;top:12px;right:12px;z-index:2147483647;background:#166534;color:#fff;padding:10px 16px;border-radius:8px;font:14px Arial;box-shadow:0 6px 20px rgba(0,0,0,.35);max-width:360px';document.body.appendChild(ov);
+function prog(t){ov.textContent=t;}
+var armas=[],falhas=0;
+for(var i=0;i<dataRows.length;i++){
+  var tr=dataRows[i];var cel=Array.from(tr.querySelectorAll('td')).map(tx);
+  function gc(idx){return idx>=0&&idx<cel.length?(cel[idx]||'').trim():'';}
+  var serie=gc(cSerie),marca=gc(cMarca),modelo=gc(cModelo),especie=gc(cEspecie),pais=gc(cPais),aquis=gc(cAquis),ativ=gc(cAtiv);
+  prog('Capturando '+(i+1)+' de '+dataRows.length+' \\u2014 '+serie);
+  var det={},opened=false;
+  try{
+    tr.scrollIntoView({block:'center'});var olho=acharOlhoLinha(tr);if(!olho){realClick(tr);await sleep(300);olho=acharOlhoLinha(tr)||acharOlhoLinha(document.body);}
+    if(olho){realClick(olho);
+      if(await waitFor(function(){return modalAberto()?true:null;},7000)){await sleep(350);
+        det={status:valByLabel(['STATUS']),calibre:valByLabel(['CALIBRE']),grupoCalibre:valByLabel(['GRUPO CALIBRE','GRUPO DE CALIBRE']),capacidadeTiro:valByLabel(['CAPACIDADE CARTUCHO','CAPACIDADE']),numeroCanos:valByLabel(['DE CANOS','NUMERO DE CANOS']),almaCano:valByLabel(['ALMA DO CANO','ALMA']),numeroRaias:valByLabel(['DE RAIAS','NUMERO DE RAIAS']),sentidoRaias:valByLabel(['SENTIDO DA RAIA','SENTIDO']),acabamento:valByLabel(['ACABAMENTO']),funcionamento:valByLabel(['FUNCIONAMENTO']),numeroSigma:valByLabel(['NUMERO SIGMA','SIGMA']),comprimentoCano:valByLabel(['COMPRIMENTO DO CANO'])};
+        opened=true;var f=acharFechar();if(f)realClick(f);await waitFor(function(){return !modalAberto();},4000);await sleep(350);
+      }
+    }
+  }catch(e){}
+  if(!opened)falhas++;
+  armas.push({numeroSerie:serie,marca:marca,modelo:modelo,especie:especie,paisFabricacao:pais,dataAquisicao:aquis,atividade:ativ,status:det.status||'',calibre:det.calibre||'',grupoCalibre:det.grupoCalibre||'',capacidadeTiro:det.capacidadeTiro||'',numeroCanos:det.numeroCanos||'',almaCano:det.almaCano||'',numeroRaias:det.numeroRaias||'',sentidoRaias:det.sentidoRaias||'',acabamento:det.acabamento||'',funcionamento:det.funcionamento||'',numeroSigma:det.numeroSigma||''});
+}
+var cpf='';var mc=(document.body.innerText||'').match(/(\\d{3}\\.\\d{3}\\.\\d{3}-\\d{2})/);if(mc)cpf=mc[1];
+try{await navigator.clipboard.writeText(JSON.stringify({cpf:cpf,armas:armas}));}catch(e){}
+var url=H+'#armas/importar?clienteCpf='+encodeURIComponent(cpf.replace(/\\D/g,''))+'&dados='+encodeURIComponent(JSON.stringify(armas));
+ov.style.background='#0f766e';ov.innerHTML='';
+var msg=document.createElement('div');msg.style.marginBottom='8px';msg.textContent=armas.length+' arma(s) capturada(s)'+(falhas?(' ('+falhas+' so com dados da lista)'):'')+'.';
+var a=document.createElement('a');a.href=url;a.target='_blank';a.textContent='Abrir CAC Gestao e importar \\u00bb';a.style.cssText='display:inline-block;background:#fff;color:#0f766e;padding:7px 14px;border-radius:6px;text-decoration:none;font-weight:700';
+var x=document.createElement('span');x.textContent=' \\u2715';x.style.cssText='cursor:pointer;margin-left:10px';x.onclick=function(){ov.remove();};
+ov.appendChild(msg);ov.appendChild(a);ov.appendChild(x);
+})()`;
+
+function getBookmarkletArmasSisgcorpHref() {
+  const cacUrl = window.location.origin + window.location.pathname;
+  const code = _BM_ARMAS_SISGCORP.replace('__CAC_URL__', cacUrl.replace(/'/g, "\\'"));
+  return 'javascript:' + encodeURIComponent(code);
+}
+
+function abrirImportSisgcorp(clienteId) {
+  const painel = document.getElementById('painel-sisgcorp-armas');
+  if (!painel) return;
+  if (painel.style.display !== 'none') { painel.style.display = 'none'; return; }
+  painel.innerHTML = `
+    <div class="card" style="border-color:#93c5fd;background:#eff6ff">
+      <div class="card-header" style="background:#dbeafe;border-bottom-color:#93c5fd">
+        <h3 style="color:#1e40af"><i class="bi bi-download me-2"></i>Importar acervo do SISGCORP (Exército)</h3>
+        <button type="button" onclick="document.getElementById('painel-sisgcorp-armas').style.display='none'" class="btn btn-ghost btn-sm"><i class="bi bi-x-lg"></i></button>
+      </div>
+      <div class="card-body">
+        <p style="font-size:13px;margin-bottom:10px"><strong>1° uso:</strong> arraste o botão abaixo para a barra de favoritos (<kbd>Ctrl+Shift+B</kbd> para exibi-la).</p>
+        <div style="text-align:center;margin:14px 0">
+          <a id="bm-armas-sisgcorp-link" class="btn btn-primary" style="cursor:grab;font-size:15px;padding:10px 24px"><i class="bi bi-download"></i> Importar SISGCORP p/ Gestão</a>
+          <p style="font-size:11px;color:var(--text-muted);margin-top:8px">Arraste este botão para os favoritos</p>
+        </div>
+        <ol style="font-size:13px;line-height:1.9;color:var(--text);margin:0;padding-left:20px">
+          <li>Acesse o SISGCORP (<em>sisgcorp.eb.mil.br</em>) e faça login</li>
+          <li>Abra <em>Acervo &gt; Visualizar</em> — a <strong>lista "Meu Acervo"</strong></li>
+          <li>Se tiver muitas armas, aumente os <em>itens por página</em> (ex.: de 20 para 100)</li>
+          <li>Clique no favorito <strong>"Importar SISGCORP p/ Gestão"</strong> — ele abre cada arma sozinho e captura os detalhes (aparece um contador no canto)</li>
+          <li>Ao terminar, clique em <strong>"Abrir CAC Gestão e importar"</strong> — a lista abre aqui já preenchida</li>
+          <li>Revise e clique em <strong>Importar</strong>. <em>Não mexa no mouse enquanto ele captura.</em></li>
+        </ol>
+        <div style="margin-top:12px;text-align:center">
+          <button class="btn btn-outline btn-sm" onclick="navigate('armas/importar',{clienteId:'${clienteId}'})"><i class="bi bi-clipboard-check me-1"></i>Já copiei — abrir tela de importação</button>
+        </div>
+      </div>
+    </div>`;
+  const link = document.getElementById('bm-armas-sisgcorp-link');
+  if (link) link.href = getBookmarkletArmasSisgcorpHref();
   painel.style.display = '';
 }
