@@ -965,6 +965,8 @@ const TIPOS_STATUS_GRU_AO_PROTOCOLAR = [
 ];
 const RESPONSAVEIS = ['Andrieli', 'Geison', 'Janaína', 'Matheus', 'Priscila', 'Simone'];
 const TIPOS_SEM_GRU = ['Defesa de Notificação', 'Mudança de endereço SINARM PF', 'Porte de Arma PF', 'Correção de dados de arma', 'Comunicado de Furto/Extravio'];
+// Status em que a GRU fica oculta na página de Pagamentos de GRU (até ter protocolo registrado).
+const STATUS_OCULTA_GRU = ['Parado', 'Processo Futuro', 'Aguardando Documentos', 'Aguardando Assinatura', 'Desistência Cliente'];
 const FORMAS_PAGAMENTO_OPTS = ['Pix', 'Dinheiro', 'Cartão'];
 const BANCOS_PAGAMENTO_OPTS = ['Banco do Brasil', 'Sicredi', 'Cresol', 'Santander', 'NuBank', 'Itaú', 'Inter', 'Caixa', 'Banrisul', 'Outros'];
 
@@ -4769,6 +4771,7 @@ function buildCamposTransferencia(armasOpts, tipo) {
               <option value="">Selecione o vendedor primeiro...</option>
             </select>
           </div>
+          ${!semAcervoDestino ? `<div><label>Acervo de Destino</label><select name="proc_acervoDestinoCompra"><option value="">Selecione...</option>${acervoDestinoOpts}</select></div>` : ''}
         </div>
       </div>
       <div id="proc-vendedor-manual">
@@ -6692,7 +6695,7 @@ async function deferirProcesso(id) {
               Modelo:      dados.modeloArma || '',
               NumeroSerie: dados.serieArma || '',
               NumeroSINARM: dados.cadSinarm || '',
-              AtividadeCadastrada: dados.acervoDestino || '',
+              AtividadeCadastrada: dados.acervoDestinoCompra || dados.acervoDestino || '',
               GrupoCalibre: dados.grupoCalibre || '',
               PaisFabricacao: dados.paisFabricacao || '',
               CapacidadeTiro: dados.capacidadeTiros || '',
@@ -8315,7 +8318,6 @@ async function renderPagamentosGRU() {
   document.getElementById('page-title').textContent = 'Pagamentos de GRU';
   const processos = await App.getProcessos();
 
-  const STATUS_OCULTA_GRU = ['Parado', 'Processo Futuro', 'Aguardando Documentos', 'Aguardando Assinatura', 'Desistência Cliente'];
   // A GRU é independente do pagamento do cliente (orçamento/processo): só olha GruPaga.
   // Processos já PROTOCOLADOS aparecem sempre (mesmo que o status estivesse num estado "oculto"),
   // pois passaram da fase de documentos e a taxa da GRU fica pendente.
