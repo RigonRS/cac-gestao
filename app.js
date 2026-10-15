@@ -16426,8 +16426,9 @@ if(!header){alert('Nao encontrei a tabela do acervo. Abra "Acervo > Visualizar" 
 var ths=Array.from(header.querySelectorAll('th,td')).map(tx);
 function col(nomes){for(var k=0;k<ths.length;k++){var U=up(ths[k]);for(var j=0;j<nomes.length;j++){if(U.indexOf(up(nomes[j]))>=0)return k;}}return -1;}
 var cSerie=col(['DA ARMA']),cMarca=col(['MARCA']),cModelo=col(['MODELO']),cEspecie=col(['ESPECIE']),cPais=col(['PAIS']),cAquis=col(['AQUISICAO']),cAtiv=col(['ATIVIDADE']);
-var table=header.closest('table')||header.parentElement;var dataRows=Array.from(table.querySelectorAll('tr')).filter(function(tr){return tr!==header&&tr.querySelectorAll('td').length>=3;});
-if(!dataRows.length){alert('Nao encontrei armas na lista Meu Acervo.');return;}
+var dataRows=[];var scopes=[header.closest('.p-datatable'),header.closest('.ui-datatable'),header.closest('[class*=datatable]'),header.closest('[class*=data-table]'),header.closest('.p-datatable-wrapper'),header.closest('table'),document];
+for(var si=0;si<scopes.length&&!dataRows.length;si++){var sc=scopes[si];if(!sc)continue;dataRows=Array.from(sc.querySelectorAll('tr')).filter(function(tr){return tr!==header&&tr.querySelectorAll('td').length>=3;});}
+if(!dataRows.length){alert('Cabecalho encontrado ('+ths.length+' colunas), mas 0 linhas de dados. Me avise para ajustar.');return;}
 var ov=document.createElement('div');ov.style.cssText='position:fixed;top:12px;right:12px;z-index:2147483647;background:#166534;color:#fff;padding:10px 16px;border-radius:8px;font:14px Arial;box-shadow:0 6px 20px rgba(0,0,0,.35);max-width:360px';document.body.appendChild(ov);
 function prog(t){ov.textContent=t;}
 var armas=[],falhas=0;
