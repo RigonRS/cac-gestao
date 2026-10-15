@@ -519,7 +519,8 @@ async function atualizarBadgesSidebar() {
     const demandas = Array.isArray(demandasRaw) ? demandasRaw : [];
     const minhasDemandas  = demandas.filter(d => d.operador === user && d.status === 'Aberta').length;
     const aguardandoDeleg = demandas.filter(d => d.status === 'Aguardando Delegação').length;
-    const meusProcessos   = processos.filter(p => p.Responsavel === user && !STATUS_FECHADOS.includes(p.Status)).length;
+    // Apenas os processos da aba "A Protocolar" (sem protocolo e em status a protocolar)
+    const meusProcessos   = processos.filter(p => p.Responsavel === user && STATUS_A_PROTOCOLAR.includes(p.Status) && !processoTemProtocolo(p)).length;
     const gruPendentes    = processos.filter(p => !p.GruPaga && !STATUS_FECHADOS.includes(p.Status) && !TIPOS_SEM_GRU.includes(p.TipoProcesso)
       && (!STATUS_OCULTA_GRU.includes(p.Status) || processoTemProtocolo(p))).length;
     _setBadgeSidebar('badge-minhas-demandas',   minhasDemandas);
@@ -3877,6 +3878,16 @@ const MEUS_PROCESSOS_TABS = [
   { key: 'todos',        label: 'Todos' },
 ];
 
+// Mostra/esconde os itens pendentes do checklist (aba A Protocolar)
+function toggleChecklistPendentes(id, btn) {
+  const el = document.getElementById('pend-' + id);
+  if (!el) return;
+  const mostrar = el.style.display === 'none';
+  el.style.display = mostrar ? '' : 'none';
+  const icon = btn && btn.querySelector('i');
+  if (icon) icon.className = mostrar ? 'bi bi-dash-circle' : 'bi bi-plus-circle';
+}
+
 async function renderMeusProcessos(tab = 'aprotocolar') {
   document.getElementById('page-title').textContent = 'Meus Processos';
   const currentUser = getCurrentUserName();
@@ -3941,12 +3952,19 @@ async function renderMeusProcessos(tab = 'aprotocolar') {
             <span class="badge ${b.cls}">${b.txt}</span>
           </div>
         </div>
-        ${pendentes.length > 0 ? `
+        ${pendentes.length > 0 ? (mostrarPrioridade ? `
+          <button onclick="toggleChecklistPendentes('${p.id}',this)" style="background:none;border:1px solid var(--border);border-radius:6px;padding:3px 10px;cursor:pointer;font-size:12px;color:var(--text-muted);display:inline-flex;align-items:center;gap:6px">
+            <i class="bi bi-plus-circle"></i> ${pendentes.length} item(ns) pendente(s) no checklist
+          </button>
+          <div id="pend-${p.id}" style="display:none;padding-left:12px;border-left:3px solid #e5e7eb;margin-top:6px">
+            ${pendentes.map(i => `<div style="font-size:12px;padding:2px 0;color:#374151"><i class="bi bi-square me-1" style="color:#d1d5db"></i>${esc(i.nome)}</div>`).join('')}
+          </div>
+        ` : `
           <div style="padding-left:12px;border-left:3px solid #e5e7eb">
             <div style="font-size:11px;color:var(--text-muted);margin-bottom:3px">Itens pendentes no checklist:</div>
             ${pendentes.map(i => `<div style="font-size:12px;padding:2px 0;color:#374151"><i class="bi bi-square me-1" style="color:#d1d5db"></i>${esc(i.nome)}</div>`).join('')}
           </div>
-        ` : `<div style="font-size:12px;color:var(--success)"><i class="bi bi-check-circle-fill me-1"></i>Checklist completo</div>`}
+        `) : `<div style="font-size:12px;color:var(--success)"><i class="bi bi-check-circle-fill me-1"></i>Checklist completo</div>`}
       </div>`;
   }
 
