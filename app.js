@@ -2579,57 +2579,227 @@ async function deletarArma(id, clienteId) {
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
+// Texto puro de Arma/Local de um documento (para o filtro)
+function _docArmaLocalTxt(d) {
+  if (d.TipoDocumento === 'CRAF') return d.ArmaVinculadaDesc || '';
+  if (d.TipoDocumento === 'Guia de Tráfego') {
+    const loc = d.CidadeGuia ? (d.CidadeGuia + (d.UFGuia ? '/' + d.UFGuia : '')) : (d.NomeClubeTiro || '');
+    return [d.ArmaVinculadaDesc || '', loc, d.NumeroGT ? 'N° GT: ' + d.NumeroGT : ''].filter(Boolean).join(' ');
+  }
+  return d.ArmaVinculadaDesc || '';
+}
+// Categoria de status do documento (para o filtro): desconsiderada | vencido | vencendo | valido
+function _docStatusCat(d) {
+  if (guiaDesconsiderada(d)) return 'desconsiderada';
+  const iso = d.DataValidade ? d.DataValidade.split('T')[0] : null;
+  const dias = iso ? daysBetween(iso) : null;
+  if (dias === null) return 'valido';
+  if (dias < 0) return 'vencido';
+  if (dias <= 30) return 'vencendo';
+  return 'valido';
+}
+
+// Linhas (tbody) da tabela de documentos — usado no render inicial e ao filtrar
+function _docsRowsHtml(docs, clienteId) {
+  if (!docs.length) return `<tr><td colspan="7"><div class="empty-state"><i class="bi bi-file-earmark-x"></i><p>Nenhum documento encontrado.</p></div></td></tr>`;
+  return docs.map(d => {
+    const s = validadeStatus(d.DataValidade ? d.DataValidade.split('T')[0] : null);
+    const ehGuia = d.TipoDocumento === 'Guia de Tráfego';
+    const desconsiderada = guiaDesconsiderada(d);
+    let armaLocal = '—';
+    if (d.TipoDocumento === 'CRAF') {
+      armaLocal = d.ArmaVinculadaDesc ? esc(d.ArmaVinculadaDesc) : '—';
+    } else if (ehGuia) {
+      const arma = d.ArmaVinculadaDesc ? esc(d.ArmaVinculadaDesc) : '';
+      const loc = d.CidadeGuia ? esc(d.CidadeGuia) + (d.UFGuia ? '/' + esc(d.UFGuia) : '') : (d.NomeClubeTiro ? esc(d.NomeClubeTiro) : '');
+      const ngt = d.NumeroGT ? `N° GT: ${esc(d.NumeroGT)}` : '';
+      armaLocal = [arma, loc, ngt].filter(Boolean).join('<br>') || '—';
+    }
+    const endOrigem = ehGuia && d.EnderecoGuia ? esc(d.EnderecoGuia) : '';
+    const statusCell = desconsiderada
+      ? `<span class="badge badge-gray" title="Não entra mais no controle de validades — fica apenas como histórico"><i class="bi bi-eye-slash me-1"></i>Desconsiderada</span>`
+      : `<span class="badge ${s.cls}">${s.txt}</span>`;
+    return `<tr${desconsiderada ? ' style="opacity:.6"' : ''}>
+      <td><strong>${esc(d.TipoDocumento||'—')}</strong></td>
+      <td style="font-size:12px">${armaLocal}</td>
+      <td style="font-size:12px">${endOrigem || '—'}</td>
+      <td>${fmtDate(d.DataEmissao ? d.DataEmissao.split('T')[0] : '')}</td>
+      <td>${fmtDate(d.DataValidade ? d.DataValidade.split('T')[0] : '')}</td>
+      <td>${statusCell}</td>
+      <td><div class="btn-group">
+        ${d.LinkArquivo ? `<a href="${esc(d.LinkArquivo)}" target="_blank" class="btn btn-outline btn-sm"><i class="bi bi-box-arrow-up-right"></i></a>` : ''}
+        ${ehGuia ? (desconsiderada
+          ? `<button class="btn btn-outline btn-sm" onclick="reconsiderarGuia('${d.id}','${clienteId}')" title="Voltar a considerar no controle de validades"><i class="bi bi-arrow-counterclockwise"></i> Reconsiderar</button>`
+          : `<button class="btn btn-outline btn-sm" onclick="desconsiderarGuia('${d.id}','${clienteId}')" title="Desconsiderar esta guia (sai do controle de validades)"><i class="bi bi-eye-slash"></i> Desconsiderar</button>`) : ''}
+        <button class="btn btn-outline btn-sm" onclick="navigate('documentos/editar',{clienteId:'${clienteId}',id:'${d.id}'})"><i class="bi bi-pencil"></i></button>
+        <button class="btn btn-ghost btn-sm" onclick="deletarDocumento('${d.id}','${clienteId}')"><i class="bi bi-trash" style="color:var(--danger)"></i></button>
+      </div></td>
+    </tr>`;
+  }).join('');
+}
+
+function filtrarDocsPerfil() {
+  const ctx = window._docsPerfil; if (!ctx) return;
+  const tipo   = document.getElementById('docf-tipo')?.value || '';
+  const arma   = (document.getElementById('docf-arma')?.value || '').toLowerCase().trim();
+  const origem = (document.getElementById('docf-origem')?.value || '').toLowerCase().trim();
+  const status = document.getElementById('docf-status')?.value || '';
+  let lista = ctx.docs.slice();
+  if (tipo)   lista = lista.filter(d => d.TipoDocumento === tipo);
+  if (arma)   lista = lista.filter(d => _docArmaLocalTxt(d).toLowerCase().includes(arma));
+  if (origem) lista = lista.filter(d => (d.EnderecoGuia || '').toLowerCase().includes(origem));
+  if (status) lista = lista.filter(d => _docStatusCat(d) === status);
+  const tb = document.getElementById('docs-perfil-tbody');
+  if (tb) tb.innerHTML = _docsRowsHtml(lista, ctx.clienteId);
+}
+
 function renderPerfilDocumentos(docs, clienteId, cliente) {
+  window._docsPerfil = { docs, clienteId, cliente };
+  const tipos = [...new Set(docs.map(d => d.TipoDocumento).filter(Boolean))].sort();
+  const selSty = 'border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:12px';
   return `
     <div class="toolbar">
       <span style="font-size:13px;color:var(--text-muted)">${docs.length} documento(s)</span>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-outline" onclick="verHistoricoDocumentos('${clienteId}')"><i class="bi bi-clock-history"></i> Histórico</button>
+        <button class="btn btn-outline" onclick="abrirInformarVencimento('${clienteId}')"><i class="bi bi-chat-left-text"></i> Informar Vencimento</button>
         ${!isClienteInativo(cliente) ? `<button class="btn btn-primary" onclick="navigate('documentos/novo',{clienteId:'${clienteId}'})"><i class="bi bi-plus-lg"></i> Adicionar Documento</button>` : ''}
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-body" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:12px 16px">
+        <span style="font-size:12px;color:var(--text-muted);font-weight:600"><i class="bi bi-funnel me-1"></i>Filtros:</span>
+        <select id="docf-tipo" onchange="filtrarDocsPerfil()" style="${selSty}">
+          <option value="">Tipo (todos)</option>
+          ${tipos.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('')}
+        </select>
+        <input id="docf-arma" oninput="filtrarDocsPerfil()" placeholder="Arma / Local..." style="${selSty}" />
+        <input id="docf-origem" oninput="filtrarDocsPerfil()" placeholder="End. Origem..." style="${selSty}" />
+        <select id="docf-status" onchange="filtrarDocsPerfil()" style="${selSty}">
+          <option value="">Status (todos)</option>
+          <option value="vencido">Vencidos</option>
+          <option value="vencendo">Vencendo (≤30d)</option>
+          <option value="valido">Válidos</option>
+          <option value="desconsiderada">Desconsideradas</option>
+        </select>
       </div>
     </div>
     <div class="card">
       <div class="table-wrapper">
         <table>
-          <thead><tr><th>Tipo</th><th>Arma / Local</th><th>Emissão</th><th>Validade</th><th>Status</th><th>Ações</th></tr></thead>
-          <tbody>${docs.length === 0
-            ? `<tr><td colspan="6"><div class="empty-state"><i class="bi bi-file-earmark-x"></i><p>Nenhum documento cadastrado.</p></div></td></tr>`
-            : docs.map(d => {
-                const s = validadeStatus(d.DataValidade ? d.DataValidade.split('T')[0] : null);
-                const ehGuia = d.TipoDocumento === 'Guia de Tráfego';
-                const desconsiderada = guiaDesconsiderada(d);
-                let armaLocal = '—';
-                if (d.TipoDocumento === 'CRAF') {
-                  armaLocal = d.ArmaVinculadaDesc ? esc(d.ArmaVinculadaDesc) : '—';
-                } else if (ehGuia) {
-                  const arma = d.ArmaVinculadaDesc ? esc(d.ArmaVinculadaDesc) : '';
-                  const loc = d.CidadeGuia ? esc(d.CidadeGuia) + (d.UFGuia ? '/' + esc(d.UFGuia) : '') : (d.NomeClubeTiro ? esc(d.NomeClubeTiro) : '');
-                  const ngt = d.NumeroGT ? `N° GT: ${esc(d.NumeroGT)}` : '';
-                  armaLocal = [arma, loc, ngt].filter(Boolean).join('<br>') || '—';
-                }
-                const statusCell = desconsiderada
-                  ? `<span class="badge badge-gray" title="Não entra mais no controle de validades — fica apenas como histórico"><i class="bi bi-eye-slash me-1"></i>Desconsiderada</span>`
-                  : `<span class="badge ${s.cls}">${s.txt}</span>`;
-                return `<tr${desconsiderada ? ' style="opacity:.6"' : ''}>
-                  <td><strong>${esc(d.TipoDocumento||'—')}</strong></td>
-                  <td style="font-size:12px">${armaLocal}</td>
-                  <td>${fmtDate(d.DataEmissao ? d.DataEmissao.split('T')[0] : '')}</td>
-                  <td>${fmtDate(d.DataValidade ? d.DataValidade.split('T')[0] : '')}</td>
-                  <td>${statusCell}</td>
-                  <td><div class="btn-group">
-                    ${d.LinkArquivo ? `<a href="${esc(d.LinkArquivo)}" target="_blank" class="btn btn-outline btn-sm"><i class="bi bi-box-arrow-up-right"></i></a>` : ''}
-                    ${ehGuia ? (desconsiderada
-                      ? `<button class="btn btn-outline btn-sm" onclick="reconsiderarGuia('${d.id}','${clienteId}')" title="Voltar a considerar no controle de validades"><i class="bi bi-arrow-counterclockwise"></i> Reconsiderar</button>`
-                      : `<button class="btn btn-outline btn-sm" onclick="desconsiderarGuia('${d.id}','${clienteId}')" title="Desconsiderar esta guia (sai do controle de validades)"><i class="bi bi-eye-slash"></i> Desconsiderar</button>`) : ''}
-                    <button class="btn btn-outline btn-sm" onclick="navigate('documentos/editar',{clienteId:'${clienteId}',id:'${d.id}'})"><i class="bi bi-pencil"></i></button>
-                    <button class="btn btn-ghost btn-sm" onclick="deletarDocumento('${d.id}','${clienteId}')"><i class="bi bi-trash" style="color:var(--danger)"></i></button>
-                  </div></td>
-                </tr>`;
-              }).join('')
+          <thead><tr><th>Tipo</th><th>Arma / Local</th><th>End. Origem</th><th>Emissão</th><th>Validade</th><th>Status</th><th>Ações</th></tr></thead>
+          <tbody id="docs-perfil-tbody">${docs.length === 0
+            ? `<tr><td colspan="7"><div class="empty-state"><i class="bi bi-file-earmark-x"></i><p>Nenhum documento cadastrado.</p></div></td></tr>`
+            : _docsRowsHtml(docs, clienteId)
           }</tbody>
         </table>
       </div>
     </div>`;
+}
+
+// ---- Informar Vencimento: popup para selecionar documentos e gerar mensagem ----
+async function abrirInformarVencimento(clienteId) {
+  showLoading();
+  try {
+    const [docsAll, armasAll, cliente] = await Promise.all([
+      App.getDocumentos(), App.getArmas(),
+      App.graph.getItem(CONFIG.listas.clientes, clienteId).catch(() => null),
+    ]);
+    const docs = docsAll.filter(d => String(d.ClienteId) === String(clienteId) && d.DataValidade && !guiaDesconsiderada(d))
+      .sort((a, b) => (a.DataValidade || '').localeCompare(b.DataValidade || ''));
+    window._informVenc = { docs, armas: armasAll, clienteNome: cliente ? cliente.Title : '', clienteId };
+    if (!docs.length) { toast('Este cliente não tem documentos com validade para informar.', 'info'); return; }
+    const linhas = docs.map((d, i) => {
+      const iso = d.DataValidade.split('T')[0];
+      const dias = daysBetween(iso);
+      const preMarcar = dias !== null && dias <= 30; // vencidos e vencendo já vêm marcados
+      const vs = validadeStatus(iso);
+      const loc = d.CidadeGuia ? (esc(d.CidadeGuia) + (d.UFGuia ? '/' + esc(d.UFGuia) : '')) : (d.NomeClubeTiro ? esc(d.NomeClubeTiro) : '');
+      const desc = [esc(d.ArmaVinculadaDesc || ''), loc].filter(Boolean).join(' · ');
+      return `<label style="display:flex;align-items:flex-start;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer">
+        <input type="checkbox" class="iv-chk" data-idx="${i}" ${preMarcar ? 'checked' : ''} style="margin-top:3px">
+        <span style="flex:1;min-width:0">
+          <span style="font-weight:600;font-size:13px">${esc(d.TipoDocumento || '—')}</span>${desc ? ` <span style="font-size:12px;color:var(--text-muted)">${desc}</span>` : ''}
+          <span style="display:block;font-size:11px"><span class="badge ${vs.cls}">${vs.txt}</span> <span style="color:var(--text-muted)">vence ${fmtDate(iso)}</span></span>
+        </span>
+      </label>`;
+    }).join('');
+    document.getElementById('modal-informar-venc')?.remove();
+    const modal = document.createElement('div');
+    modal.id = 'modal-informar-venc';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px';
+    modal.innerHTML = `
+      <div style="background:#fff;border-radius:12px;padding:22px;max-width:560px;width:100%;max-height:88vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+          <h3 style="margin:0;font-size:16px"><i class="bi bi-chat-left-text me-2" style="color:var(--accent)"></i>Informar Vencimento</h3>
+          <button onclick="document.getElementById('modal-informar-venc').remove()" style="background:none;border:none;font-size:22px;color:#666;cursor:pointer;line-height:1">×</button>
+        </div>
+        <p style="font-size:12.5px;color:var(--text-muted);margin:0 0 12px">Selecione os documentos que deseja informar ao cliente sobre o vencimento.</p>
+        <div style="display:flex;gap:10px;margin-bottom:8px">
+          <button class="btn btn-ghost btn-sm" onclick="document.querySelectorAll('#modal-informar-venc .iv-chk').forEach(c=>c.checked=true)">Marcar todos</button>
+          <button class="btn btn-ghost btn-sm" onclick="document.querySelectorAll('#modal-informar-venc .iv-chk').forEach(c=>c.checked=false)">Desmarcar todos</button>
+        </div>
+        ${linhas}
+        <div id="iv-mensagem-wrap" style="display:none;margin-top:14px">
+          <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">Mensagem (copie e envie ao cliente)</label>
+          <textarea id="iv-mensagem" rows="7" style="width:100%;box-sizing:border-box;font-size:13px;padding:8px;border:1px solid var(--border);border-radius:8px"></textarea>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
+          <button class="btn btn-outline btn-sm" onclick="document.getElementById('modal-informar-venc').remove()">Fechar</button>
+          <button class="btn btn-primary btn-sm" onclick="gerarMensagemVencimento()"><i class="bi bi-chat-text me-1"></i>Gerar mensagem</button>
+          <button id="iv-copiar" class="btn btn-sm" style="display:none;background:#16a34a;color:#fff;border:none" onclick="_copiarMensagemVenc(this)"><i class="bi bi-clipboard me-1"></i>Copiar</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+  } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+// Descrição de um documento para a mensagem de vencimento
+function _descricaoDocVenc(d, armaMap) {
+  const arma = armaMap[String(d.ArmaVinculadaId)] || null;
+  const marcaModelo = arma ? `${arma.Marca || ''} ${arma.Modelo || ''}`.trim() : (d.ArmaVinculadaDesc || '').trim();
+  const venc = d.DataValidade ? fmtDate(d.DataValidade.split('T')[0]) : '';
+  if (d.TipoDocumento === 'Guia de Tráfego') {
+    const tg = d.TipoGuia || '';
+    let local = '';
+    if (tg === 'Tiro Esportivo' || tg === 'Caça-Treinamento Tiro') local = d.NomeClubeTiro || '';
+    else if (tg === 'Caça') local = [d.CidadeGuia, d.UFGuia].filter(Boolean).join('/');
+    const endOrigem = d.EnderecoGuia || '';
+    const partes = ['GT', tg, marcaModelo, local, endOrigem ? `End. Origem ${endOrigem}` : ''].filter(Boolean);
+    return partes.join(' - ') + (venc ? ` (vence em ${venc})` : '');
+  }
+  if (d.TipoDocumento === 'CRAF') {
+    return ['CRAF', marcaModelo].filter(Boolean).join(' - ') + (venc ? ` (vence em ${venc})` : '');
+  }
+  return [d.TipoDocumento || 'Documento', marcaModelo].filter(Boolean).join(' - ') + (venc ? ` (vence em ${venc})` : '');
+}
+
+function gerarMensagemVencimento() {
+  const ctx = window._informVenc; if (!ctx) return;
+  const armaMap = {};
+  (ctx.armas || []).forEach(a => { armaMap[String(a.id)] = a; });
+  const checks = document.querySelectorAll('#modal-informar-venc .iv-chk:checked');
+  if (!checks.length) { toast('Selecione ao menos um documento.', 'warning'); return; }
+  const linhas = [];
+  checks.forEach(chk => {
+    const d = ctx.docs[Number(chk.dataset.idx)];
+    if (d) linhas.push('- ' + _descricaoDocVenc(d, armaMap));
+  });
+  const saud = ctx.clienteNome ? `Olá, ${ctx.clienteNome}! ` : 'Olá! ';
+  const msg = `${saud}Informamos que os documentos abaixo estão próximos do vencimento (ou vencidos):\n\n${linhas.join('\n')}\n\nFavor entrar em contato para providenciar a renovação. Atenciosamente, P&R Despachante Bélico.`;
+  const wrap = document.getElementById('iv-mensagem-wrap');
+  const ta = document.getElementById('iv-mensagem');
+  const btnCopiar = document.getElementById('iv-copiar');
+  if (wrap) wrap.style.display = '';
+  if (ta) ta.value = msg;
+  if (btnCopiar) btnCopiar.style.display = '';
+}
+
+async function _copiarMensagemVenc(btn) {
+  const ta = document.getElementById('iv-mensagem');
+  if (!ta) return;
+  try { await navigator.clipboard.writeText(ta.value); } catch (e) { ta.select(); try { document.execCommand('copy'); } catch (e2) {} }
+  toast('Mensagem copiada.', 'success');
 }
 
 async function deletarDocumento(id, clienteId) {
