@@ -608,7 +608,7 @@ async function renderDashboard() {
   const vencimentos = [];
   documentos.forEach(d => {
     if (semAnaliseVenc.has(String(d.ClienteId))) return;
-    if (guiaDesconsiderada(d)) return;
+    if (d.Desconsiderada === 'sim') return;
     if (d.DataValidade) {
       const dias = daysBetween(d.DataValidade.split('T')[0]);
       if (dias !== null && dias <= limite) {
@@ -643,7 +643,7 @@ async function renderDashboard() {
   vencimentos.sort((a, b) => a.dias - b.dias);
 
   const v60 = [];
-  documentos.forEach(d => { if (semAnaliseVenc.has(String(d.ClienteId))) return; if (guiaDesconsiderada(d)) return; if (d.DataValidade) { const iso = normISO(d.DataValidade); const dias = iso ? daysBetween(iso) : null; if (dias !== null && dias >= 0 && dias <= 60) v60.push({ tipo: d.TipoDocumento, cliente: d.ClienteNome, data: iso, dias }); } });
+  documentos.forEach(d => { if (semAnaliseVenc.has(String(d.ClienteId))) return; if (d.Desconsiderada === 'sim') return; if (d.DataValidade) { const iso = normISO(d.DataValidade); const dias = iso ? daysBetween(iso) : null; if (dias !== null && dias >= 0 && dias <= 60) v60.push({ tipo: d.TipoDocumento, cliente: d.ClienteNome, data: iso, dias }); } });
   clientes.forEach(c => { if (naoAnalisaVencimentos(c)) return; if (c.DataValidadeCR) { const iso = normISO(c.DataValidadeCR); const dias = iso ? daysBetween(iso) : null; if (dias !== null && dias >= 0 && dias <= 60) v60.push({ tipo: 'CR', cliente: c.Title, data: iso, dias }); } });
   v60.sort((a, b) => a.dias - b.dias);
 
@@ -965,7 +965,7 @@ const TIPOS_STATUS_GRU_AO_PROTOCOLAR = [
   'Cancelamento de CR',
 ];
 const RESPONSAVEIS = ['Andrieli', 'Geison', 'Janaína', 'Matheus', 'Priscila', 'Simone'];
-const TIPOS_SEM_GRU = ['Defesa de Notificação', 'Mudança de endereço SINARM PF', 'Porte de Arma PF', 'Correção de dados de arma', 'Comunicado de Furto/Extravio'];
+const TIPOS_SEM_GRU = ['Defesa de Notificação', 'Mudança de endereço SINARM PF', 'Porte de Arma PF', 'Correção de dados de arma', 'Comunicado de Furto/Extravio', 'Aquisição de Arma PF'];
 // Status em que a GRU fica oculta na página de Pagamentos de GRU (até ter protocolo registrado).
 const STATUS_OCULTA_GRU = ['Parado', 'Processo Futuro', 'Aguardando Documentos', 'Aguardando Assinatura', 'Desistência Cliente'];
 const FORMAS_PAGAMENTO_OPTS = ['Pix', 'Dinheiro', 'Cartão'];
@@ -1208,7 +1208,8 @@ const VALORES_PROCESSO = {
 
 const TAXAS_PROCESSO = {
   'Aquisição de Arma SIGMA':                    113,
-  'Aquisição de Arma PF':                        88,
+  'Aquisição de Arma PF':                         0,
+  'Apostilamento de arma PF':                    88,
   'Atualização de Documento de Identificação':   50,
   'Concessão/Renovação de CR':                  100,
   'Guia de Tráfego':                             20,
@@ -2584,13 +2585,13 @@ function _docArmaLocalTxt(d) {
   if (d.TipoDocumento === 'CRAF') return d.ArmaVinculadaDesc || '';
   if (d.TipoDocumento === 'Guia de Tráfego') {
     const loc = d.CidadeGuia ? (d.CidadeGuia + (d.UFGuia ? '/' + d.UFGuia : '')) : (d.NomeClubeTiro || '');
-    return [d.ArmaVinculadaDesc || '', loc, d.NumeroGT ? 'N° GT: ' + d.NumeroGT : ''].filter(Boolean).join(' ');
+    return [d.ArmaVinculadaDesc || '', d.TipoGuia || '', loc, d.NumeroGT ? 'N° GT: ' + d.NumeroGT : ''].filter(Boolean).join(' ');
   }
   return d.ArmaVinculadaDesc || '';
 }
 // Categoria de status do documento (para o filtro): desconsiderada | vencido | vencendo | valido
 function _docStatusCat(d) {
-  if (guiaDesconsiderada(d)) return 'desconsiderada';
+  if (d.Desconsiderada === 'sim') return 'desconsiderada';
   const iso = d.DataValidade ? d.DataValidade.split('T')[0] : null;
   const dias = iso ? daysBetween(iso) : null;
   if (dias === null) return 'valido';
@@ -2605,15 +2606,16 @@ function _docsRowsHtml(docs, clienteId) {
   return docs.map(d => {
     const s = validadeStatus(d.DataValidade ? d.DataValidade.split('T')[0] : null);
     const ehGuia = d.TipoDocumento === 'Guia de Tráfego';
-    const desconsiderada = guiaDesconsiderada(d);
+    const desconsiderada = d.Desconsiderada === 'sim';
     let armaLocal = '—';
     if (d.TipoDocumento === 'CRAF') {
       armaLocal = d.ArmaVinculadaDesc ? esc(d.ArmaVinculadaDesc) : '—';
     } else if (ehGuia) {
+      const tgia = d.TipoGuia ? `<span class="badge badge-blue" style="font-size:10px">${esc(d.TipoGuia)}</span>` : '';
       const arma = d.ArmaVinculadaDesc ? esc(d.ArmaVinculadaDesc) : '';
       const loc = d.CidadeGuia ? esc(d.CidadeGuia) + (d.UFGuia ? '/' + esc(d.UFGuia) : '') : (d.NomeClubeTiro ? esc(d.NomeClubeTiro) : '');
       const ngt = d.NumeroGT ? `N° GT: ${esc(d.NumeroGT)}` : '';
-      armaLocal = [arma, loc, ngt].filter(Boolean).join('<br>') || '—';
+      armaLocal = [tgia, arma, loc, ngt].filter(Boolean).join('<br>') || '—';
     }
     const endOrigem = ehGuia && d.EnderecoGuia ? esc(d.EnderecoGuia) : '';
     const statusCell = desconsiderada
@@ -2628,9 +2630,9 @@ function _docsRowsHtml(docs, clienteId) {
       <td>${statusCell}</td>
       <td><div class="btn-group">
         ${d.LinkArquivo ? `<a href="${esc(d.LinkArquivo)}" target="_blank" class="btn btn-outline btn-sm"><i class="bi bi-box-arrow-up-right"></i></a>` : ''}
-        ${ehGuia ? (desconsiderada
-          ? `<button class="btn btn-outline btn-sm" onclick="reconsiderarGuia('${d.id}','${clienteId}')" title="Voltar a considerar no controle de validades"><i class="bi bi-arrow-counterclockwise"></i> Reconsiderar</button>`
-          : `<button class="btn btn-outline btn-sm" onclick="desconsiderarGuia('${d.id}','${clienteId}')" title="Desconsiderar esta guia (sai do controle de validades)"><i class="bi bi-eye-slash"></i> Desconsiderar</button>`) : ''}
+        ${desconsiderada
+          ? `<button class="btn btn-outline btn-sm" onclick="${ehGuia ? `reconsiderarGuia('${d.id}','${clienteId}')` : `reconsiderarDocValidade('${d.id}','${clienteId}','documentos')`}" title="Voltar a considerar no controle de validades"><i class="bi bi-arrow-counterclockwise"></i> Reconsiderar</button>`
+          : (ehGuia ? `<button class="btn btn-outline btn-sm" onclick="desconsiderarGuia('${d.id}','${clienteId}')" title="Desconsiderar esta guia (sai do controle de validades)"><i class="bi bi-eye-slash"></i> Desconsiderar</button>` : '')}
         <button class="btn btn-outline btn-sm" onclick="navigate('documentos/editar',{clienteId:'${clienteId}',id:'${d.id}'})"><i class="bi bi-pencil"></i></button>
         <button class="btn btn-ghost btn-sm" onclick="deletarDocumento('${d.id}','${clienteId}')"><i class="bi bi-trash" style="color:var(--danger)"></i></button>
       </div></td>
@@ -2705,7 +2707,7 @@ async function abrirInformarVencimento(clienteId) {
       App.getDocumentos(), App.getArmas(),
       App.graph.getItem(CONFIG.listas.clientes, clienteId).catch(() => null),
     ]);
-    const docs = docsAll.filter(d => String(d.ClienteId) === String(clienteId) && d.DataValidade && !guiaDesconsiderada(d))
+    const docs = docsAll.filter(d => String(d.ClienteId) === String(clienteId) && d.DataValidade && d.Desconsiderada !== 'sim')
       .sort((a, b) => (a.DataValidade || '').localeCompare(b.DataValidade || ''));
     window._informVenc = { docs, armas: armasAll, clienteNome: cliente ? cliente.Title : '', clienteId };
     if (!docs.length) { toast('Este cliente não tem documentos com validade para informar.', 'info'); return; }
@@ -4521,7 +4523,7 @@ function onTipoProcessoChange(tipo, skipValor = false) {
   if (!camposEl) return;
 
   if (tipo === 'Aquisição de Arma SIGMA' || tipo === 'Aquisição de Arma PF') {
-    camposEl.innerHTML = buildCamposAquisicao();
+    camposEl.innerHTML = buildCamposAquisicao(tipo);
   } else if (tipo === 'Atualização de Documento de Identificação') {
     camposEl.innerHTML = buildCamposAtualizacaoDoc();
   } else if (tipo === 'Guia de Tráfego') {
@@ -4586,11 +4588,17 @@ function popularCamposEspecificos(dados) {
   });
 }
 
-function buildCamposAquisicao() {
+function buildCamposAquisicao(tipo) {
   const especieOpts = ['Pistola','Espingarda','Revólver','Carabina/Fuzil'].map(v => `<option>${v}</option>`).join('');
+  // Na Aquisição de Arma PF o acervo é sempre "Defesa Pessoal", então não mostra o campo.
+  const ePF = tipo === 'Aquisição de Arma PF';
+  const campoAcervo = ePF
+    ? ''
+    : `<div><label>Acervo (Atividade)</label><select name="proc_acervo"><option value="">Selecione...</option><option>Colecionador</option><option>Atirador</option><option>Caçador</option></select></div>`;
   return `<div class="form-section"><div class="form-section-title">Dados da Arma a Adquirir</div><div class="form-body">
+    ${ePF ? `<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px"><i class="bi bi-info-circle me-1"></i>Arma de Defesa Pessoal (PF). O acervo será sempre "Defesa Pessoal".</div>` : ''}
     <div class="form-grid">
-      <div><label>Acervo (Atividade)</label><select name="proc_acervo"><option value="">Selecione...</option><option>Colecionador</option><option>Atirador</option><option>Caçador</option></select></div>
+      ${campoAcervo}
       <div><label>Funcionamento</label><select name="proc_funcionamento"><option value="">Selecione...</option><option>Repetição</option><option>Tiro-Simples</option><option>Semi-Automático</option></select></div>
       <div><label>Marca</label><input name="proc_marca" /></div>
       <div><label>Modelo</label><input name="proc_modelo" /></div>
@@ -6332,6 +6340,22 @@ async function renderProcessoDetalhe(id) {
           </div>
         </div>` : ''}
 
+        ${processo.TipoProcesso === 'Apostilamento de arma PF' ? `
+        <div class="card" style="margin-bottom:16px">
+          <div class="card-header"><h3><i class="bi bi-shield-check me-2"></i>Apostilamento (PF)</h3></div>
+          <div class="card-body">
+            <div style="font-size:12px;color:var(--text-muted)"><i class="bi bi-info-circle me-1"></i>Ao deferir, a arma será registrada no acervo <strong>Defesa Pessoal</strong> do cliente. Taxa de GRU: <strong>R$ 88,00</strong>.</div>
+          </div>
+        </div>` : ''}
+
+        ${processo.TipoProcesso === 'Aquisição de Arma PF' && processo.Status !== 'Deferido' ? `
+        <div class="card" style="margin-bottom:16px">
+          <div class="card-header"><h3><i class="bi bi-info-circle me-2"></i>Aquisição de Arma PF</h3></div>
+          <div class="card-body">
+            <div style="font-size:12px;color:var(--text-muted)">Este processo não possui taxa de GRU. Ao deferir, será criado automaticamente o <strong>Apostilamento de arma PF</strong>, e só no deferimento dele a arma entra no acervo do cliente.</div>
+          </div>
+        </div>` : ''}
+
         <div id="dados-pagamento-wrapper">${usaModeloOrcamento ? renderPagamentoViaOrcamento(_orcVinculado) : renderDadosPagamento(processo)}</div>
 
       </div>
@@ -6668,9 +6692,11 @@ async function deferirProcesso(id) {
   const _eRenovCRAF = _tipoDefer === 'Renovação de CRAF';
   const _eAquisDefer = _tipoDefer === 'Aquisição de Arma SIGMA' || _tipoDefer === 'Aquisição de Arma PF';
   const _eRegistrarDefer = _tipoDefer === 'Registrar arma de fogo';
+  const _eApostDefer = _tipoDefer === 'Apostilamento de arma PF';
   const _eTransfDefer = TIPOS_TRANSFERENCIA.includes(_tipoDefer);
-  // Aquisição SIGMA não pede mais CRAF aqui (o CRAF/arma vai para o "Registrar arma de fogo")
-  const _pedirCRAF = (_tipoDefer === 'Aquisição de Arma PF') || _eTransfDefer || _eRenovCRAF || _eRegistrarDefer;
+  // Aquisição SIGMA/PF não pedem CRAF aqui: o CRAF/arma vai para o processo filho
+  // ("Registrar arma de fogo" na SIGMA e "Apostilamento de arma PF" na PF).
+  const _pedirCRAF = _eApostDefer || _eTransfDefer || _eRenovCRAF || _eRegistrarDefer;
   const modal = document.createElement('div');
   modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center';
   const hoje = hojeISO();
@@ -6751,10 +6777,18 @@ async function deferirProcesso(id) {
       try { _armasIdsBase = (await App.getArmas()).map(a => String(a.id)); } catch (e) {}
       try { _docsIdsBase  = (await App.getDocumentos()).map(d => String(d.id)); } catch (e) {}
       if (tipo === 'Aquisição de Arma PF') {
-        // Salvar arma no acervo do cliente
+        // Não salva a arma aqui: abre um "Apostilamento de arma PF" vinculado (valor 0).
+        // A arma só entra no acervo do cliente quando o Apostilamento for deferido.
         try {
-          const camposArma = _camposArmaDeDados(dados, p, 'PF Defesa Pessoal');
-          await App.graph.createItem(CONFIG.listas.armas, camposArma);
+          await criarProcessoAutomatico(p, 'Apostilamento de arma PF', { ...dados, acervo: 'Defesa Pessoal' });
+          App.invalidateCache('processos');
+          toast('Processo deferido! Criado "Apostilamento de arma PF" para concluir o registro.', 'success');
+        } catch(e2) { toast('Deferido, mas não foi possível criar o Apostilamento: ' + e2.message, 'warning'); }
+      } else if (tipo === 'Apostilamento de arma PF') {
+        // Salva a arma no acervo (sempre Defesa Pessoal) e o CRAF, se informado.
+        try {
+          const camposArma = { ..._camposArmaDeDados(dados, p, 'Defesa Pessoal'), OrgaoCadastro: 'PF - Defesa Pessoal' };
+          const armaCriada = await App.graph.createItem(CONFIG.listas.armas, camposArma);
           App.invalidateCache('armas');
           if (_dataEmissaoCRAF || _dataValidadeCRAF) {
             try {
@@ -6762,6 +6796,7 @@ async function deferirProcesso(id) {
                 ClienteId:    p.ClienteId,
                 ClienteNome:  p.ClienteNome || '',
                 TipoDocumento: 'CRAF',
+                ArmaVinculadaId: armaCriada?.id || null,
                 DataEmissao:  _dataEmissaoCRAF || null,
                 DataValidade: _dataValidadeCRAF || null,
               });
@@ -7301,8 +7336,35 @@ async function atualizarChecklistItem(processoId, index, concluido, observacao) 
     const txt = document.querySelector('.progress-text');
     if (bar) bar.style.width = pct + '%';
     if (txt) txt.textContent = `${concluidos}/${checklist.length}`;
+    // Regra: ao marcar um item com o processo "Parado", avança para "Aguardando Documentos".
+    if (concluido && processo.Status === 'Parado') {
+      await _avancarParadoParaAgDocs(processoId, processo);
+    }
     App.invalidateCache('processos');
   } catch(e) { toast(e.message, 'error'); }
+}
+
+// Avança um processo "Parado" para "Aguardando Documentos" (usado ao marcar o checklist).
+async function _avancarParadoParaAgDocs(processoId, processo) {
+  const novoStatus = 'Aguardando Documentos';
+  const historico = JSON.parse(processo.HistoricoStatus || '[]');
+  const agora = new Date();
+  historico.push({
+    data: agora.toLocaleDateString('pt-BR'),
+    hora: agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+    status: novoStatus, usuario: 'Sistema (checklist)'
+  });
+  await App.graph.updateItem(CONFIG.listas.processos, processoId, { Status: novoStatus, HistoricoStatus: JSON.stringify(historico) });
+  processo.Status = novoStatus; processo.HistoricoStatus = JSON.stringify(historico);
+  if (window._processoDetalhe && String(window._processoDetalhe.id) === String(processoId)) {
+    window._processoDetalhe.Status = novoStatus;
+    window._processoDetalhe.HistoricoStatus = JSON.stringify(historico);
+  }
+  const sel = document.getElementById('sel-status'); if (sel) sel.value = novoStatus;
+  const b = statusBadge(novoStatus);
+  const badge = document.getElementById('status-badge-detalhe'); if (badge) { badge.className = `badge ${b.cls}`; badge.textContent = b.txt; }
+  const histBody = document.getElementById('historico-status-body'); if (histBody) histBody.innerHTML = renderHistoricoStatus(historico, processoId);
+  toast('Status alterado automaticamente para "Aguardando Documentos".', 'info');
 }
 
 // Marca (ou desmarca) todos os itens do checklist de uma só vez
@@ -7316,6 +7378,10 @@ async function marcarTodosChecklist(processoId) {
     const todosMarcados = checklist.every(i => i.concluido);
     checklist.forEach(i => { i.concluido = !todosMarcados; });
     await App.graph.updateItem(CONFIG.listas.processos, processoId, { ChecklistJSON: JSON.stringify(checklist) });
+    // Se acabou de MARCAR (não desmarcar) e o processo está "Parado", avança para "Aguardando Documentos".
+    if (!todosMarcados && processo.Status === 'Parado') {
+      await _avancarParadoParaAgDocs(processoId, processo);
+    }
     App.invalidateCache('processos');
     if (window._processoDetalhe && String(window._processoDetalhe.id) === String(processoId)) {
       window._processoDetalhe.ChecklistJSON = JSON.stringify(checklist);
@@ -7946,19 +8012,23 @@ async function renderValidades() {
   document.getElementById('page-title').textContent = 'Controle de Validades';
   const [clientes, documentos] = await Promise.all([App.getClientes(), App.getDocumentos()]);
 
+  // Marcações visuais de "cliente avisado" (controle manual, salvo em arquivo compartilhado)
+  let avisados = {};
+  try { const raw = await App.graph._readFile('validades_avisados'); if (raw && !Array.isArray(raw)) avisados = raw; } catch (e) {}
+  window._validadesAvisados = avisados;
+
   const itens = [];
   const semAnaliseVenc = new Set(clientes.filter(naoAnalisaVencimentos).map(c => String(c.id)));
 
   documentos.forEach(d => {
     if (!d.DataValidade) return;
     if (semAnaliseVenc.has(String(d.ClienteId))) return;
-    if (guiaDesconsiderada(d)) return;
+    if (d.Desconsiderada === 'sim') return;   // guia OU CRAF desconsiderada sai do controle
     const iso = d.DataValidade.split('T')[0];
     const cli = clientes.find(c => String(c.id) === String(d.ClienteId));
-    const item = { tipo: d.TipoDocumento, cliente: d.ClienteNome || '', data: iso, dias: daysBetween(iso), clienteId: d.ClienteId, celular: cli?.Celular || '', tab: 'documentos' };
+    const item = { tipo: d.TipoDocumento, cliente: d.ClienteNome || '', data: iso, dias: daysBetween(iso), clienteId: d.ClienteId, celular: cli?.Celular || '', tab: 'documentos', docId: d.id };
     if (d.TipoDocumento === 'Guia de Tráfego') {
       item.eGuia = true;
-      item.docId = d.id;
       item.armaGuia = d.ArmaVinculadaDesc || '';
       item.tipoGuia = d.TipoGuia || '';
       item.localGuia = d.NomeClubeTiro || [d.CidadeGuia, d.UFGuia].filter(Boolean).join('/') || d.EnderecoGuia || '';
@@ -7979,11 +8049,11 @@ async function renderValidades() {
     // CTF marcado como "Não Renovar": todos os SIMAFs saem do controle de validades.
     if (c.SIMAFs && c.NaoRenovarCTF !== 'sim') {
       try {
-        JSON.parse(c.SIMAFs).forEach(s => {
+        JSON.parse(c.SIMAFs).forEach((s, simIdx) => {
           if (!s.DataValidade) return;
           if (s.Desconsiderada === 'sim') return;   // SIMAF desconsiderado manualmente também sai
           const iso = s.DataValidade.split('T')[0];
-          itens.push({ tipo: 'SIMAF', cliente: c.Title, data: iso, dias: daysBetween(iso), clienteId: c.id, celular: c.Celular || '', tab: 'dados', descricao: s.NomeFazenda ? `SIMAF — ${s.NomeFazenda}` : 'SIMAF' });
+          itens.push({ tipo: 'SIMAF', cliente: c.Title, data: iso, dias: daysBetween(iso), clienteId: c.id, celular: c.Celular || '', tab: 'dados', descricao: s.NomeFazenda ? `SIMAF — ${s.NomeFazenda}` : 'SIMAF', simafIndex: simIdx });
         });
       } catch(e) {}
     }
@@ -8131,16 +8201,30 @@ function filtrarValidades(limpar) {
       ? `<a href="https://wa.me/55${celularLimpo}?text=${msgWa}" target="_blank" class="btn btn-outline btn-sm" title="Avisar via WhatsApp"><i class="bi bi-whatsapp" style="color:#25D366"></i></a>`
       : `<button class="btn btn-ghost btn-sm" disabled title="Sem telefone cadastrado"><i class="bi bi-whatsapp" style="color:#ccc"></i></button>`;
     const detalhesGuia = item.eGuia ? esc([item.armaGuia, item.localGuia, item.tipoGuia].filter(Boolean).join(' · ')) : '';
-    const btnDesc = item.eGuia
-      ? `<button class="btn btn-ghost btn-sm" title="Desconsiderar guia das validades" onclick="desconsiderarGuia('${item.docId}','${item.clienteId}','validades')"><i class="bi bi-eye-slash" style="color:#d97706"></i></button>`
-      : '';
-    return `<tr style="${c.row}">
-      <td><a style="cursor:pointer;color:var(--accent);font-weight:600" onclick="navigate('clientes/perfil',{id:'${item.clienteId}',tab:'${item.tab}'})">${esc(item.cliente)}</a></td>
+    let btnAcao = '';
+    if (item.eGuia) {
+      btnAcao = `<button class="btn btn-ghost btn-sm" title="Desconsiderar guia das validades" onclick="desconsiderarGuia('${item.docId}','${item.clienteId}','validades')"><i class="bi bi-eye-slash" style="color:#d97706"></i></button>`;
+    } else if (item.tipo === 'CRAF' && item.docId) {
+      btnAcao = `<button class="btn btn-ghost btn-sm" title="Desconsiderar CRAF das validades" onclick="desconsiderarDocValidade('${item.docId}','${item.clienteId}','validades')"><i class="bi bi-eye-slash" style="color:#d97706"></i></button>`;
+    } else if (item.tipo === 'SIMAF') {
+      btnAcao = `<button class="btn btn-ghost btn-sm" title="Desconsiderar SIMAF das validades" onclick="desconsiderarSIMAF('${item.clienteId}',${item.simafIndex},'validades')"><i class="bi bi-eye-slash" style="color:#d97706"></i></button>`;
+    } else if (item.tipo === 'CTF') {
+      btnAcao = `<button class="btn btn-ghost btn-sm" title="Marcar CTF como Não Renovar" onclick="toggleNaoRenovarCTF('${item.clienteId}',true,'validades')"><i class="bi bi-x-circle" style="color:#dc2626"></i></button>`;
+    }
+    const key = rowKeyValidade(item);
+    const avisado = !!(window._validadesAvisados || {})[key];
+    const corBase = c.row || '';
+    const corAgora = avisado ? 'background:#cbd5e1' : corBase;
+    return `<tr data-corbase="${esc(corBase)}" style="${corAgora}">
+      <td><div style="display:flex;align-items:center;gap:7px">
+        <input type="checkbox" onchange="toggleAvisadoValidade(this,'${escJs(key)}')" ${avisado ? 'checked' : ''} title="Marcar cliente avisado (aguardando resposta)" style="cursor:pointer" />
+        <a style="cursor:pointer;color:var(--accent);font-weight:600" onclick="navigate('clientes/perfil',{id:'${item.clienteId}',tab:'${item.tab}'})">${esc(item.cliente)}</a>
+      </div></td>
       <td>${esc(nomeDoc)}</td>
       <td style="font-size:12px;color:var(--text-muted)">${detalhesGuia}</td>
       <td>${fmtDate(item.data)}</td>
       <td><span class="badge ${c.bg}">${label}</span></td>
-      <td style="white-space:nowrap">${btnWa} ${btnDesc}</td>
+      <td style="white-space:nowrap">${btnWa} ${btnAcao}</td>
     </tr>`;
   }).join('');
 }
@@ -8153,6 +8237,77 @@ function sortValidades(col) {
     window._validades_sortDir = 1;
   }
   filtrarValidades();
+}
+
+// Chave única de cada linha das validades (para a marcação "avisado")
+function rowKeyValidade(item) {
+  if (item.docId) return 'doc:' + item.docId;
+  if (item.tipo === 'SIMAF') return `simaf:${item.clienteId}:${item.simafIndex}`;
+  return `${item.tipo}:${item.clienteId}`;
+}
+
+// Guarda os filtros atuais para restaurar após recarregar a página de Validades
+function _salvarFiltrosValidades() {
+  window._validadesFiltroSalvo = {
+    cliente: document.getElementById('filtro-cliente')?.value || '',
+    tipo: document.getElementById('filtro-tipo')?.value || '',
+    situacao: document.getElementById('filtro-situacao')?.value || '',
+  };
+}
+
+// Marca/desmarca um cliente como "avisado" (controle visual) e salva em arquivo compartilhado
+async function toggleAvisadoValidade(cb, key) {
+  const checked = cb.checked;
+  const map = window._validadesAvisados || (window._validadesAvisados = {});
+  if (checked) map[key] = true; else delete map[key];
+  const tr = cb.closest('tr');
+  if (tr) tr.setAttribute('style', checked ? 'background:#cbd5e1' : (tr.dataset.corbase || ''));
+  try { await App.graph._writeFile('validades_avisados', map); }
+  catch (e) { toast('Não foi possível salvar a marcação: ' + e.message, 'error'); }
+}
+
+// Desconsidera um documento (ex.: CRAF) do controle de validades
+async function desconsiderarDocValidade(id, clienteId, origem) {
+  const ok = await confirmarModal({
+    titulo: 'Desconsiderar documento',
+    mensagem: 'Deseja desconsiderar este documento? Ele deixará de aparecer no controle de validades (continua no histórico do cliente).',
+    okLabel: 'Desconsiderar', okCor: '#d97706', icone: 'bi-eye-slash',
+  });
+  if (!ok) return;
+  showLoading();
+  try {
+    const doc = await App.graph.getItem(CONFIG.listas.documentos, id).catch(() => null);
+    await App.graph.updateItem(CONFIG.listas.documentos, id, {
+      Desconsiderada: 'sim', DataDesconsiderada: hojeISO(), DesconsideradaPor: getCurrentUserName(),
+    });
+    await registrarHistDoc(clienteId, doc || { id, TipoDocumento: 'CRAF' }, 'Desconsiderada');
+    App.invalidateCache('documentos');
+    toast('Documento desconsiderado.', 'success');
+    if (origem === 'validades') { _salvarFiltrosValidades(); await renderValidades(); }
+    else await renderClientePerfil(clienteId, 'documentos');
+  } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+// Volta a considerar um documento (ex.: CRAF) no controle de validades
+async function reconsiderarDocValidade(id, clienteId, origem) {
+  const ok = await confirmarModal({
+    titulo: 'Reconsiderar documento',
+    mensagem: 'Deseja voltar a considerar este documento no controle de validades?',
+    okLabel: 'Reconsiderar', okCor: '#2563eb', icone: 'bi-arrow-counterclockwise',
+  });
+  if (!ok) return;
+  showLoading();
+  try {
+    const doc = await App.graph.getItem(CONFIG.listas.documentos, id).catch(() => null);
+    await App.graph.updateItem(CONFIG.listas.documentos, id, {
+      Desconsiderada: 'nao', DataDesconsiderada: null, DesconsideradaPor: null,
+    });
+    await registrarHistDoc(clienteId, doc || { id, TipoDocumento: 'CRAF' }, 'Reconsiderada');
+    App.invalidateCache('documentos');
+    toast('Documento reconsiderado.', 'success');
+    if (origem === 'validades') { _salvarFiltrosValidades(); await renderValidades(); }
+    else await renderClientePerfil(clienteId, 'documentos');
+  } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 // ============================================================
@@ -13030,34 +13185,36 @@ async function editarExtraAvulso(id) {
   } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
-async function toggleNaoRenovarCTF(clienteId, checked) {
+async function toggleNaoRenovarCTF(clienteId, checked, origem) {
+  // Recarrega a tela de origem (perfil IBAMA ou a página de Controle de Validades)
+  const _refresh = async () => {
+    if (origem === 'validades') { _salvarFiltrosValidades(); await renderValidades(); }
+    else await renderClientePerfil(clienteId, 'ibama');
+  };
+  const _resetChk = () => { const chk = document.querySelector('[onchange*="toggleNaoRenovarCTF"]'); if (chk) chk.checked = false; };
   if (checked) {
     const modal = document.createElement('div');
     modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center';
     modal.innerHTML = `
       <div style="background:#fff;border-radius:10px;padding:24px;max-width:380px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.2)">
         <h3 style="margin:0 0 12px;font-size:16px;color:#dc2626"><i class="bi bi-x-circle me-2"></i>Não Renovar CTF</h3>
-        <p style="font-size:14px;color:#374151;margin:0 0 20px">O cliente não deseja que o CTF seja renovado?</p>
+        <p style="font-size:14px;color:#374151;margin:0 0 20px">O cliente não deseja que o CTF seja renovado? Os SIMAFs do cliente sairão do controle de validades.</p>
         <div style="display:flex;gap:8px;justify-content:flex-end">
           <button id="btn-nao-renovar-nao" class="btn btn-outline">Não</button>
           <button id="btn-nao-renovar-sim" style="background:#dc2626;color:#fff;border:none;border-radius:6px;padding:8px 20px;cursor:pointer;font-size:13px;font-weight:500">Sim</button>
         </div>
       </div>`;
     document.body.appendChild(modal);
-    modal.addEventListener('click', e => { if (e.target === modal) { modal.remove(); document.querySelector('[onchange*="toggleNaoRenovarCTF"]').checked = false; } });
-    document.getElementById('btn-nao-renovar-nao').onclick = () => {
-      modal.remove();
-      const chk = document.querySelector('[onchange*="toggleNaoRenovarCTF"]');
-      if (chk) chk.checked = false;
-    };
+    modal.addEventListener('click', e => { if (e.target === modal) { modal.remove(); _resetChk(); } });
+    document.getElementById('btn-nao-renovar-nao').onclick = () => { modal.remove(); _resetChk(); };
     document.getElementById('btn-nao-renovar-sim').onclick = async () => {
       modal.remove();
       showLoading();
       try {
         await App.graph.updateItem(CONFIG.listas.clientes, clienteId, { NaoRenovarCTF: 'sim', DataValidadeCTF: null });
         App.invalidateCache('clientes');
-        toast('CTF marcado como Não Renovar.', 'info');
-        await renderClientePerfil(clienteId, 'ibama');
+        toast('CTF marcado como Não Renovar. SIMAFs removidos do controle de validades.', 'info');
+        await _refresh();
       } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
     };
   } else {
@@ -13066,7 +13223,7 @@ async function toggleNaoRenovarCTF(clienteId, checked) {
       await App.graph.updateItem(CONFIG.listas.clientes, clienteId, { NaoRenovarCTF: '' });
       App.invalidateCache('clientes');
       toast('Renovação de CTF liberada.', 'success');
-      await renderClientePerfil(clienteId, 'ibama');
+      await _refresh();
     } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
   }
 }
@@ -13226,7 +13383,7 @@ async function deletarSIMAF(clienteId, index) {
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
-async function desconsiderarSIMAF(clienteId, index) {
+async function desconsiderarSIMAF(clienteId, index, origem) {
   const ok = await confirmarModal({
     titulo: 'Desconsiderar SIMAF',
     mensagem: 'Deseja desconsiderar este SIMAF? Ele deixará de aparecer no controle de validades (continua cadastrado na aba IBAMA).',
@@ -13241,7 +13398,8 @@ async function desconsiderarSIMAF(clienteId, index) {
     await App.graph.updateItem(CONFIG.listas.clientes, clienteId, { SIMAFs: JSON.stringify(simafList) });
     App.invalidateCache('clientes');
     toast('SIMAF desconsiderado.', 'success');
-    await renderClientePerfil(clienteId, 'ibama');
+    if (origem === 'validades') { _salvarFiltrosValidades(); await renderValidades(); }
+    else await renderClientePerfil(clienteId, 'ibama');
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 async function reconsiderarSIMAF(clienteId, index) {

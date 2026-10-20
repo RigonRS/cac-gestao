@@ -159,7 +159,8 @@ const CHECKLISTS = {
   'Transferência de Arma SIGMA x SIGMA':   CHECKLIST_TRANSFERENCIA_SIGMA_SIGMA,
   'Transferência de Arma SINARM x SIGMA':  CHECKLIST_TRANSFERENCIA,
   'Cancelamento de CR': ['Documento de identificação'],
-  'Registrar arma de fogo': ['Nota Fiscal da Arma']
+  'Registrar arma de fogo': ['Nota Fiscal da Arma'],
+  'Apostilamento de arma PF': ['Nota Fiscal da Arma']
 };
 
 // Snapshot dos checklists originais definidos no código (para "Restaurar padrão"
