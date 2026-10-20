@@ -9453,6 +9453,7 @@ async function renderConfiguracoes(view) {
   if (view === 'info-portal') return renderConfigInfoPortal();
   if (view === 'avisos-portal') return renderConfigAvisosPortal();
   if (view === 'prioridades') return renderConfigPrioridades();
+  if (view === 'relatorios') return renderConfigRelatorios();
 
   const el = document.getElementById('page-content');
   el.innerHTML = `
@@ -9506,7 +9507,194 @@ async function renderConfiguracoes(view) {
           <p style="font-size:13px;color:var(--text-muted);margin:0">Mensagens de aviso exibidas no topo do Portal do Cliente (cor, fundo, negrito).</p>
         </div>
       </div>
+      <div class="card" style="cursor:pointer" onclick="renderConfiguracoes('relatorios')">
+        <div class="card-body" style="text-align:center;padding:28px 16px">
+          <i class="bi bi-send" style="font-size:36px;color:#25D366"></i>
+          <h3 style="margin:12px 0 6px;font-size:16px">Relatórios Automáticos (WhatsApp)</h3>
+          <p style="font-size:13px;color:var(--text-muted);margin:0">Programar envios automáticos de relatórios de processos e vencimentos para um grupo de WhatsApp.</p>
+        </div>
+      </div>
     </div>`;
+}
+
+// ============================================================
+// RELATÓRIOS AUTOMÁTICOS (WhatsApp) — painel de configuração
+// Salva em relatorios_whatsapp.json (lido pelo gateway na VPS).
+// ============================================================
+const REL_DIAS = [
+  { v: 1, l: 'Seg' }, { v: 2, l: 'Ter' }, { v: 3, l: 'Qua' }, { v: 4, l: 'Qui' },
+  { v: 5, l: 'Sex' }, { v: 6, l: 'Sáb' }, { v: 0, l: 'Dom' },
+];
+const REL_DEFAULTS = {
+  grupoNome: 'P&R - Informativos de Processos',
+  processosAProtocolar: { ativo: true, dias: [1, 2, 3, 4, 5], hora: '18:00' },
+  documentosVencendo:   { ativo: true, dias: [1], hora: '08:00', diasAntecedencia: 21 },
+  deferidosDoDia:       { ativo: true, dias: [4], hora: '19:00' },
+};
+
+async function renderConfigRelatorios() {
+  const el = document.getElementById('page-content');
+  el.innerHTML = `<div class="empty-state" style="padding:40px"><div class="spinner"></div></div>`;
+  let cfg = {};
+  try {
+    const raw = await App.graph._readFile('relatorios_whatsapp');
+    if (raw && !Array.isArray(raw)) cfg = raw;
+  } catch (e) {}
+  // Mescla com os padrões para garantir que todos os campos existam
+  window._relCfg = {
+    grupoNome: cfg.grupoNome || REL_DEFAULTS.grupoNome,
+    processosAProtocolar: { ...REL_DEFAULTS.processosAProtocolar, ...(cfg.processosAProtocolar || {}) },
+    documentosVencendo:   { ...REL_DEFAULTS.documentosVencendo,   ...(cfg.documentosVencendo || {}) },
+    deferidosDoDia:       { ...REL_DEFAULTS.deferidosDoDia,       ...(cfg.deferidosDoDia || {}) },
+  };
+  _renderRelEditor();
+}
+
+function _relBlocoDias(tipo, diasSel) {
+  return REL_DIAS.map(d => {
+    const on = (diasSel || []).includes(d.v);
+    return `<label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;cursor:pointer;margin-right:6px">
+      <input type="checkbox" class="rel-dia" data-tipo="${tipo}" value="${d.v}" ${on ? 'checked' : ''}> ${d.l}
+    </label>`;
+  }).join('');
+}
+
+function _relCard(tipo, titulo, icone, cor, descricao, r, extra) {
+  return `
+    <div class="card" style="margin-bottom:14px">
+      <div class="card-body" style="padding:16px 18px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+          <i class="bi ${icone}" style="font-size:22px;color:${cor}"></i>
+          <div style="flex:1">
+            <div style="font-weight:600;font-size:15px">${titulo}</div>
+            <div style="font-size:12px;color:var(--text-muted)">${descricao}</div>
+          </div>
+          <label class="switch" style="display:inline-flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+            <input type="checkbox" class="rel-ativo" data-tipo="${tipo}" ${r.ativo ? 'checked' : ''}>
+            <span>Ativo</span>
+          </label>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center">
+          <div>
+            <div style="font-size:11px;color:var(--text-muted);font-weight:600;margin-bottom:3px">Dias da semana</div>
+            ${_relBlocoDias(tipo, r.dias)}
+          </div>
+          <div>
+            <div style="font-size:11px;color:var(--text-muted);font-weight:600;margin-bottom:3px">Horário</div>
+            <input type="time" class="rel-hora" data-tipo="${tipo}" value="${esc(r.hora || '')}" style="border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:13px">
+          </div>
+          ${extra || ''}
+        </div>
+        <div style="margin-top:10px">
+          <button class="btn btn-outline btn-sm" onclick="_relTestar('${tipo}', this)"><i class="bi bi-send me-1"></i>Enviar teste agora</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function _renderRelEditor() {
+  const el = document.getElementById('page-content');
+  const c = window._relCfg;
+  const inputSty = 'border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:13px';
+  const extraDocs = `
+    <div>
+      <div style="font-size:11px;color:var(--text-muted);font-weight:600;margin-bottom:3px">Avisar com antecedência de (dias)</div>
+      <input type="number" min="1" max="365" id="rel-doc-antecedencia" value="${Number(c.documentosVencendo.diasAntecedencia) || 21}" style="${inputSty};width:80px">
+    </div>`;
+  el.innerHTML = `
+    <button class="btn btn-ghost btn-sm" style="margin-bottom:12px" onclick="renderConfiguracoes('menu')"><i class="bi bi-arrow-left me-1"></i>Voltar</button>
+    <div class="card" style="margin-bottom:14px">
+      <div class="card-body" style="padding:16px 18px">
+        <div style="font-weight:600;font-size:15px;margin-bottom:4px"><i class="bi bi-people-fill me-2" style="color:#25D366"></i>Grupo de destino</div>
+        <p style="font-size:12px;color:var(--text-muted);margin:0 0 8px">Os relatórios serão enviados para este grupo de WhatsApp. O nome deve ser <b>exatamente igual</b> ao do grupo.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <input id="rel-grupo" list="rel-grupos-lista" value="${esc(c.grupoNome || '')}" placeholder="Nome do grupo" style="${inputSty};flex:1;min-width:240px">
+          <datalist id="rel-grupos-lista"></datalist>
+          <button class="btn btn-outline btn-sm" onclick="_relBuscarGrupos(this)"><i class="bi bi-arrow-repeat me-1"></i>Buscar grupos do WhatsApp</button>
+        </div>
+        <div id="rel-grupos-msg" style="font-size:12px;color:var(--text-muted);margin-top:6px"></div>
+      </div>
+    </div>
+
+    ${_relCard('processosAProtocolar', 'Processos a Protocolar', 'bi-folder2-open', '#2563eb',
+      'Lista por operador os processos a protocolar (cliente, tipos, status e última movimentação).', c.processosAProtocolar)}
+
+    ${_relCard('documentosVencendo', 'Documentos a Vencer', 'bi-calendar-x', '#f59e0b',
+      'Lista os documentos que vão vencer dentro do prazo escolhido, agrupados por cliente.', c.documentosVencendo, extraDocs)}
+
+    ${_relCard('deferidosDoDia', 'Processos Deferidos no Dia', 'bi-check2-circle', '#16a34a',
+      'Lista os processos deferidos no dia (cliente, tipo e tempo de deferimento).', c.deferidosDoDia)}
+
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">
+      <button class="btn btn-primary" onclick="_relSalvar(this)"><i class="bi bi-save me-1"></i>Salvar configurações</button>
+      <button class="btn" style="background:#25D366;color:#fff;border:none" onclick="_relTestar('todos', this)"><i class="bi bi-send-check me-1"></i>Enviar os 3 agora (teste)</button>
+    </div>
+    <p style="font-size:12px;color:var(--text-muted);margin-top:12px"><i class="bi bi-info-circle me-1"></i>Os envios automáticos rodam no servidor (VPS), no fuso de Brasília. As configurações são aplicadas em até ~2 minutos após salvar.</p>`;
+}
+
+function _relColetarConfig() {
+  const c = { grupoNome: (document.getElementById('rel-grupo')?.value || '').trim() };
+  ['processosAProtocolar', 'documentosVencendo', 'deferidosDoDia'].forEach(tipo => {
+    const ativo = !!document.querySelector(`.rel-ativo[data-tipo="${tipo}"]`)?.checked;
+    const hora = document.querySelector(`.rel-hora[data-tipo="${tipo}"]`)?.value || '';
+    const dias = Array.from(document.querySelectorAll(`.rel-dia[data-tipo="${tipo}"]:checked`)).map(x => Number(x.value));
+    c[tipo] = { ativo, hora, dias };
+  });
+  c.documentosVencendo.diasAntecedencia = Number(document.getElementById('rel-doc-antecedencia')?.value) || 21;
+  return c;
+}
+
+async function _relSalvar(btn) {
+  const cfg = _relColetarConfig();
+  if (!cfg.grupoNome) { toast('Informe o nome do grupo de destino.', 'warning'); return; }
+  const orig = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px"></span> Salvando...';
+  try {
+    await App.graph._writeFile('relatorios_whatsapp', cfg);
+    window._relCfg = cfg;
+    toast('Configurações salvas! O servidor aplica em até ~2 minutos.', 'success');
+  } catch (e) { toast('Erro ao salvar: ' + e.message, 'error'); }
+  finally { btn.disabled = false; btn.innerHTML = orig; }
+}
+
+async function _relBuscarGrupos(btn) {
+  const msg = document.getElementById('rel-grupos-msg');
+  const orig = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px"></span> Buscando...';
+  try {
+    const r = await waApi('/grupos');
+    const grupos = r.grupos || [];
+    const dl = document.getElementById('rel-grupos-lista');
+    if (dl) dl.innerHTML = grupos.map(g => `<option value="${esc(g.nome)}"></option>`).join('');
+    if (msg) msg.textContent = grupos.length ? `${grupos.length} grupo(s) encontrado(s). Clique no campo acima para escolher.` : 'Nenhum grupo encontrado (o número precisa estar em algum grupo).';
+  } catch (e) {
+    if (msg) msg.textContent = 'Não foi possível buscar os grupos: ' + e.message;
+  } finally { btn.disabled = false; btn.innerHTML = orig; }
+}
+
+async function _relTestar(tipo, btn) {
+  // Salva antes, para o teste usar o grupo/config atuais da tela
+  const cfg = _relColetarConfig();
+  if (!cfg.grupoNome) { toast('Informe o nome do grupo de destino antes de testar.', 'warning'); return; }
+  const orig = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px"></span> Enviando...';
+  try {
+    await App.graph._writeFile('relatorios_whatsapp', cfg);
+    window._relCfg = cfg;
+    const r = await waApi('/relatorios/testar', { method: 'POST', body: JSON.stringify({ tipo }) });
+    if (tipo === 'todos') {
+      const res = r.resultado || {};
+      const nomes = { processosAProtocolar: 'Processos a protocolar', documentosVencendo: 'Documentos a vencer', deferidosDoDia: 'Deferidos do dia' };
+      const partes = Object.keys(res).map(k => {
+        const x = res[k];
+        if (x.enviado) return `✅ ${nomes[k]}`;
+        if (x.erro) return `⚠️ ${nomes[k]}: ${x.erro}`;
+        return `➖ ${nomes[k]}: sem itens`;
+      });
+      toast('Teste enviado:\n' + partes.join('\n'), 'info');
+    } else {
+      toast('Relatório de teste enviado ao grupo!', 'success');
+    }
+  } catch (e) {
+    toast('Erro ao enviar teste: ' + e.message, 'error');
+  } finally { btn.disabled = false; btn.innerHTML = orig; }
 }
 
 async function renderConfigInfoPortal() {
