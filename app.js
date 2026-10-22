@@ -3023,8 +3023,11 @@ async function excluirProcessoDoCliente(procId, clienteId) {
   if (!confirm('Excluir este processo? Esta ação não pode ser desfeita.')) return;
   showLoading();
   try {
+    let _demId = null;
+    try { const _p = await App.graph.getItem(CONFIG.listas.processos, procId); _demId = _p && _p.demandaId || null; } catch(e) {}
     await App.graph.deleteItem(CONFIG.listas.processos, procId);
     App.invalidateCache('processos');
+    if (_demId) await verificarReaberturaDemanda(_demId);
     toast('Processo excluído.', 'success');
     await renderClientePerfil(clienteId, 'processos');
   } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
@@ -3885,10 +3888,13 @@ async function excluirProcessosSelecionados() {
   if (!confirm(`Excluir ${ids.length} processo(s) selecionado(s)?\n\nEsta ação não pode ser desfeita.`)) return;
   showLoading();
   try {
+    const _demIds = new Set();
     for (const id of ids) {
+      try { const _p = await App.graph.getItem(CONFIG.listas.processos, id); if (_p && _p.demandaId) _demIds.add(String(_p.demandaId)); } catch(e) {}
       await App.graph.deleteItem(CONFIG.listas.processos, id);
     }
     App.invalidateCache('processos');
+    for (const dId of _demIds) await verificarReaberturaDemanda(dId);
     window._selectedProcessos = new Set();
     toast(`${ids.length} processo(s) excluído(s).`, 'success');
     await renderProcessosList();
@@ -4239,8 +4245,11 @@ async function deletarProcesso(id, clienteNome) {
   if (!confirm(`Excluir o processo de "${clienteNome}"?\n\nEsta ação não pode ser desfeita.`)) return;
   showLoading();
   try {
+    let _demId = null;
+    try { const _p = await App.graph.getItem(CONFIG.listas.processos, id); _demId = _p && _p.demandaId || null; } catch(e) {}
     await App.graph.deleteItem(CONFIG.listas.processos, id);
     App.invalidateCache('processos');
+    if (_demId) await verificarReaberturaDemanda(_demId);
     toast('Processo excluído.', 'success');
     if (getRoute().page === 'processos') {
       await renderProcessosList();
@@ -5327,6 +5336,50 @@ async function verificarConclusaoDemanda(demandaId) {
       toast('Demanda ' + (demanda.numero || '') + ' concluída automaticamente!', 'success');
     }
   } catch(e) { console.error('verificarConclusaoDemanda:', e); }
+}
+
+// Se um processo vinculado a uma demanda CONCLUÍDA é excluído e a demanda fica
+// incompleta (algum item com menos processos do que o pedido), reabre a demanda
+// automaticamente para que o processo possa ser criado de novo.
+async function verificarReaberturaDemanda(demandaId) {
+  if (!demandaId) return;
+  try {
+    const [demandasRaw, todosProcessos] = await Promise.all([
+      App.graph._readFile('demandas').catch(() => []),
+      App.getProcessos(),
+    ]);
+    const arr = Array.isArray(demandasRaw) ? demandasRaw : [];
+    const idx = arr.findIndex(d => String(d.id) === String(demandaId));
+    if (idx < 0) return;
+    const demanda = arr[idx];
+    if (demanda.status !== 'Concluída') return;
+    const vinculados = todosProcessos.filter(p => p.demandaId && String(p.demandaId) === String(demandaId));
+    const incompleta = (demanda.itens || []).some(item => vinculados.filter(p => p.TipoProcesso === item.tipo).length < item.qtd);
+    if (incompleta) {
+      arr[idx] = { ...demanda, status: 'Aberta' };
+      await App.graph._writeFile('demandas', arr);
+      toast('Demanda ' + (demanda.numero || '') + ' reaberta (há processo faltando para criar).', 'info');
+    }
+  } catch(e) { console.error('verificarReaberturaDemanda:', e); }
+}
+
+// Reabre uma demanda manualmente (botão no card quando ficou "Encerrada"/"Concluída"
+// mas ainda falta criar algum processo).
+async function reabrirDemanda(demandaId) {
+  showLoading();
+  try {
+    const demandasRaw = await App.graph._readFile('demandas').catch(() => []);
+    const arr = Array.isArray(demandasRaw) ? demandasRaw : [];
+    const idx = arr.findIndex(d => String(d.id) === String(demandaId));
+    if (idx < 0) { toast('Demanda não encontrada.', 'error'); return; }
+    arr[idx] = { ...arr[idx], status: 'Aberta' };
+    await App.graph._writeFile('demandas', arr);
+    try { await registrarMovimentacao('Demanda reaberta', `${arr[idx].numero || ''} — ${arr[idx].clienteNome || ''}`); } catch(e) {}
+    toast('Demanda reaberta! Agora dá para abrir o processo que faltou.', 'success');
+    const pg = getRoute().page;
+    if (pg === 'controle-demandas') await renderControleDemandas();
+    else await renderMinhasDemandas();
+  } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 function _certidaoDataDeCliente(c, usarEnd2) {
@@ -16088,10 +16141,18 @@ async function renderMinhasDemandas() {
             : `<button class="btn btn-outline btn-sm" disabled>${concluido ? 'Concluído' : 'Encerrada'}</button>`}
         </div>`;
       }).join('');
+      const temIncompleto = (d.itens||[]).some(item => {
+        const criados = processos.filter(p => p.demandaId && String(p.demandaId) === String(d.id) && p.TipoProcesso === item.tipo).length;
+        return criados < (item.qtd||0);
+      });
+      const podeReabrir = d.status !== 'Aberta' && temIncompleto;
       return `<div class="card" style="margin-bottom:16px">
         <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
           <h3 style="margin:0"><i class="bi bi-clipboard-check me-2"></i>Demanda ${esc(d.numero||'—')} <span style="font-size:12px;font-weight:400;color:var(--text-muted)">— criada em ${fmtDate(d.dataCriacao)}</span></h3>
-          <span style="font-size:12px;color:var(--text-muted)">Orçamento ${esc(d.orcamentoNumero||'—')} · ${esc(d.clienteNome||'—')}</span>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            ${podeReabrir ? `<button class="btn btn-outline btn-sm" style="color:#d97706;border-color:#fcd34d" onclick="reabrirDemanda('${d.id}')" title="Esta demanda ficou encerrada mas ainda falta criar algum processo"><i class="bi bi-arrow-counterclockwise me-1"></i>Reabrir demanda</button>` : ''}
+            <span style="font-size:12px;color:var(--text-muted)">Orçamento ${esc(d.orcamentoNumero||'—')} · ${esc(d.clienteNome||'—')}</span>
+          </div>
         </div>
         <div class="card-body">${itensHtml}</div>
       </div>`;
