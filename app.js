@@ -6470,6 +6470,7 @@ async function renderProcessoDetalhe(id) {
               <div style="font-size:12px;color:var(--text-muted);margin-bottom:2px">Data do Protocolo no Sistema</div>
               <div style="font-weight:600;margin-bottom:8px">${processo.DataProtocoloSistema ? fmtDate(processo.DataProtocoloSistema.split('T')[0]) : '—'}</div>
               <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#16a34a"><i class="bi bi-lock-fill"></i> Protocolo registrado</div>
+              ${isAdminUser() ? `<div style="margin-top:8px"><button class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:12px" onclick="editarProtocoloProcesso('${id}')"><i class="bi bi-pencil me-1"></i>Editar protocolo</button></div>` : ''}
             </div>` : `
             <form id="form-protocolo" onsubmit="salvarDatasProcesso(event,'${id}')">
               <label style="font-size:12px">N° Protocolo</label>
@@ -7518,12 +7519,63 @@ async function salvarDatasProcesso(e, id) {
           <div style="font-size:12px;color:var(--text-muted);margin-bottom:2px">Data do Protocolo no Sistema</div>
           <div style="font-weight:600;margin-bottom:8px">${dataProt ? fmtDate(dataProt) : '—'}</div>
           <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#16a34a"><i class="bi bi-lock-fill"></i> Protocolo registrado</div>
+          ${isAdminUser() ? `<div style="margin-top:8px"><button class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:12px" onclick="editarProtocoloProcesso('${id}')"><i class="bi bi-pencil me-1"></i>Editar protocolo</button></div>` : ''}
         </div>`;
     }
     toast('Protocolo salvo!', 'success');
     // Reflete o checklist marcado automaticamente na tela
     if (checklistProt) await renderProcessoDetalhe(id);
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+// Admin: abre o formulário inline para editar o N° de Protocolo (e a data) já salvo.
+function editarProtocoloProcesso(id) {
+  if (!isAdminUser()) { toast('Apenas administradores podem editar o protocolo.', 'warning'); return; }
+  const p = window._processoDetalhe || {};
+  const bloco = document.getElementById('protocolo-travado');
+  if (!bloco) return;
+  const dataIso = p.DataProtocoloSistema ? String(p.DataProtocoloSistema).split('T')[0] : hojeISO();
+  bloco.innerHTML = `
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:2px">N° Protocolo</div>
+    <input id="edit-prot-num" type="text" inputmode="numeric" pattern="[0-9]*" value="${esc(p.NumeroProtocolo||'')}" oninput="this.value=this.value.replace(/\\D/g,'')" style="margin-bottom:8px;width:100%;box-sizing:border-box" />
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:2px">Data do Protocolo no Sistema</div>
+    <input id="edit-prot-data" type="date" value="${dataIso}" style="margin-bottom:10px;width:100%;box-sizing:border-box" />
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-primary btn-sm" style="flex:1" onclick="salvarEdicaoProtocolo('${id}')"><i class="bi bi-floppy me-1"></i>Salvar</button>
+      <button class="btn btn-outline btn-sm" onclick="renderProcessoDetalhe('${id}')">Cancelar</button>
+    </div>`;
+}
+
+async function salvarEdicaoProtocolo(id) {
+  if (!isAdminUser()) { toast('Apenas administradores podem editar o protocolo.', 'warning'); return; }
+  const num = (document.getElementById('edit-prot-num')?.value || '').trim();
+  const data = document.getElementById('edit-prot-data')?.value || '';
+  if (!num) { toast('Informe o N° de Protocolo.', 'warning'); return; }
+  showLoading();
+  try {
+    const proc = await App.graph.getItem(CONFIG.listas.processos, id);
+    const anterior = proc.NumeroProtocolo || '—';
+    const historico = JSON.parse(proc.HistoricoStatus || '[]');
+    const agora = new Date();
+    historico.push({
+      data: agora.toLocaleDateString('pt-BR'),
+      hora: agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+      status: `Protocolo editado — N° ${num}${(anterior && anterior !== num) ? ` (antes: ${anterior})` : ''}`,
+      usuario: getCurrentUserName()
+    });
+    const updates = { NumeroProtocolo: num, HistoricoStatus: JSON.stringify(historico) };
+    if (data) updates.DataProtocoloSistema = data;
+    await App.graph.updateItem(CONFIG.listas.processos, id, updates);
+    App.invalidateCache('processos');
+    try { await registrarMovimentacao('Protocolo editado', `${proc.TipoProcesso||''} — ${proc.ClienteNome||''}: N° ${anterior} → ${num}`); } catch(e) {}
+    if (window._processoDetalhe) {
+      window._processoDetalhe.NumeroProtocolo = num;
+      if (data) window._processoDetalhe.DataProtocoloSistema = data;
+      window._processoDetalhe.HistoricoStatus = JSON.stringify(historico);
+    }
+    toast('Número de protocolo atualizado.', 'success');
+    await renderProcessoDetalhe(id);
+  } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 async function salvarPagamento(e, id) {
