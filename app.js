@@ -521,7 +521,7 @@ async function atualizarBadgesSidebar() {
     const aguardandoDeleg = demandas.filter(d => d.status === 'Aguardando Delegação').length;
     // Apenas os processos da aba "A Protocolar" (sem protocolo e em status a protocolar)
     const meusProcessos   = processos.filter(p => p.Responsavel === user && STATUS_A_PROTOCOLAR.includes(p.Status) && !processoTemProtocolo(p)).length;
-    const gruPendentes    = processos.filter(p => !p.GruPaga && !STATUS_FECHADOS.includes(p.Status) && !TIPOS_SEM_GRU.includes(p.TipoProcesso)
+    const gruPendentes    = processos.filter(p => !p.GruPaga && !STATUS_FECHADOS.includes(p.Status) && !processoSemGRU(p)
       && (!STATUS_OCULTA_GRU.includes(p.Status) || processoTemProtocolo(p))).length;
     _setBadgeSidebar('badge-minhas-demandas',   minhasDemandas);
     _setBadgeSidebar('badge-meus-processos',    meusProcessos);
@@ -966,6 +966,32 @@ const TIPOS_STATUS_GRU_AO_PROTOCOLAR = [
 ];
 const RESPONSAVEIS = ['Andrieli', 'Geison', 'Janaína', 'Matheus', 'Priscila', 'Simone'];
 const TIPOS_SEM_GRU = ['Defesa de Notificação', 'Mudança de endereço SINARM PF', 'Porte de Arma PF', 'Correção de dados de arma', 'Comunicado de Furto/Extravio', 'Aquisição de Arma PF'];
+// Valor da taxa (GRU) de um tipo de processo — 0 quando não há taxa cadastrada.
+function taxaProcessoTipo(tipo) { const t = TAXAS_PROCESSO[tipo]; return (t == null) ? 0 : (Number(t) || 0); }
+// Processo "sem GRU": listado em TIPOS_SEM_GRU OU com taxa igual a 0 (não mostra a caixa de GRU).
+function processoSemGRU(p) {
+  const tipo = p && p.TipoProcesso;
+  return !tipo || TIPOS_SEM_GRU.includes(tipo) || taxaProcessoTipo(tipo) === 0;
+}
+// --- Tipos de processo personalizados (adicionar/ocultar pela página de Configurações) ---
+function tipoProcessoOculto(t) { const o = (window._tiposProcCfg && window._tiposProcCfg.ocultos) || []; return o.includes(t); }
+function tipoProcessoCustom(t) { const a = (window._tiposProcCfg && window._tiposProcCfg.adicionados) || []; return a.some(x => x && x.nome === t); }
+// Lista dinâmica usada nas páginas Valores/Extras (inclui tipos personalizados + avulsos).
+function tiposValoresLista() { return [...TIPOS_PROCESSO, 'CTF Avulso', 'SIMAF Avulso']; }
+// Aplica a configuração salva: registra tipos adicionados (nome/valor/taxa) e guarda os ocultos.
+function aplicarTiposProcessoCustom(cfg) {
+  const adicionados = Array.isArray(cfg && cfg.adicionados) ? cfg.adicionados : [];
+  const ocultos = Array.isArray(cfg && cfg.ocultos) ? cfg.ocultos : [];
+  window._tiposProcCfg = { adicionados, ocultos };
+  adicionados.forEach(t => {
+    const nome = ((t && t.nome) || '').trim();
+    if (!nome) return;
+    if (!TIPOS_PROCESSO.includes(nome)) TIPOS_PROCESSO.push(nome);
+    VALORES_PROCESSO[nome] = Number(t.valor) || 0;
+    TAXAS_PROCESSO[nome] = Number(t.taxa) || 0;
+    if (!(nome in CHECKLISTS)) CHECKLISTS[nome] = [];
+  });
+}
 // Status em que a GRU fica oculta na página de Pagamentos de GRU (até ter protocolo registrado).
 const STATUS_OCULTA_GRU = ['Parado', 'Processo Futuro', 'Aguardando Documentos', 'Aguardando Assinatura', 'Desistência Cliente'];
 const FORMAS_PAGAMENTO_OPTS = ['Pix', 'Dinheiro', 'Cartão'];
@@ -4310,7 +4336,7 @@ async function renderProcessoForm(clienteId = null, routeParams = {}) {
     : `<div><label>Tipo de Processo *</label>
         <select name="TipoProcesso" required onchange="onTipoProcessoChange(this.value)">
           <option value="">Selecione...</option>
-          ${TIPOS_PROCESSO.map(t => `<option value="${t}">${t}</option>`).join('')}
+          ${TIPOS_PROCESSO.filter(t => !tipoProcessoOculto(t)).map(t => `<option value="${t}">${t}</option>`).join('')}
         </select>
       </div>`;
 
@@ -6379,7 +6405,7 @@ async function renderProcessoDetalhe(id) {
               <div style="font-size:12px;color:#7c3aed"><i class="bi bi-hourglass me-1"></i>Aguardando: <strong>${esc(processo.ProcessoFuturoNome||'—')}</strong></div>
             </div>` : ''}
             <div style="margin-top:12px" id="gru-paga-wrapper">
-              ${TIPOS_SEM_GRU.includes(processo.TipoProcesso) ? '' : gruPagaSalva ? `
+              ${processoSemGRU(processo) ? '' : gruPagaSalva ? `
               <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
                 <i class="bi bi-check-circle-fill" style="color:#16a34a"></i>
                 <span style="font-size:13px;font-weight:600;color:#16a34a">GRU Paga</span>
@@ -6487,7 +6513,7 @@ async function atualizarStatus(id, novoStatus) {
   const statusRestritos = ['Pronto para Análise', 'Em análise'];
   if (statusRestritos.includes(novoStatus)) {
     const p = window._processoDetalhe;
-    const semGRU = TIPOS_SEM_GRU.includes(p?.TipoProcesso);
+    const semGRU = processoSemGRU(p);
     const faltando = [];
     if (!p?.NumeroProtocolo)     faltando.push('N° de Protocolo');
     if (!semGRU && !p?.GruPaga) faltando.push('GRU Paga');
@@ -6663,7 +6689,7 @@ async function deferirProcesso(id) {
   if (!p) return;
 
   // Validação: N° Protocolo e GRU Paga são obrigatórios
-  const semGRUDefer = TIPOS_SEM_GRU.includes(p.TipoProcesso);
+  const semGRUDefer = processoSemGRU(p);
   const faltando = [];
   if (!p.NumeroProtocolo)         faltando.push('N° de Protocolo');
   if (!semGRUDefer && !p.GruPaga) faltando.push('GRU Paga');
@@ -8723,7 +8749,7 @@ async function renderPagamentosGRU() {
   // A GRU é independente do pagamento do cliente (orçamento/processo): só olha GruPaga.
   // Processos já PROTOCOLADOS aparecem sempre (mesmo que o status estivesse num estado "oculto"),
   // pois passaram da fase de documentos e a taxa da GRU fica pendente.
-  const gruPendentes = processos.filter(p => !p.GruPaga && !STATUS_FECHADOS.includes(p.Status) && !TIPOS_SEM_GRU.includes(p.TipoProcesso)
+  const gruPendentes = processos.filter(p => !p.GruPaga && !STATUS_FECHADOS.includes(p.Status) && !processoSemGRU(p)
     && (!STATUS_OCULTA_GRU.includes(p.Status) || processoTemProtocolo(p)));
   const el = document.getElementById('page-content');
 
@@ -9523,7 +9549,7 @@ async function renderValoresProcessos() {
         <table>
           <thead><tr><th>Tipo de Processo</th><th>Valor Atual</th><th>Novo Valor</th><th>Valor das Taxas</th></tr></thead>
           <tbody>
-            ${TIPOS_VALORES.map(tipo => {
+            ${tiposValoresLista().map(tipo => {
               const atual = valoresPadrao[tipo] != null ? valoresPadrao[tipo] : VALORES_PROCESSO[tipo];
               const taxaAtual = taxasPadrao[tipo] != null ? taxasPadrao[tipo] : TAXAS_PROCESSO[tipo];
               return `<tr>
@@ -9609,6 +9635,7 @@ async function renderConfiguracoes(view) {
   if (view === 'avisos-portal') return renderConfigAvisosPortal();
   if (view === 'prioridades') return renderConfigPrioridades();
   if (view === 'relatorios') return renderConfigRelatorios();
+  if (view === 'tipos-processo') return renderConfigTiposProcesso();
 
   const el = document.getElementById('page-content');
   el.innerHTML = `
@@ -9669,7 +9696,135 @@ async function renderConfiguracoes(view) {
           <p style="font-size:13px;color:var(--text-muted);margin:0">Programar envios automáticos de relatórios de processos e vencimentos para um grupo de WhatsApp.</p>
         </div>
       </div>
+      <div class="card" style="cursor:pointer" onclick="renderConfiguracoes('tipos-processo')">
+        <div class="card-body" style="text-align:center;padding:28px 16px">
+          <i class="bi bi-folder-plus" style="font-size:36px;color:#7c3aed"></i>
+          <h3 style="margin:12px 0 6px;font-size:16px">Tipos de Processo</h3>
+          <p style="font-size:13px;color:var(--text-muted);margin:0">Adicionar novos tipos de processo ou ocultar os que não são usados na criação de processos.</p>
+        </div>
+      </div>
     </div>`;
+}
+
+// ============================================================
+// TIPOS DE PROCESSO — adicionar / ocultar (página de Configurações)
+// Salva em tipos_processo_config.json ({ adicionados:[{nome,valor,taxa}], ocultos:[nome] }).
+// ============================================================
+function _tpCfg() {
+  if (!window._tiposProcCfg) window._tiposProcCfg = { adicionados: [], ocultos: [] };
+  if (!Array.isArray(window._tiposProcCfg.adicionados)) window._tiposProcCfg.adicionados = [];
+  if (!Array.isArray(window._tiposProcCfg.ocultos)) window._tiposProcCfg.ocultos = [];
+  return window._tiposProcCfg;
+}
+async function _tpSalvarConfig() {
+  const c = _tpCfg();
+  await App.graph._writeFile('tipos_processo_config', { adicionados: c.adicionados, ocultos: c.ocultos });
+}
+
+function renderConfigTiposProcesso() {
+  const el = document.getElementById('page-content');
+  const cfg = _tpCfg();
+  const sel = 'border:1px solid var(--border);border-radius:6px;padding:6px 9px;font-size:13px';
+  const ativos = TIPOS_PROCESSO.filter(t => !cfg.ocultos.includes(t));
+  const ocultos = cfg.ocultos.slice();
+  const linhaTipo = (t, oculto) => {
+    const custom = tipoProcessoCustom(t);
+    const valor = VALORES_PROCESSO[t] != null ? fmtMoeda(VALORES_PROCESSO[t]) : '—';
+    const taxa = fmtMoeda(taxaProcessoTipo(t));
+    const acao = oculto
+      ? `<button class="btn btn-outline btn-sm" onclick="_tpReexibir('${escJs(t)}')"><i class="bi bi-eye me-1"></i>Reexibir</button>`
+      : `<button class="btn btn-outline btn-sm" onclick="_tpOcultar('${escJs(t)}')"><i class="bi bi-eye-slash me-1"></i>Ocultar</button>`;
+    const remover = custom ? `<button class="btn btn-ghost btn-sm" style="color:var(--danger)" title="Remover tipo personalizado" onclick="_tpRemover('${escJs(t)}')"><i class="bi bi-trash"></i></button>` : '';
+    return `<tr>
+      <td>${esc(t)} ${custom ? '<span class="badge" style="background:#ede9fe;color:#6d28d9;font-size:10px">personalizado</span>' : ''}</td>
+      <td>${valor}</td>
+      <td>${taxa}</td>
+      <td style="white-space:nowrap;text-align:right">${acao} ${remover}</td>
+    </tr>`;
+  };
+  el.innerHTML = `
+    <button class="btn btn-ghost btn-sm" style="margin-bottom:12px" onclick="renderConfiguracoes('menu')"><i class="bi bi-arrow-left me-1"></i>Voltar</button>
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-body" style="padding:16px 18px">
+        <div style="font-weight:600;font-size:15px;margin-bottom:4px"><i class="bi bi-plus-circle me-2" style="color:#7c3aed"></i>Adicionar novo tipo de processo</div>
+        <p style="font-size:12px;color:var(--text-muted);margin:0 0 10px">O novo tipo aparece na lista ao criar um processo. Ele é genérico (sem campos específicos nem ações automáticas ao deferir). Se a taxa for 0, não aparece a caixa de GRU.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+          <div><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:3px">Nome do tipo</label><input id="tp-novo-nome" placeholder="Ex.: Consultoria avulsa" style="${sel};min-width:240px"></div>
+          <div><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:3px">Valor do serviço (R$)</label><input id="tp-novo-valor" type="number" min="0" step="0.01" value="0" style="${sel};width:130px"></div>
+          <div><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:3px">Taxa GRU (R$)</label><input id="tp-novo-taxa" type="number" min="0" step="0.01" value="0" style="${sel};width:120px"></div>
+          <button class="btn btn-primary" onclick="_tpAdicionar(this)"><i class="bi bi-plus-lg me-1"></i>Adicionar</button>
+        </div>
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header"><h3><i class="bi bi-list-check me-2"></i>Tipos ativos (${ativos.length})</h3></div>
+      <div class="table-wrapper"><table>
+        <thead><tr><th>Tipo</th><th>Valor</th><th>Taxa GRU</th><th></th></tr></thead>
+        <tbody>${ativos.map(t => linhaTipo(t, false)).join('')}</tbody>
+      </table></div>
+    </div>
+    ${ocultos.length ? `
+    <div class="card">
+      <div class="card-header"><h3><i class="bi bi-eye-slash me-2"></i>Tipos ocultos (${ocultos.length})</h3></div>
+      <div class="table-wrapper"><table>
+        <thead><tr><th>Tipo</th><th>Valor</th><th>Taxa GRU</th><th></th></tr></thead>
+        <tbody>${ocultos.map(t => linhaTipo(t, true)).join('')}</tbody>
+      </table></div>
+    </div>` : ''}
+    <p style="font-size:12px;color:var(--text-muted);margin-top:12px"><i class="bi bi-info-circle me-1"></i>"Ocultar" só tira o tipo da lista de criação — os processos já existentes continuam normais. O valor/taxa de qualquer tipo pode ser ajustado na página <strong>Valores dos Processos</strong>.</p>`;
+}
+
+async function _tpAdicionar(btn) {
+  const nome = (document.getElementById('tp-novo-nome')?.value || '').trim();
+  const valor = Number(document.getElementById('tp-novo-valor')?.value) || 0;
+  const taxa = Number(document.getElementById('tp-novo-taxa')?.value) || 0;
+  if (!nome) { toast('Informe o nome do tipo.', 'warning'); return; }
+  if (TIPOS_PROCESSO.includes(nome)) { toast('Já existe um tipo com esse nome.', 'warning'); return; }
+  const cfg = _tpCfg();
+  cfg.adicionados.push({ nome, valor, taxa });
+  TIPOS_PROCESSO.push(nome);
+  VALORES_PROCESSO[nome] = valor;
+  TAXAS_PROCESSO[nome] = taxa;
+  if (!(nome in CHECKLISTS)) CHECKLISTS[nome] = [];
+  btn.disabled = true;
+  try { await _tpSalvarConfig(); toast('Tipo adicionado.', 'success'); }
+  catch (e) { toast('Erro ao salvar: ' + e.message, 'error'); }
+  finally { btn.disabled = false; }
+  renderConfigTiposProcesso();
+}
+
+async function _tpOcultar(t) {
+  const cfg = _tpCfg();
+  if (!cfg.ocultos.includes(t)) cfg.ocultos.push(t);
+  try { await _tpSalvarConfig(); toast('Tipo ocultado da criação de processos.', 'success'); }
+  catch (e) { toast('Erro ao salvar: ' + e.message, 'error'); }
+  renderConfigTiposProcesso();
+}
+
+async function _tpReexibir(t) {
+  const cfg = _tpCfg();
+  cfg.ocultos = cfg.ocultos.filter(x => x !== t);
+  try { await _tpSalvarConfig(); toast('Tipo reexibido.', 'success'); }
+  catch (e) { toast('Erro ao salvar: ' + e.message, 'error'); }
+  renderConfigTiposProcesso();
+}
+
+async function _tpRemover(t) {
+  if (!tipoProcessoCustom(t)) { toast('Só é possível remover tipos personalizados. Use "Ocultar" para os demais.', 'warning'); return; }
+  const ok = await confirmarModal({
+    titulo: 'Remover tipo', mensagem: `Remover o tipo personalizado "${t}"? Ele sairá da lista de criação de processos.`,
+    okLabel: 'Remover', okCor: '#dc2626', icone: 'bi-trash',
+  });
+  if (!ok) return;
+  const cfg = _tpCfg();
+  cfg.adicionados = cfg.adicionados.filter(x => !x || x.nome !== t);
+  cfg.ocultos = cfg.ocultos.filter(x => x !== t);
+  const idx = TIPOS_PROCESSO.indexOf(t);
+  if (idx >= 0) TIPOS_PROCESSO.splice(idx, 1);
+  delete VALORES_PROCESSO[t]; delete TAXAS_PROCESSO[t]; delete CHECKLISTS[t];
+  try { await _tpSalvarConfig(); toast('Tipo removido.', 'success'); }
+  catch (e) { toast('Erro ao salvar: ' + e.message, 'error'); }
+  renderConfigTiposProcesso();
 }
 
 // ============================================================
@@ -10146,7 +10301,7 @@ function renderConfigExtras() {
             ${cols.map(u => `<th style="text-align:center">${u}<br><span style="font-size:10px;font-weight:400;color:var(--text-muted)">% · Extra</span></th>`).join('')}
           </tr></thead>
           <tbody>
-            ${TIPOS_VALORES.map(tipo => {
+            ${tiposValoresLista().map(tipo => {
               const valorAtual = Number(VALORES_PROCESSO[tipo]) || 0;
               const taxa = Number(TAXAS_PROCESSO[tipo]) || 0;
               const liquido = Math.max(0, valorAtual - taxa);
@@ -16153,6 +16308,13 @@ async function iniciarApp() {
     const navWa = document.getElementById('nav-whatsapp');
     if (navWa) navWa.style.display = '';
   }
+
+  // Carrega tipos de processo personalizados (adicionados/ocultos) ANTES de valores/taxas,
+  // para que ajustes feitos na página "Valores" tenham prioridade sobre o valor inicial do tipo.
+  try {
+    const tcfg = await App.graph._readFile('tipos_processo_config');
+    if (tcfg && !Array.isArray(tcfg)) aplicarTiposProcessoCustom(tcfg);
+  } catch(e) {}
 
   // Carrega valores e taxas de processos personalizados
   try {
