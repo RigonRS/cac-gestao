@@ -6270,6 +6270,7 @@ async function renderProcessoDetalhe(id) {
           ${isAdminUser() ? `<a class="btn btn-outline btn-sm" style="color:#16a34a" onclick="abrirSituacaoExtra('${id}')"><i class="bi bi-trophy"></i> Pagamento de Extras</a>` : ''}
         </div>
       </div>
+      <div id="cadeia-vinculados"></div>
     </div>
 
     <div style="display:grid;grid-template-columns:1fr 340px;gap:20px;align-items:start">
@@ -6505,6 +6506,136 @@ async function renderProcessoDetalhe(id) {
   window._processoDetalhe = processo;
   window._clienteDetalhe  = _clienteDetalhe;
   window._clubeDetalhe    = _clubeDetalhe;
+
+  // Monta a cadeia de processos vinculados (pai/filhos automáticos) no card do topo.
+  montarCadeiaVinculados(id);
+}
+
+// ------------------------------------------------------------
+// CADEIA DE PROCESSOS VINCULADOS (pai/filhos criados automaticamente)
+// ------------------------------------------------------------
+// Filhos automáticos esperados de um processo DEFERIDO (para detectar exclusões).
+function _filhosEsperados(p) {
+  if (!p || p.Status !== 'Deferido') return [];
+  const t = p.TipoProcesso;
+  if (t === 'Aquisição de Arma SIGMA') return [{ tipo: 'Registrar arma de fogo', qtd: 1 }];
+  if (t === 'Aquisição de Arma PF')    return [{ tipo: 'Apostilamento de arma PF', qtd: 1 }];
+  if (t === 'Registrar arma de fogo')  return [{ tipo: 'Guia de Tráfego', qtd: 2 }];
+  if (TIPOS_TRANSF_GERA_GUIAS.includes(t)) return [{ tipo: 'Guia de Tráfego', qtd: 2 }];
+  return [];
+}
+
+function _cadeiaLinhaHtml(p, nivel, currentId) {
+  const atual = String(p.id) === String(currentId);
+  const b = statusBadge(p.Status);
+  const indent = nivel * 18;
+  const seta = nivel > 0 ? '<i class="bi bi-arrow-return-right" style="color:var(--text-muted);margin-right:4px"></i>' : '';
+  const nomeHtml = atual
+    ? `<strong>${esc(p.TipoProcesso||'—')}</strong> <span style="font-size:10px;color:var(--text-muted)">(este processo)</span>`
+    : `<a style="color:var(--accent);cursor:pointer;font-weight:600" onclick="navigate('processos/detalhe',{id:'${p.id}'})">${esc(p.TipoProcesso||'—')}</a>`;
+  const auto = _dadosEsp(p).geradoAutomatico ? ' <span style="font-size:10px;color:var(--text-muted)">· automático</span>' : '';
+  return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;margin-left:${indent}px;font-size:12px;${atual ? 'background:#f0f9ff;border-radius:6px;padding-left:6px' : ''}">
+    <span style="flex:1;min-width:0">${seta}${nomeHtml}${auto}</span>
+    <span class="badge ${b.cls}" style="font-size:10px;flex-shrink:0">${b.txt}</span>
+  </div>`;
+}
+
+function _cadeiaFaltandoHtml(pai, tipoFilho, nivel) {
+  const indent = nivel * 18;
+  const admin = isAdminUser();
+  return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;margin-left:${indent}px;font-size:12px">
+    <span style="flex:1;min-width:0"><i class="bi bi-arrow-return-right" style="color:var(--text-muted);margin-right:4px"></i><i class="bi bi-x-circle" style="color:#dc2626;margin-right:4px"></i><span style="color:#dc2626">${esc(tipoFilho)}</span> <span style="font-size:10px;color:var(--text-muted)">· excluído</span></span>
+    ${admin ? `<button class="btn btn-ghost btn-sm" style="font-size:11px;padding:1px 8px;flex-shrink:0" onclick="recriarProcessoVinculado('${pai.id}','${escJs(tipoFilho)}')"><i class="bi bi-plus-circle me-1"></i>Criar novamente</button>` : ''}
+  </div>`;
+}
+
+async function montarCadeiaVinculados(id) {
+  const host = document.getElementById('cadeia-vinculados');
+  if (!host) return;
+  let processos;
+  try { processos = await App.getProcessos(); } catch (e) { return; }
+  const byId = {}; processos.forEach(p => { byId[String(p.id)] = p; });
+  if (!byId[String(id)]) return;
+
+  // Sobe até a raiz da cadeia
+  let root = byId[String(id)], guard = 0;
+  while (guard++ < 20) {
+    const pid = _dadosEsp(root).processoPaiId;
+    const pai = pid ? byId[String(pid)] : null;
+    if (!pai || String(pai.id) === String(root.id)) break;
+    root = pai;
+  }
+  const filhosDe = (pid) => processos.filter(p => String(_dadosEsp(p).processoPaiId || '') === String(pid));
+
+  const linhas = [];
+  let realCount = 0, faltandoCount = 0;
+  const visitados = new Set();
+  const walk = (p, nivel) => {
+    if (visitados.has(String(p.id)) || nivel > 10) return;
+    visitados.add(String(p.id));
+    linhas.push(_cadeiaLinhaHtml(p, nivel, id));
+    realCount++;
+    const filhos = filhosDe(p.id);
+    filhos.forEach(f => walk(f, nivel + 1));
+    _filhosEsperados(p).forEach(exp => {
+      const existentes = filhos.filter(f => f.TipoProcesso === exp.tipo).length;
+      for (let i = 0; i < exp.qtd - existentes; i++) { linhas.push(_cadeiaFaltandoHtml(p, exp.tipo, nivel + 1)); faltandoCount++; }
+    });
+  };
+  walk(root, 0);
+
+  // Só exibe se houver realmente uma cadeia (mais de um nó) ou algum filho excluído
+  if (realCount <= 1 && faltandoCount === 0) { host.innerHTML = ''; return; }
+
+  host.innerHTML = `<div style="border-top:1px solid var(--border);padding:12px 16px">
+    <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:8px"><i class="bi bi-diagram-3 me-1"></i>Cadeia de processos vinculados</div>
+    ${linhas.join('')}
+  </div>`;
+}
+
+// Recria um filho automático que foi excluído (apenas admin)
+async function recriarProcessoVinculado(paiId, tipoFilho) {
+  if (!isAdminUser()) { toast('Apenas administradores.', 'warning'); return; }
+  showLoading();
+  try {
+    const pai = await App.graph.getItem(CONFIG.listas.processos, paiId);
+    const dados = _dadosEsp(pai);
+    window._novosAutoCriados = window._novosAutoCriados || [];
+    if (tipoFilho === 'Registrar arma de fogo') {
+      await criarProcessoAutomatico(pai, 'Registrar arma de fogo', { ...dados });
+    } else if (tipoFilho === 'Apostilamento de arma PF') {
+      await criarProcessoAutomatico(pai, 'Apostilamento de arma PF', { ...dados, acervo: 'Defesa Pessoal' });
+    } else if (tipoFilho === 'Guia de Tráfego') {
+      await _recriarUmaGuia(pai, dados);
+    } else {
+      await criarProcessoAutomatico(pai, tipoFilho, { ...dados });
+    }
+    App.invalidateCache('processos');
+    try { await registrarMovimentacao('Processo vinculado recriado', `${tipoFilho} — ${pai.ClienteNome||''} (origem: ${pai.TipoProcesso||''})`); } catch(e) {}
+    toast(`"${tipoFilho}" criado novamente.`, 'success');
+    await renderProcessoDetalhe(window._processoDetalhe?.id || paiId);
+  } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+// Cria UMA guia de tráfego vinculada, herdando a origem da comissão de uma guia-irmã (se houver).
+async function _recriarUmaGuia(pai, dados) {
+  let extraSourceId, armaId = null, valorAtrelado = 0, tipoAtrelado = '';
+  const todos = await App.getProcessos();
+  const irma = todos.find(g => g.TipoProcesso === 'Guia de Tráfego' && String(_dadosEsp(g).processoPaiId || '') === String(pai.id));
+  if (irma) {
+    const di = _dadosEsp(irma);
+    extraSourceId = String(di.extraSourceId || di.atreladoId || dados.processoPaiId || pai.id);
+    armaId = di.armaId ? String(di.armaId) : null;
+    valorAtrelado = Number(di.valorAtrelado) || 0;
+    tipoAtrelado = di.tipoAtrelado || '';
+  } else {
+    extraSourceId = String(dados.processoPaiId || pai.id);
+    armaId = (String(dados.armaId || '').split('|')[0]) || null;
+    try { const src = await App.graph.getItem(CONFIG.listas.processos, extraSourceId); valorAtrelado = Number(src.ValorProcesso) || 0; tipoAtrelado = src.TipoProcesso || ''; } catch (e) {}
+  }
+  const dadosGuia = { extraSourceId, atreladoId: extraSourceId, valorAtrelado, tipoAtrelado };
+  if (armaId) dadosGuia.armaId = armaId;
+  await criarProcessoAutomatico(pai, 'Guia de Tráfego', { ...dadosGuia }, null);
 }
 
 async function atualizarStatus(id, novoStatus) {
