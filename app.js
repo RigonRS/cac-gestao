@@ -6267,6 +6267,7 @@ async function renderProcessoDetalhe(id) {
         <div class="btn-group">
           <a class="btn btn-outline btn-sm" onclick="navigate('clientes/perfil',{id:'${processo.ClienteId}',tab:'processos'})"><i class="bi bi-person"></i> Ver Cliente</a>
           <a class="btn btn-outline btn-sm" onclick="navigate('processos/editar',{id:'${id}'})"><i class="bi bi-pencil"></i> Editar</a>
+          ${isAdminUser() ? `<a class="btn btn-outline btn-sm" style="color:#16a34a" onclick="abrirSituacaoExtra('${id}')"><i class="bi bi-trophy"></i> Pagamento de Extras</a>` : ''}
         </div>
       </div>
     </div>
@@ -9428,6 +9429,186 @@ async function restaurarAjusteExtra(id, responsavel) {
     toast('Cálculo automático restaurado.', 'info');
     await renderPagamentosExtras();
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+// ============================================================
+// SITUAÇÃO DO EXTRA (por processo) — admin: ver condições e liberar a comissão
+// ============================================================
+async function abrirSituacaoExtra(id) {
+  if (!isAdminUser()) { toast('Apenas administradores.', 'warning'); return; }
+  showLoading();
+  let processos, orc, dem;
+  try {
+    const [procs, orcDem, ajRaw] = await Promise.all([
+      App.getProcessos(),
+      _carregarOrcamentosDemandas(),
+      App.graph._readFile('extras_ajustes').catch(() => ({})),
+    ]);
+    processos = procs;
+    orc = orcDem.orcamentos; dem = orcDem.demandas;
+    window._extrasAjustes = (ajRaw && !Array.isArray(ajRaw) && typeof ajRaw === 'object') ? ajRaw : {};
+    // Permite reaproveitar verCalculoExtra (que lê estes globais) mesmo fora da página de Extras.
+    window._extrasProcessos = processos; window._extrasOrc = orc; window._extrasDem = dem;
+  } catch (e) { hideLoading(); toast('Erro ao carregar dados: ' + e.message, 'error'); return; }
+  finally { hideLoading(); }
+  const p = processos.find(x => String(x.id) === String(id));
+  if (!p) { toast('Processo não encontrado.', 'error'); return; }
+  _renderSituacaoExtraModal(p, processos, orc, dem);
+}
+
+function _renderSituacaoExtraModal(p, processos, orc, dem) {
+  const d = _dadosEsp(p);
+  const responsavel = p.Responsavel || '—';
+  const eDeferido = p.Status === 'Deferido';
+  const eAuto = !!d.geradoAutomatico;
+  const viaGuias = !!d.extraViaGuias;
+  const liberadoManual = !!d.extraLiberadoManual;
+  const dataDef = getDataDeferido(p);
+
+  // Processo de origem (quando este é uma guia automática) e processos vinculados
+  let origem = null, vinculados = [];
+  const ehFonte = viaGuias || liberadoManual;   // este processo é a origem da comissão
+  const fonteId = ehFonte ? String(p.id) : (eAuto ? String(d.extraSourceId || d.processoPaiId || '') : '');
+  if (fonteId) {
+    if (!ehFonte) origem = processos.find(x => String(x.id) === fonteId) || null;
+    vinculados = processos.filter(g => String(_dadosEsp(g).extraSourceId || '') === fonteId);
+  }
+  const fonte = viaGuias ? p : origem;
+  const fonteD = fonte ? _dadosEsp(fonte) : {};
+  const guiasDeferidas = vinculados.filter(g => g.Status === 'Deferido');
+
+  // Valor do extra (responsável + Matheus, que recebe 10% em tudo)
+  const extraResp = responsavel !== '—' ? extraProcesso(p, orc, dem, responsavel) : 0;
+  const extraMatheus = (responsavel !== 'Matheus') ? extraProcesso(p, orc, dem, 'Matheus') : 0;
+
+  // Situação + condições que faltam
+  let situacao = '', cor = '#16a34a';
+  const faltam = [];
+  if (eAuto) {
+    situacao = 'Processo automático — o extra pertence ao processo de origem';
+    cor = '#6b7280';
+  } else if (!eDeferido) {
+    situacao = 'Aguardando deferimento'; cor = '#d97706';
+    faltam.push('O processo precisa ser <strong>deferido</strong>.');
+  } else if (viaGuias && !liberadoManual) {
+    if (guiasDeferidas.length >= 2) {
+      situacao = `Extra liberado — conta em ${_mesEfetivoViaGuias(p, processos) || '—'}`; cor = '#16a34a';
+    } else {
+      situacao = 'Extra retido — aguardando as guias de tráfego'; cor = '#d97706';
+      faltam.push(`Faltam <strong>${Math.max(0, 2 - guiasDeferidas.length)}</strong> guia(s) de tráfego deferida(s) — há ${guiasDeferidas.length} de 2.`);
+      if (vinculados.length < 2) faltam.push('Parte das guias vinculadas foi <strong>excluída</strong>. Use o botão <em>"Liberar extra"</em> abaixo para liberar a comissão desta transferência.');
+    }
+  } else if (liberadoManual) {
+    situacao = `Extra liberado manualmente — conta em ${dataDef ? dataDef.slice(0,7) : '—'}`; cor = '#2563eb';
+  } else {
+    situacao = `Extra liberado — conta em ${dataDef ? dataDef.slice(0,7) : '—'}`; cor = '#16a34a';
+  }
+
+  const linha = (rot, val) => `<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0"><span style="color:var(--text-muted)">${rot}</span><span style="font-weight:600;text-align:right">${val}</span></div>`;
+
+  const vincTitulo = ehFonte || (origem && (fonteD.extraViaGuias || fonteD.extraLiberadoManual))
+    ? `Guias de tráfego vinculadas (${guiasDeferidas.length} deferida(s) de ${vinculados.length})`
+    : '';
+  const vincHtml = fonteId ? (vinculados.length
+    ? vinculados.map(g => {
+        const def = g.Status === 'Deferido';
+        const gd = getDataDeferido(g);
+        const tg = _dadosEsp(g).tipoGuia ? ` · ${esc(_dadosEsp(g).tipoGuia)}` : '';
+        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px">
+          <a style="color:var(--accent);cursor:pointer;min-width:0" onclick="document.getElementById('modal-situacao-extra').remove();navigate('processos/detalhe',{id:'${g.id}'})">${esc(g.TipoProcesso||'—')}${tg}</a>
+          <span class="badge ${def ? 'badge-green' : 'badge-orange'}" style="font-size:10px;flex-shrink:0">${def ? ('Deferido' + (gd ? ' · ' + fmtDate(gd) : '')) : esc(g.Status || '—')}</span>
+        </div>`;
+      }).join('')
+    : '<div style="font-size:12px;color:var(--text-muted);padding:6px 0">Nenhuma guia vinculada encontrada (podem ter sido excluídas).</div>') : '';
+
+  // Ações de liberação sempre atuam no processo FONTE da comissão (a transferência/aquisição)
+  let acoesHtml = '';
+  if (viaGuias && !liberadoManual) {
+    acoesHtml = `<button class="btn btn-primary btn-sm" style="background:#16a34a;border-color:#16a34a" onclick="liberarExtraViaGuias('${p.id}',true)"><i class="bi bi-unlock me-1"></i>Liberar extra</button>`;
+  } else if (liberadoManual) {
+    acoesHtml = `<button class="btn btn-outline btn-sm" onclick="liberarExtraViaGuias('${p.id}',false)"><i class="bi bi-lock me-1"></i>Voltar a reter (via guias)</button>`;
+  } else if (eAuto && origem && (fonteD.extraViaGuias || fonteD.extraLiberadoManual)) {
+    acoesHtml = `<button class="btn btn-outline btn-sm" onclick="document.getElementById('modal-situacao-extra').remove();abrirSituacaoExtra('${origem.id}')"><i class="bi bi-box-arrow-up-right me-1"></i>Gerenciar extra da origem</button>`;
+  }
+  const editarValorHtml = (!eAuto && eDeferido && responsavel !== '—')
+    ? `<button class="btn btn-ghost btn-sm" onclick="document.getElementById('modal-situacao-extra').remove();verCalculoExtra('${p.id}','${escJs(responsavel)}')"><i class="bi bi-calculator me-1"></i>Ver/editar valor</button>`
+    : '';
+
+  document.getElementById('modal-situacao-extra')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modal-situacao-extra';
+  modal.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this) this.remove()">
+      <div style="background:#fff;border-radius:14px;padding:22px;max-width:480px;width:100%;max-height:88vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <h3 style="margin:0;font-size:16px"><i class="bi bi-trophy me-2" style="color:#16a34a"></i>Pagamento de Extras</h3>
+          <button onclick="document.getElementById('modal-situacao-extra').remove()" style="background:none;border:none;cursor:pointer;font-size:22px;color:#666;line-height:1">×</button>
+        </div>
+        <div style="font-size:13px;font-weight:600">${esc(p.ClienteNome||'—')}</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">${esc(p.TipoProcesso||'—')}${dataDef ? ` · deferido em ${fmtDate(dataDef)}` : ''}</div>
+
+        <div style="border-left:4px solid ${cor};background:var(--bg-secondary);border-radius:6px;padding:10px 12px;margin-bottom:14px">
+          <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:2px">Situação</div>
+          <div style="font-size:13px;font-weight:600;color:${cor}">${situacao}</div>
+        </div>
+
+        <div style="background:var(--bg-secondary);border-radius:8px;padding:10px 12px;margin-bottom:14px">
+          ${linha('Operador responsável', esc(responsavel))}
+          ${linha('Extra do responsável', `<span style="color:var(--success)">${fmtMoeda(extraResp)}</span>`)}
+          ${extraMatheus > 0 ? linha('Extra do Matheus (10%)', fmtMoeda(extraMatheus)) : ''}
+        </div>
+
+        ${faltam.length ? `
+        <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:10px 12px;margin-bottom:14px">
+          <div style="font-size:11px;font-weight:700;color:#b45309;text-transform:uppercase;margin-bottom:4px"><i class="bi bi-exclamation-triangle me-1"></i>O que falta para liberar</div>
+          <ul style="margin:0;padding-left:18px;font-size:12px;color:#374151">${faltam.map(f => `<li style="margin:2px 0">${f}</li>`).join('')}</ul>
+        </div>` : ''}
+
+        ${vincTitulo ? `
+        <div style="margin-bottom:14px">
+          <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:4px">${vincTitulo}</div>
+          ${vincHtml}
+        </div>` : ''}
+
+        ${origem && !viaGuias ? `<div style="font-size:12px;margin-bottom:12px"><i class="bi bi-link-45deg me-1"></i>Processo de origem: <a style="color:var(--accent);cursor:pointer" onclick="document.getElementById('modal-situacao-extra').remove();navigate('processos/detalhe',{id:'${origem.id}'})">${esc(origem.TipoProcesso||'—')} — ${esc(origem.ClienteNome||'')}</a></div>` : ''}
+
+        <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-top:6px">
+          <div style="display:flex;gap:8px;flex-wrap:wrap">${acoesHtml}${editarValorHtml}</div>
+          <button class="btn btn-ghost btn-sm" onclick="document.getElementById('modal-situacao-extra').remove()">Fechar</button>
+        </div>
+        ${liberadoManual && d.extraLiberadoPor ? `<div style="font-size:11px;color:var(--text-muted);margin-top:8px"><i class="bi bi-info-circle me-1"></i>Liberado por ${esc(d.extraLiberadoPor)}${d.extraLiberadoData ? ' em ' + fmtDate(d.extraLiberadoData) : ''}.</div>` : ''}
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
+// Admin: libera (ou volta a reter) a comissão de uma transferência/aquisição
+// cujo extra está "via guias". Liberar => conta no mês do deferimento da fonte.
+async function liberarExtraViaGuias(id, liberar) {
+  if (!isAdminUser()) { toast('Apenas administradores.', 'warning'); return; }
+  showLoading();
+  try {
+    const proc = await App.graph.getItem(CONFIG.listas.processos, id);
+    const d = _dadosEsp(proc);
+    if (liberar) {
+      d.extraViaGuias = false;
+      d.extraLiberadoManual = true;
+      d.extraLiberadoPor = getCurrentUserName();
+      d.extraLiberadoData = hojeISO();
+    } else {
+      d.extraViaGuias = true;
+      delete d.extraLiberadoManual;
+      delete d.extraLiberadoPor;
+      delete d.extraLiberadoData;
+    }
+    await App.graph.updateItem(CONFIG.listas.processos, id, { DadosEspecificosJSON: JSON.stringify(d) });
+    App.invalidateCache('processos');
+    if (window._processoDetalhe && String(window._processoDetalhe.id) === String(id)) window._processoDetalhe.DadosEspecificosJSON = JSON.stringify(d);
+    try { await registrarMovimentacao(liberar ? 'Extra liberado manualmente' : 'Extra voltou a reter (via guias)', `${proc.TipoProcesso||''} — ${proc.ClienteNome||''}`); } catch(e) {}
+    toast(liberar ? 'Extra liberado! Agora conta no mês do deferimento.' : 'Extra voltou a ser retido (via guias).', 'success');
+    document.getElementById('modal-situacao-extra')?.remove();
+    await abrirSituacaoExtra(id);
+  } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 // ============================================================
