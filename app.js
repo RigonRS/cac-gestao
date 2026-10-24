@@ -5652,6 +5652,7 @@ const DOCS_EMISSAO = [
   { tipo: 'procuracao',         label: 'Procuração',          sub: 'Documento assinado (PDF)',     icon: 'bi-file-earmark-text',  acao: 'Gerar PDF', usaEndereco: true },
   { tipo: 'anexoC',             label: 'Anexo C',             sub: 'Declaração (PDF)',             icon: 'bi-file-earmark-text',  acao: 'Gerar PDF', usaEndereco: true },
   { tipo: 'dsa',                label: 'DSA',                 sub: 'Segurança do Acervo (PDF)',    icon: 'bi-file-earmark-text',  acao: 'Gerar PDF', usaEndereco: true },
+  { tipo: 'declResidencia5',    label: 'Declaração de residência 5 anos', sub: 'Histórico dos últimos 5 anos (PDF)', icon: 'bi-house-check', acao: 'Gerar PDF', usaEndereco: false },
 ];
 
 // true se o cliente tem um 2º endereço com conteúdo (logradouro ou cidade preenchidos)
@@ -5720,6 +5721,8 @@ function renderPerfilEmissaoDocs(cliente, id) {
 function emitirDocCliente(tipo) {
   const c = window._clienteEmissaoDocs;
   if (!c) { toast('Cliente não carregado.', 'warning'); return; }
+  // A Declaração de residência 5 anos tem fluxo próprio (períodos + endereços adicionais)
+  if (tipo === 'declResidencia5') { return abrirDeclResidencia5(c); }
   if (!_temSegundoEndereco(c)) { _executarEmissaoCliente(tipo, false); return; }
   const modal = document.createElement('div');
   modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center';
@@ -5748,6 +5751,142 @@ async function _executarEmissaoCliente(tipo, usarEnd2) {
     if (tipo === 'dsa')        return await _gerarDSACliente(c, usarEnd2);
     if (tipo === 'procuracao') return await _gerarProcuracaoCliente(c, usarEnd2);
   } catch (e) { toast(e.message, 'error'); }
+}
+
+// ---- DECLARAÇÃO DE RESIDÊNCIA (últimos 5 anos) ----
+// Endereço cadastrado (1° ou 2°) estruturado para a declaração.
+function _declEndRegistrado(c, sfx) {
+  const uf = (sfx === '2') ? (c.UF2Endereco || '') : (c.UF1Endereco || '');
+  return {
+    logr: c['Endereco' + sfx] || '', num: c['Numero' + sfx] || '',
+    bairro: c['Bairro' + sfx] || '', cidade: c['Cidade' + sfx] || '',
+    uf, cep: c['CEP' + sfx] || '',
+  };
+}
+// Texto formatado de um endereço: "logradouro, nº número, bairro, cidade de cidade-UF, CEP cep"
+function _declEndTexto(e) {
+  const cidadeUF = [e.cidade, e.uf].filter(Boolean).join('-');
+  return [e.logr, e.num ? `nº ${e.num}` : '', e.bairro, cidadeUF ? `cidade de ${cidadeUF}` : '', e.cep ? `CEP ${e.cep}` : ''].filter(Boolean).join(', ');
+}
+
+function abrirDeclResidencia5(c) {
+  if (!c) { toast('Cliente não carregado.', 'warning'); return; }
+  const temEnd2 = _temSegundoEndereco(c);
+  const resumo1 = esc(_enderecoResumoCliente(c, false));
+  const resumo2 = temEnd2 ? esc(_enderecoResumoCliente(c, true)) : '';
+  const anoSty = 'width:72px;text-align:center';
+  document.getElementById('modal-decl5')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modal-decl5';
+  modal.innerHTML = `
+  <div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this) this.remove()">
+    <div style="background:#fff;border-radius:14px;padding:22px;max-width:640px;width:100%;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <h3 style="margin:0;font-size:16px"><i class="bi bi-house-check me-2" style="color:var(--accent)"></i>Declaração de Residência (últimos 5 anos)</h3>
+        <button onclick="document.getElementById('modal-decl5').remove()" style="background:none;border:none;font-size:22px;color:#666;cursor:pointer;line-height:1">×</button>
+      </div>
+      <p style="font-size:12.5px;color:var(--text-muted);margin:0 0 14px">Informe os períodos de residência e, se quiser, endereços adicionais dos últimos 5 anos.</p>
+
+      ${temEnd2 ? `
+      <div style="background:var(--bg-secondary);border-radius:8px;padding:10px 12px;margin-bottom:14px">
+        <div style="font-size:12px;font-weight:700;margin-bottom:6px">Endereço do parágrafo inicial</div>
+        <label style="display:block;font-size:12px;margin-bottom:4px;cursor:pointer"><input type="radio" name="decl5-end-par" value="1" checked> <strong>1° endereço</strong> — <span style="color:var(--text-muted)">${resumo1}</span></label>
+        <label style="display:block;font-size:12px;cursor:pointer"><input type="radio" name="decl5-end-par" value="2"> <strong>2° endereço</strong> — <span style="color:var(--text-muted)">${resumo2}</span></label>
+      </div>` : ''}
+
+      <div style="margin-bottom:14px">
+        <label style="font-size:12px;font-weight:600;display:block;margin-bottom:3px">Estado civil (opcional)</label>
+        <input id="decl5-estadocivil" type="text" placeholder="Ex.: solteiro, casado..." style="width:220px" />
+      </div>
+
+      <div style="font-size:12px;font-weight:700;margin-bottom:6px">Períodos de residência (ano)</div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+        <span style="flex:1;min-width:180px;font-size:12px"><strong>1° endereço</strong><br><span style="color:var(--text-muted);font-size:11px">${resumo1}</span></span>
+        <input id="decl5-ini1" type="number" min="1900" max="2100" placeholder="Início" style="${anoSty}">
+        <input id="decl5-fim1" type="number" min="1900" max="2100" placeholder="Fim" style="${anoSty}">
+      </div>
+      ${temEnd2 ? `
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+        <span style="flex:1;min-width:180px;font-size:12px"><strong>2° endereço</strong><br><span style="color:var(--text-muted);font-size:11px">${resumo2}</span></span>
+        <input id="decl5-ini2" type="number" min="1900" max="2100" placeholder="Início" style="${anoSty}">
+        <input id="decl5-fim2" type="number" min="1900" max="2100" placeholder="Fim" style="${anoSty}">
+      </div>` : ''}
+
+      <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <div style="font-size:12px;font-weight:700">Endereços adicionais (até 5)</div>
+          <button type="button" class="btn btn-outline btn-sm" onclick="_decl5AddLinha()"><i class="bi bi-plus-lg me-1"></i>endereço</button>
+        </div>
+        <div id="decl5-adicionais"></div>
+        <div style="font-size:11px;color:var(--text-muted)">Preencha o endereço completo (logradouro, nº, bairro, cidade-UF, CEP) e os anos.</div>
+      </div>
+
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px">
+        <button class="btn btn-outline btn-sm" onclick="document.getElementById('modal-decl5').remove()">Cancelar</button>
+        <button class="btn btn-primary btn-sm" onclick="_gerarDeclResidencia5('${c.id}')"><i class="bi bi-printer me-1"></i>Gerar PDF</button>
+      </div>
+    </div>
+  </div>`;
+  document.body.appendChild(modal);
+}
+
+function _decl5AddLinha() {
+  const cont = document.getElementById('decl5-adicionais');
+  if (!cont) return;
+  if (cont.querySelectorAll('.decl5-add-row').length >= 5) { toast('Máximo de 5 endereços adicionais.', 'info'); return; }
+  const row = document.createElement('div');
+  row.className = 'decl5-add-row';
+  row.style.cssText = 'display:flex;align-items:center;gap:6px;margin:6px 0;flex-wrap:wrap';
+  row.innerHTML = `
+    <input class="decl5-add-end" type="text" placeholder="Endereço completo" style="flex:1;min-width:240px">
+    <input class="decl5-add-ini" type="number" min="1900" max="2100" placeholder="Início" style="width:72px;text-align:center">
+    <input class="decl5-add-fim" type="number" min="1900" max="2100" placeholder="Fim" style="width:72px;text-align:center">
+    <button type="button" class="btn btn-ghost btn-sm" style="color:var(--danger);padding:2px 7px" onclick="this.closest('.decl5-add-row').remove()"><i class="bi bi-x-lg"></i></button>`;
+  cont.appendChild(row);
+}
+
+async function _gerarDeclResidencia5(clienteId) {
+  showLoading();
+  try {
+    const c = (window._clienteEmissaoDocs && String(window._clienteEmissaoDocs.id) === String(clienteId))
+      ? window._clienteEmissaoDocs
+      : await App.graph.getItem(CONFIG.listas.clientes, clienteId);
+    const temEnd2 = _temSegundoEndereco(c);
+    let sfxPar = '1';
+    if (temEnd2) { const r = document.querySelector('input[name="decl5-end-par"]:checked'); sfxPar = (r && r.value) || '1'; }
+    const estadoCivil = (document.getElementById('decl5-estadocivil')?.value || '').trim();
+    const valAno = (id) => (document.getElementById(id)?.value || '').trim();
+    const per1 = { i: valAno('decl5-ini1'), f: valAno('decl5-fim1') };
+    const per2 = temEnd2 ? { i: valAno('decl5-ini2'), f: valAno('decl5-fim2') } : null;
+    const adicionais = [];
+    document.querySelectorAll('#decl5-adicionais .decl5-add-row').forEach(row => {
+      const end = (row.querySelector('.decl5-add-end')?.value || '').trim();
+      const i = (row.querySelector('.decl5-add-ini')?.value || '').trim();
+      const f = (row.querySelector('.decl5-add-fim')?.value || '').trim();
+      if (end) adicionais.push({ end, i, f });
+    });
+
+    const periodoTxt = (p) => (p && (p.i || p.f)) ? ` de ${esc(p.i || '____')} até ${esc(p.f || '____')}` : '';
+    const itens = [];
+    itens.push(`${esc(_declEndTexto(_declEndRegistrado(c, '1')))}${periodoTxt(per1)}`);
+    if (temEnd2) itens.push(`${esc(_declEndTexto(_declEndRegistrado(c, '2')))}${periodoTxt(per2)}`);
+    adicionais.forEach(a => itens.push(`${esc(a.end)}${periodoTxt({ i: a.i, f: a.f })}`));
+    const listaHtml = itens.map((t, i) => `<p style="margin:0 0 6px 0;text-align:justify">${i + 1}- ${t}.</p>`).join('');
+
+    const ePar = _declEndRegistrado(c, sfxPar);
+    const cidadeUFpar = [ePar.cidade, ePar.uf].filter(Boolean).join('-');
+    const d = _clienteDocData(c, sfxPar === '2');
+    const ec = estadoCivil ? `${esc(estadoCivil)}, ` : '';
+    const hoje = hojeISO();
+    const html = `
+      <h2>DECLARAÇÃO DE RESIDÊNCIA DOS ÚLTIMOS 5 ANOS</h2>
+      <p>Eu, <strong>${esc(d.nome)}</strong>, ${esc(_nacionalidadeExtenso(d.nacionalidade))}, ${ec}${esc(d.profissao)}, portador do RG Nº ${esc(d.rg)}${d.orgao ? ' ' + esc(d.orgao) : ''}${d.ufRG ? '/' + esc(d.ufRG) : ''} e CPF Nº ${esc(d.cpf)}, residente e domiciliado na ${esc(_declEndTexto(ePar))}, DECLARO com base na Lei 7.115/83 e reconhecimento no Despacho SEI/PF 142758587, Processo 08211.001855/2025-41, que residi nos últimos 5 (cinco) anos e tenho como domicílio eleitoral, residencial e de atividades profissionais no município de ${esc(cidadeUFpar)}, nos seguintes endereços:</p>
+      ${listaHtml}
+      <p style="text-align:center;margin-top:48px">${esc(cidadeUFpar)}, ${dataPorExtenso(hoje)}</p>
+      <div class="assinatura" style="margin-top:70px"><div class="assinatura-linha"></div><strong>${esc(d.nome)}</strong></div>`;
+    imprimirDocumento(html, 'Declaração de Residência 5 anos');
+    document.getElementById('modal-decl5')?.remove();
+  } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 async function _abrirCertidaoCliente(keyword, c, usarEnd2) {
