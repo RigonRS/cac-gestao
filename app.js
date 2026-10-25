@@ -5794,11 +5794,6 @@ function abrirDeclResidencia5(c) {
         <label style="display:block;font-size:12px;cursor:pointer"><input type="radio" name="decl5-end-par" value="2"> <strong>2° endereço</strong> — <span style="color:var(--text-muted)">${resumo2}</span></label>
       </div>` : ''}
 
-      <div style="margin-bottom:14px">
-        <label style="font-size:12px;font-weight:600;display:block;margin-bottom:3px">Estado civil (opcional)</label>
-        <input id="decl5-estadocivil" type="text" placeholder="Ex.: solteiro, casado..." style="width:220px" />
-      </div>
-
       <div style="font-size:12px;font-weight:700;margin-bottom:6px">Períodos de residência (ano)</div>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
         <span style="flex:1;min-width:180px;font-size:12px"><strong>1° endereço</strong><br><span style="color:var(--text-muted);font-size:11px">${resumo1}</span></span>
@@ -5854,7 +5849,8 @@ async function _gerarDeclResidencia5(clienteId) {
     const temEnd2 = _temSegundoEndereco(c);
     let sfxPar = '1';
     if (temEnd2) { const r = document.querySelector('input[name="decl5-end-par"]:checked'); sfxPar = (r && r.value) || '1'; }
-    const estadoCivil = (document.getElementById('decl5-estadocivil')?.value || '').trim();
+    const estadoCivil = (c.EstadoCivil || '').trim();
+    if (!estadoCivil) { toast('O Estado Civil do cliente não está preenchido. Preencha no cadastro do cliente antes de gerar a declaração.', 'warning'); return; }
     const valAno = (id) => (document.getElementById(id)?.value || '').trim();
     const per1 = { i: valAno('decl5-ini1'), f: valAno('decl5-fim1') };
     const per2 = temEnd2 ? { i: valAno('decl5-ini2'), f: valAno('decl5-fim2') } : null;
@@ -5876,7 +5872,7 @@ async function _gerarDeclResidencia5(clienteId) {
     const ePar = _declEndRegistrado(c, sfxPar);
     const cidadeUFpar = [ePar.cidade, ePar.uf].filter(Boolean).join('-');
     const d = _clienteDocData(c, sfxPar === '2');
-    const ec = estadoCivil ? `${esc(estadoCivil)}, ` : '';
+    const ec = `${esc(estadoCivil.toLowerCase())}, `;
     const hoje = hojeISO();
     const html = `
       <h2>DECLARAÇÃO DE RESIDÊNCIA DOS ÚLTIMOS 5 ANOS</h2>
