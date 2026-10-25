@@ -6188,7 +6188,7 @@ async function gerarRequerimento() {
       }
     } catch(err) {}
 
-    const acervoDestino = dados.acervoDestinoMesmoTitular || dados.acervoDestinoVenda || dados.acervoDestino || '';
+    const acervoDestino = dados.acervoDestinoMesmoTitular || dados.acervoDestinoVenda || dados.acervoDestinoCompra || dados.acervoDestino || '';
     const hoje = hojeISO();
     const cidadeReq = v.municipio || c.Cidade1 || '';
     const ufReq = v.uf || c.UF1Endereco || '';
