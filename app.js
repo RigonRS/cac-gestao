@@ -949,6 +949,7 @@ const TIPOS_STATUS_EMAIL_AO_PROTOCOLAR = [
   'Comunicado de Furto/Extravio',
   'Defesa de Notificação',
   'Correção de dados de arma',
+  'Segunda via de CR',
   ...TIPOS_TRANSFERENCIA,
 ];
 // Tipos que, ao registrar o número de protocolo, passam automaticamente para "Aguardando Pagamento GRU"
@@ -995,7 +996,7 @@ function aplicarTiposProcessoCustom(cfg) {
 // Status em que a GRU fica oculta na página de Pagamentos de GRU (até ter protocolo registrado).
 const STATUS_OCULTA_GRU = ['Parado', 'Processo Futuro', 'Aguardando Documentos', 'Aguardando Assinatura', 'Desistência Cliente'];
 const FORMAS_PAGAMENTO_OPTS = ['Pix', 'Dinheiro', 'Cartão'];
-const BANCOS_PAGAMENTO_OPTS = ['Banco do Brasil', 'Sicredi', 'Cresol', 'Santander', 'NuBank', 'Itaú', 'Inter', 'Caixa', 'Banrisul', 'Outros'];
+const BANCOS_PAGAMENTO_OPTS = ['Banco do Brasil PJ', 'Sicredi PF', 'Sicredi PJ', 'Cresol PJ', 'Santander', 'NuBank', 'Itaú', 'Inter', 'Caixa', 'Banrisul', 'Outros'];
 
 // ============================================================
 // MENSAGENS AUTOMÁTICAS DE WHATSAPP (editáveis em Configurações)
@@ -2547,12 +2548,13 @@ function renderPerfilArmas(armas, clienteId, cliente) {
   return `
     <div class="toolbar">
       <span style="font-size:13px;color:var(--text-muted)">${armas.length} arma(s) cadastrada(s)</span>
-      ${!isClienteInativo(cliente) ? `
       <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-outline" onclick="verHistoricoArmas('${clienteId}')"><i class="bi bi-clock-history"></i> Histórico</button>
+        ${!isClienteInativo(cliente) ? `
         ${isExtrasUser() ? `<button class="btn btn-outline" onclick="abrirImportSinarm('${clienteId}')"><i class="bi bi-download"></i> Importar do SINARM</button>` : ''}
         ${isExtrasUser() ? `<button class="btn btn-outline" onclick="abrirImportSisgcorp('${clienteId}')"><i class="bi bi-download"></i> Importar do SISGCORP</button>` : ''}
-        <button class="btn btn-primary" onclick="navigate('armas/novo',{clienteId:'${clienteId}'})"><i class="bi bi-plus-lg"></i> Adicionar Arma</button>
-      </div>` : ''}
+        <button class="btn btn-primary" onclick="navigate('armas/novo',{clienteId:'${clienteId}'})"><i class="bi bi-plus-lg"></i> Adicionar Arma</button>` : ''}
+      </div>
     </div>
     <div id="painel-sinarm-armas" style="display:none;margin-bottom:14px"></div>
     <div id="painel-sisgcorp-armas" style="display:none;margin-bottom:14px"></div>
@@ -2585,6 +2587,7 @@ function renderPerfilArmas(armas, clienteId, cliente) {
                   <td><div class="btn-group">
                     <button class="btn btn-outline btn-sm" onclick="verDetalhesArma('${a.id}')" title="Ver detalhes"><i class="bi bi-eye"></i></button>
                     <button class="btn btn-outline btn-sm" onclick="navigate('armas/editar',{clienteId:'${clienteId}',id:'${a.id}'})"><i class="bi bi-pencil"></i></button>
+                    ${!isClienteInativo(cliente) ? `<button class="btn btn-outline btn-sm" onclick="abrirTransferirArma('${a.id}','${clienteId}')" title="Transferir para outro cliente"><i class="bi bi-arrow-left-right"></i></button>` : ''}
                     <button class="btn btn-ghost btn-sm" onclick="deletarArma('${a.id}','${clienteId}')"><i class="bi bi-trash" style="color:var(--danger)"></i></button>
                   </div></td>
                 </tr>`;
@@ -2599,11 +2602,182 @@ async function deletarArma(id, clienteId) {
   if (!confirm('Excluir esta arma?')) return;
   showLoading();
   try {
+    let _desc = '';
+    try { const _a = await App.graph.getItem(CONFIG.listas.armas, id); _desc = _descArma(_a); } catch(e) {}
     await App.graph.deleteItem(CONFIG.listas.armas, id);
+    await registrarHistArma(clienteId, _desc, 'Exclusão', '');
     App.invalidateCache('armas');
     toast('Arma excluída.', 'success');
     navigate('clientes/perfil', { id: clienteId, tab: 'armas' });
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+// ------------------------------------------------------------
+// HISTÓRICO DE ARMAS (cadastro / edição / exclusão / transferência)
+// ------------------------------------------------------------
+function _descArma(a) {
+  if (!a) return '';
+  const mm = [a.Marca, a.Modelo].filter(Boolean).join(' ');
+  return mm + (a.NumeroSerie ? ` - ${a.NumeroSerie}` : '');
+}
+async function registrarHistArma(clienteId, armaDesc, acao, detalhe) {
+  try {
+    const raw = await App.graph._readFile('armas_historico').catch(() => []);
+    const arr = Array.isArray(raw) ? raw : [];
+    const agora = new Date();
+    arr.push({
+      id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      clienteId: String(clienteId), armaDesc: armaDesc || '', acao, detalhe: detalhe || '',
+      usuario: getCurrentUserName(),
+      data: agora.toLocaleDateString('pt-BR'),
+      hora: agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+      ts: agora.toISOString(),
+    });
+    await App.graph._writeFile('armas_historico', arr);
+  } catch (e) { console.error('registrarHistArma:', e); }
+}
+
+async function verHistoricoArmas(clienteId) {
+  showLoading();
+  let eventos = [];
+  try {
+    const raw = await App.graph._readFile('armas_historico').catch(() => []);
+    const arr = Array.isArray(raw) ? raw : [];
+    eventos = arr.filter(e => String(e.clienteId) === String(clienteId)).sort((a, b) => (b.ts || '').localeCompare(a.ts || ''));
+  } catch (e) {} finally { hideLoading(); }
+  const corAcao = { 'Cadastro': '#16a34a', 'Edição': '#2563eb', 'Exclusão': '#dc2626', 'Transferência enviada': '#d97706', 'Transferência recebida': '#7c3aed' };
+  const iconAcao = { 'Cadastro': 'bi-plus-circle', 'Edição': 'bi-pencil', 'Exclusão': 'bi-trash', 'Transferência enviada': 'bi-box-arrow-right', 'Transferência recebida': 'bi-box-arrow-in-down' };
+  const linhas = eventos.length ? eventos.map(e => {
+    const cor = corAcao[e.acao] || '#6b7280';
+    const ic = iconAcao[e.acao] || 'bi-dot';
+    return `<div style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">
+      <i class="bi ${ic}" style="color:${cor};font-size:16px;margin-top:2px"></i>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px"><strong style="color:${cor}">${esc(e.acao)}</strong> — ${esc(e.armaDesc || '—')}</div>
+        ${e.detalhe ? `<div style="font-size:12px;color:var(--text-muted)">${esc(e.detalhe)}</div>` : ''}
+        <div style="font-size:11px;color:var(--text-muted)"><i class="bi bi-person-fill me-1"></i>${esc(e.usuario || '—')} · ${esc(e.data || '')} ${esc(e.hora || '')}</div>
+      </div>
+    </div>`;
+  }).join('') : '<div class="empty-state" style="padding:24px"><i class="bi bi-clock-history"></i><p>Nenhum histórico de armas para este cliente.</p></div>';
+  document.getElementById('modal-hist-armas')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modal-hist-armas';
+  modal.innerHTML = `<div style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)this.remove()">
+    <div style="background:#fff;border-radius:14px;max-width:560px;width:100%;max-height:86vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--border)">
+        <h3 style="margin:0;font-size:16px"><i class="bi bi-clock-history me-2" style="color:var(--accent)"></i>Histórico de Armas <span style="font-weight:400;color:var(--text-muted);font-size:13px">(${eventos.length})</span></h3>
+        <button onclick="document.getElementById('modal-hist-armas').remove()" style="background:none;border:none;font-size:22px;color:#666;cursor:pointer;line-height:1">×</button>
+      </div>
+      <div style="overflow-y:auto;padding:4px 20px 16px">${linhas}</div>
+    </div>
+  </div>`;
+  document.body.appendChild(modal);
+}
+
+// ------------------------------------------------------------
+// TRANSFERIR ARMA PARA OUTRO CLIENTE
+// ------------------------------------------------------------
+async function abrirTransferirArma(armaId, origemClienteId) {
+  showLoading();
+  let clientes = [], arma = null;
+  try {
+    [clientes, arma] = await Promise.all([
+      App.getClientes(),
+      App.graph.getItem(CONFIG.listas.armas, armaId).catch(() => null),
+    ]);
+  } catch (e) {} finally { hideLoading(); }
+  if (!arma) { toast('Arma não encontrada.', 'error'); return; }
+  window._transfArma = { armaId, origemClienteId, arma, clientes };
+  const opts = (clientes || []).filter(c => String(c.id) !== String(origemClienteId) && !isClienteInativo(c))
+    .sort((a, b) => (a.Title || '').localeCompare(b.Title || '', 'pt-BR'))
+    .map(c => `<option value="${c.id}">${esc(c.Title || '')}${c.CPF ? ` — ${esc(c.CPF)}` : ''}</option>`).join('');
+  document.getElementById('modal-transf-arma')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modal-transf-arma';
+  modal.innerHTML = `<div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)this.remove()">
+    <div style="background:#fff;border-radius:14px;padding:22px;max-width:620px;width:100%;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <h3 style="margin:0;font-size:16px"><i class="bi bi-arrow-left-right me-2" style="color:var(--accent)"></i>Transferir Arma</h3>
+        <button onclick="document.getElementById('modal-transf-arma').remove()" style="background:none;border:none;font-size:22px;color:#666;cursor:pointer;line-height:1">×</button>
+      </div>
+      <div style="font-size:13px;margin-bottom:12px">Arma: <strong>${esc(_descArma(arma))}</strong></div>
+      <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">Transferir para o cliente:</label>
+      <select id="transf-arma-cliente" onchange="_transfArmaSelCliente(this.value)" style="width:100%;margin-bottom:12px">
+        <option value="">Selecione o cliente...</option>
+        ${opts}
+      </select>
+      <div id="transf-arma-destino"></div>
+    </div>
+  </div>`;
+  document.body.appendChild(modal);
+}
+
+async function _transfArmaSelCliente(destId) {
+  const host = document.getElementById('transf-arma-destino');
+  if (!host) return;
+  if (!destId) { host.innerHTML = ''; return; }
+  host.innerHTML = '<div style="padding:12px;text-align:center"><div class="spinner" style="width:20px;height:20px;border-width:2px;margin:0 auto"></div></div>';
+  const ctx = window._transfArma || {};
+  const dest = (ctx.clientes || []).find(c => String(c.id) === String(destId));
+  let armasDest = [];
+  try { armasDest = (await App.getArmas()).filter(a => String(a.ClienteId) === String(destId)); } catch (e) {}
+  const cats = (dest?.Categoria || '').split(',').map(s => s.trim()).filter(Boolean);
+  const cnt = (f) => armasDest.filter(f).length;
+  const box = (label, n, cor) => `<div style="flex:1;min-width:110px;border:1px solid var(--border);border-radius:8px;padding:8px 10px;text-align:center"><div style="font-size:11px;color:var(--text-muted)">${label}</div><div style="font-size:18px;font-weight:700;color:${cor}">${n}</div></div>`;
+  const acervoOpts = (cats.length ? cats : ['Caçador', 'Atirador', 'Colecionador']).concat('Defesa Pessoal');
+  host.innerHTML = `
+    <div style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:6px">Acervo de ${esc(dest?.Title || '')}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+      ${box('Atirador', cnt(a => a.AtividadeCadastrada === 'Atirador'), '#2563eb')}
+      ${box('Caçador', cnt(a => a.AtividadeCadastrada === 'Caçador'), '#16a34a')}
+      ${box('Colecionador', cnt(a => a.AtividadeCadastrada === 'Colecionador'), '#7c3aed')}
+      ${box('PF Defesa Pessoal', cnt(a => a.OrgaoCadastro === 'PF - Defesa Pessoal'), '#dc2626')}
+    </div>
+    <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">Acervo de destino da arma:</label>
+    <select id="transf-arma-acervo" style="width:100%;margin-bottom:14px">
+      <option value="">Selecione o acervo...</option>
+      ${acervoOpts.map(a => `<option value="${esc(a)}">${esc(a)}</option>`).join('')}
+    </select>
+    <div style="text-align:right">
+      <button class="btn btn-primary btn-sm" onclick="_transfArmaConfirmar('${destId}')"><i class="bi bi-arrow-left-right me-1"></i>Transferir</button>
+    </div>`;
+}
+
+async function _transfArmaConfirmar(destId) {
+  const acervo = document.getElementById('transf-arma-acervo')?.value || '';
+  if (!acervo) { toast('Selecione o acervo de destino.', 'warning'); return; }
+  const ctx = window._transfArma || {};
+  const dest = (ctx.clientes || []).find(c => String(c.id) === String(destId));
+  const ok = await confirmarModal({
+    titulo: 'Transferir arma',
+    mensagem: `Deseja realmente transferir "${_descArma(ctx.arma)}" para ${dest?.Title || ''} (acervo ${acervo})? A arma sairá do acervo do cliente atual.`,
+    okLabel: 'Transferir', okCor: '#2563eb', icone: 'bi-arrow-left-right',
+  });
+  if (!ok) return;
+  await executarTransferenciaArma(ctx.armaId, ctx.origemClienteId, destId, acervo);
+}
+
+async function executarTransferenciaArma(armaId, origemId, destId, acervo) {
+  showLoading();
+  try {
+    const [arma, dest, origem] = await Promise.all([
+      App.graph.getItem(CONFIG.listas.armas, armaId),
+      App.graph.getItem(CONFIG.listas.clientes, destId),
+      App.graph.getItem(CONFIG.listas.clientes, origemId).catch(() => null),
+    ]);
+    const updates = { ClienteId: destId, ClienteNome: dest.Title || '', AtividadeCadastrada: acervo };
+    if (acervo === 'Defesa Pessoal') updates.OrgaoCadastro = 'PF - Defesa Pessoal';
+    else if (arma.OrgaoCadastro === 'PF - Defesa Pessoal') updates.OrgaoCadastro = 'PF - Exército';
+    await App.graph.updateItem(CONFIG.listas.armas, armaId, updates);
+    App.invalidateCache('armas');
+    const desc = _descArma(arma);
+    await registrarHistArma(origemId, desc, 'Transferência enviada', `Para: ${dest.Title || ''} (acervo ${acervo})`);
+    await registrarHistArma(destId, desc, 'Transferência recebida', `De: ${origem?.Title || ''} (acervo ${acervo})`);
+    try { registrarMovimentacao('Transferir Arma', `${desc} — de ${origem?.Title || ''} para ${dest.Title || ''}`); } catch (e) {}
+    document.getElementById('modal-transf-arma')?.remove();
+    toast('Arma transferida para o novo cliente.', 'success');
+    await renderClientePerfil(origemId, 'armas');
+  } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
 // Texto puro de Arma/Local de um documento (para o filtro)
@@ -3458,10 +3632,12 @@ async function salvarArma(e, clienteId, id) {
       await App.graph.updateItem(CONFIG.listas.armas, id, fields);
       toast('Arma atualizada!', 'success');
       registrarMovimentacao('Editar Arma', `${fields.Marca||''} ${fields.Modelo||''} — ${fields.ClienteNome||''}`);
+      await registrarHistArma(clienteId, _descArma(fields), 'Edição', '');
     } else {
       await App.graph.createItem(CONFIG.listas.armas, fields);
       toast('Arma cadastrada!', 'success');
       registrarMovimentacao('Nova Arma', `${fields.Marca||''} ${fields.Modelo||''} — ${fields.ClienteNome||''}`);
+      await registrarHistArma(clienteId, _descArma(fields), 'Cadastro', '');
     }
     App.invalidateCache('armas');
     navigate('clientes/perfil', { id: clienteId, tab: 'armas' });
@@ -4105,6 +4281,22 @@ function toggleChecklistPendentes(id, btn) {
   if (icon) icon.className = mostrar ? 'bi bi-dash-circle' : 'bi bi-plus-circle';
 }
 
+// Altera o status de um processo direto na lista de Meus Processos (reaproveita atualizarStatus).
+async function alterarStatusNaLista(id, novoStatus) {
+  if (novoStatus === 'Processo Futuro') {
+    toast('Abra o processo para definir qual processo aguardar.', 'info');
+    return navigate('processos/detalhe', { id });
+  }
+  try {
+    const proc = await App.graph.getItem(CONFIG.listas.processos, id);
+    if (proc.Status === novoStatus) return;
+    window._processoDetalhe = proc;   // contexto usado pelas validações de atualizarStatus
+    await atualizarStatus(id, novoStatus);
+  } catch (e) { toast(e.message, 'error'); }
+  const route = getRoute();
+  if (route.page === 'meus-processos') await renderMeusProcessos((route.params && route.params.tab) || 'aprotocolar');
+}
+
 async function renderMeusProcessos(tab = 'aprotocolar') {
   document.getElementById('page-title').textContent = 'Meus Processos';
   const currentUser = getCurrentUserName();
@@ -4166,7 +4358,11 @@ async function renderMeusProcessos(tab = 'aprotocolar') {
           </div>
           <div style="display:flex;align-items:center;gap:8px">
             ${total > 0 ? `<span style="font-size:12px;color:var(--text-muted)">${total - pendentes.length}/${total} itens</span>` : ''}
-            <span class="badge ${b.cls}">${b.txt}</span>
+            ${p.Status === 'Deferido'
+              ? `<span class="badge ${b.cls}">${b.txt}</span>`
+              : `<select onclick="event.stopPropagation()" onchange="alterarStatusNaLista('${p.id}', this.value)" title="Alterar status" style="font-size:11px;padding:3px 6px;border:1px solid var(--border);border-radius:6px;max-width:200px">
+                  ${STATUS_PROCESSO.filter(s => s !== 'Deferido').map(s => `<option value="${esc(s)}" ${p.Status === s ? 'selected' : ''}>${esc(s)}</option>`).join('')}
+                </select>`}
           </div>
         </div>
         ${pendentes.length > 0 ? (mostrarPrioridade ? `
