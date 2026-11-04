@@ -175,8 +175,8 @@ function calcPagamento(p) {
 // PAGAMENTO DO ORÇAMENTO (modelo por orçamento)
 // ============================================================
 const FORMAS_PAG_ORC = ['Pix', 'Dinheiro', 'Cartão'];
-const BANCOS_ORC     = ['Sicredi', 'Banco do Brasil', 'Cresol'];
-const BANCOS_CARTAO_ORC = ['Sicredi', 'Inter', 'Cresol']; // bancos quando a forma é Cartão
+const BANCOS_ORC     = ['Sicredi PF', 'Sicredi PJ', 'Banco do Brasil PJ', 'Cresol PJ'];
+const BANCOS_CARTAO_ORC = ['Sicredi PF', 'Sicredi PJ', 'Inter', 'Cresol PJ']; // bancos quando a forma é Cartão
 const PARCELAS_OPTS  = [2,3,4,5,6,7,8,9,10,11,12];
 
 // Retorna: 'aberto' | 'pago' | 'pago_parcial' | 'devedor'
@@ -13862,9 +13862,7 @@ function renderDadosPagamento(p) {
                   <label style="font-size:11px;color:var(--text-muted)">Banco</label>
                   <select id="input-pag-banco-${l.key}" style="margin-top:2px;font-size:12px;padding:4px 8px">
                     <option value="">Selecione...</option>
-                    <option value="Banco do Brasil" ${item.banco==='Banco do Brasil'?'selected':''}>Banco do Brasil</option>
-                    <option value="Sicredi" ${item.banco==='Sicredi'?'selected':''}>Sicredi</option>
-                    <option value="Cresol" ${item.banco==='Cresol'?'selected':''}>Cresol</option>
+                    ${BANCOS_ORC.map(b => `<option value="${b}" ${item.banco===b?'selected':''}>${b}</option>`).join('')}
                   </select>
                 </div>
               </div>
