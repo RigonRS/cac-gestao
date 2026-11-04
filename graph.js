@@ -6,6 +6,10 @@ class GraphService {
   constructor(msalInstance) {
     this.msal = msalInstance;
     this.BASE = 'https://graph.microsoft.com/v1.0';
+    // Quantos registros cada arquivo (coleção) tinha na última leitura/gravação
+    // bem-sucedida desta sessão. Usado como trava de segurança contra gravações
+    // que apagariam quase tudo (ex.: uma leitura que falhou e voltou vazia).
+    this._contagens = {};
   }
 
   async getToken() {
@@ -30,19 +34,61 @@ class GraphService {
   // Aguarda N milissegundos
   _sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+  // Memoriza quantos registros a coleção tem agora (apenas para listas/arrays).
+  _registrarContagem(nome, dados) {
+    if (Array.isArray(dados)) this._contagens[nome] = dados.length;
+  }
+
+  // TRAVA DE SEGURANÇA: impede substituir uma lista cheia por uma lista
+  // drasticamente menor (o que normalmente é sinal de falha de leitura).
+  // Não se aplica a arquivos de configuração (que são objetos, não listas).
+  _checarReducaoPerigosa(nome, dados, forcar) {
+    if (forcar) return;                    // gravação explicitamente autorizada
+    if (!Array.isArray(dados)) return;     // config (objeto): não se aplica
+    const conhecida = this._contagens[nome];
+    if (conhecida == null) return;         // nunca lida nesta sessão: sem comparação
+    const nova = dados.length;
+    const quedaGrande = nova < Math.ceil(conhecida * 0.5) && (conhecida - nova) >= 5;
+    if (conhecida >= 8 && quedaGrande) {
+      throw new Error(
+        `Gravação de "${nome}" BLOQUEADA por segurança: o arquivo tinha ${conhecida} ` +
+        `registro(s) e a operação tentou salvar apenas ${nova}. Isso costuma indicar ` +
+        `uma falha de leitura. Nenhum dado foi alterado — recarregue a página (Ctrl+F5) ` +
+        `e tente novamente.`
+      );
+    }
+  }
+
   // Lê um arquivo JSON do OneDrive (3 tentativas com backoff)
   async _readFile(nome, tentativa = 1) {
     try {
       const token = await this.getToken();
       const url = `${this._driveBase()}/${CONFIG.dataFolderPath}/${nome}.json:/content`;
       const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
-      if (res.status === 404) return [];
+      if (res.status === 404) {
+        // Se já conhecíamos este arquivo com registros nesta sessão, um 404 agora
+        // é falha transitória (não "arquivo novo"): não devolver [] para não
+        // arriscar uma gravação seguinte apagar tudo.
+        if (this._contagens[nome] > 0) {
+          throw new Error(`Falha ao ler "${nome}" (HTTP 404 inesperado). Recarregue a página (Ctrl+F5).`);
+        }
+        return [];
+      }
       if (res.status === 401 && tentativa < 3) {
         await this._sleep(500 * tentativa);
         return this._readFile(nome, tentativa + 1);
       }
       if (!res.ok) throw new Error(`Erro ao ler ${nome}: HTTP ${res.status}`);
-      try { return await res.json(); } catch { return []; }
+      let dados;
+      try {
+        dados = await res.json();
+      } catch (eParse) {
+        // Conteúdo corrompido/incompleto: NÃO devolver [] (isso poderia fazer a
+        // gravação seguinte apagar o arquivo). Tratar como falha de leitura.
+        throw new Error(`Arquivo de dados "${nome}" veio corrompido/incompleto na leitura. Recarregue a página (Ctrl+F5).`);
+      }
+      this._registrarContagem(nome, dados);
+      return dados;
     } catch (e) {
       if (e.name === 'TypeError' && tentativa < 3) {
         await this._sleep(1000 * tentativa);
@@ -53,7 +99,9 @@ class GraphService {
   }
 
   // Salva um arquivo JSON no OneDrive (3 tentativas com backoff)
-  async _writeFile(nome, dados, tentativa = 1) {
+  async _writeFile(nome, dados, tentativa = 1, opcoes = {}) {
+    // Trava de segurança: roda antes de gravar (só na 1ª tentativa).
+    if (tentativa === 1) this._checarReducaoPerigosa(nome, dados, opcoes.forcar);
     try {
       const token = await this.getToken();
       const url = `${this._driveBase()}/${CONFIG.dataFolderPath}/${nome}.json:/content`;
@@ -65,15 +113,17 @@ class GraphService {
       if (!res.ok) {
         if (res.status === 401 && tentativa < 3) {
           await this._sleep(500 * tentativa);
-          return this._writeFile(nome, dados, tentativa + 1);
+          return this._writeFile(nome, dados, tentativa + 1, opcoes);
         }
         const err = await res.json().catch(() => ({}));
         throw new Error(err?.error?.message || `Erro ao salvar ${nome}`);
       }
+      // Gravou com sucesso: atualiza a contagem conhecida desta coleção.
+      this._registrarContagem(nome, dados);
     } catch (e) {
       if (e.name === 'TypeError' && tentativa < 3) {
         await this._sleep(1000 * tentativa);
-        return this._writeFile(nome, dados, tentativa + 1);
+        return this._writeFile(nome, dados, tentativa + 1, opcoes);
       }
       throw e;
     }
