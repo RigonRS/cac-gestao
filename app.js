@@ -10588,6 +10588,7 @@ const REL_DEFAULTS = {
   processosAProtocolar: { ativo: true, dias: [1, 2, 3, 4, 5], hora: '18:00' },
   documentosVencendo:   { ativo: true, dias: [1], hora: '08:00', diasAntecedencia: 21 },
   deferidosDoDia:       { ativo: true, dias: [4], hora: '19:00' },
+  conversasSemResposta: { ativo: true, dias: [1, 2, 3, 4, 5], horas: ['10:00', '15:00'], limiteMin: 60, maxAparicoes: 4, janela: { inicio: '08:00', fim: '18:00' }, ignorados: [] },
 };
 
 async function renderConfigRelatorios() {
@@ -10599,11 +10600,17 @@ async function renderConfigRelatorios() {
     if (raw && !Array.isArray(raw)) cfg = raw;
   } catch (e) {}
   // Mescla com os padrões para garantir que todos os campos existam
+  const csr = { ...REL_DEFAULTS.conversasSemResposta, ...(cfg.conversasSemResposta || {}) };
+  // Garante tipos corretos dos campos de lista/objeto (podem vir faltando de versões antigas)
+  csr.horas = Array.isArray(csr.horas) && csr.horas.length ? csr.horas.slice() : REL_DEFAULTS.conversasSemResposta.horas.slice();
+  csr.ignorados = Array.isArray(csr.ignorados) ? csr.ignorados.slice() : [];
+  csr.janela = { ...REL_DEFAULTS.conversasSemResposta.janela, ...(csr.janela || {}) };
   window._relCfg = {
     grupoNome: cfg.grupoNome || REL_DEFAULTS.grupoNome,
     processosAProtocolar: { ...REL_DEFAULTS.processosAProtocolar, ...(cfg.processosAProtocolar || {}) },
     documentosVencendo:   { ...REL_DEFAULTS.documentosVencendo,   ...(cfg.documentosVencendo || {}) },
     deferidosDoDia:       { ...REL_DEFAULTS.deferidosDoDia,       ...(cfg.deferidosDoDia || {}) },
+    conversasSemResposta: csr,
   };
   _renderRelEditor();
 }
@@ -10650,6 +10657,145 @@ function _relCard(tipo, titulo, icone, cor, descricao, r, extra) {
     </div>`;
 }
 
+// Formata um telefone (só dígitos) para exibição amigável.
+function _relFmtFone(d) {
+  let x = String(d || '').replace(/\D/g, '');
+  if (x.startsWith('55') && x.length > 11) x = x.slice(2);
+  if (x.length === 11) return `(${x.slice(0, 2)}) ${x.slice(2, 7)}-${x.slice(7)}`;
+  if (x.length === 10) return `(${x.slice(0, 2)}) ${x.slice(2, 6)}-${x.slice(6)}`;
+  return x || String(d || '');
+}
+
+// Card do relatório "Conversas sem resposta" (campos próprios: horários, limite, janela, ignorados).
+function _relCardConversas(r) {
+  r = r || REL_DEFAULTS.conversasSemResposta;
+  const sty = 'border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:13px';
+  const chipsHoras = (r.horas || []).map(h =>
+    `<span style="display:inline-flex;align-items:center;gap:4px;background:#eef2ff;color:#3730a3;border-radius:999px;padding:2px 6px 2px 10px;font-size:12px;font-weight:600">${esc(h)}<button type="button" onclick="_relDelHorario('${escJs(h)}')" title="Remover" style="background:none;border:none;color:#6366f1;cursor:pointer;font-size:15px;line-height:1;padding:0">&times;</button></span>`
+  ).join(' ') || '<span style="font-size:12px;color:var(--text-muted)">nenhum horário definido</span>';
+  const chipsIgn = (r.ignorados || []).map(d =>
+    `<span style="display:inline-flex;align-items:center;gap:4px;background:#fef2f2;color:#991b1b;border-radius:999px;padding:2px 6px 2px 10px;font-size:12px;font-weight:600">${esc(_relFmtFone(d))}<button type="button" onclick="_relDelIgnorado('${escJs(d)}')" title="Remover" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:15px;line-height:1;padding:0">&times;</button></span>`
+  ).join(' ') || '<span style="font-size:12px;color:var(--text-muted)">nenhum contato ignorado</span>';
+  return `
+    <div class="card" style="margin-bottom:14px">
+      <div class="card-body" style="padding:16px 18px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+          <i class="bi bi-chat-left-dots-fill" style="font-size:22px;color:#0ea5e9"></i>
+          <div style="flex:1">
+            <div style="font-weight:600;font-size:15px">Conversas sem resposta</div>
+            <div style="font-size:12px;color:var(--text-muted)">Avisa quais clientes mandaram mensagem e ainda não foram respondidos (ignora agradecimentos/encerramentos e conversas resolvidas).</div>
+          </div>
+          <label class="switch" style="display:inline-flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+            <input type="checkbox" class="rel-ativo" data-tipo="conversasSemResposta" ${r.ativo ? 'checked' : ''}>
+            <span>Ativo</span>
+          </label>
+        </div>
+
+        <div style="margin-bottom:12px">
+          <div style="font-size:11px;color:var(--text-muted);font-weight:600;margin-bottom:3px">Dias da semana</div>
+          ${_relBlocoDias('conversasSemResposta', r.dias)}
+        </div>
+
+        <div style="margin-bottom:12px">
+          <div style="font-size:11px;color:var(--text-muted);font-weight:600;margin-bottom:3px">Horários de envio</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:6px">${chipsHoras}</div>
+          <div style="display:flex;gap:6px;align-items:center">
+            <input type="time" id="rel-csr-novo-horario" style="${sty}">
+            <button type="button" class="btn btn-outline btn-sm" onclick="_relAddHorario()"><i class="bi bi-plus-lg me-1"></i>Adicionar horário</button>
+          </div>
+        </div>
+
+        <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;margin-bottom:12px">
+          <div>
+            <div style="font-size:11px;color:var(--text-muted);font-weight:600;margin-bottom:3px">Alertar após (min) sem resposta</div>
+            <input type="number" min="1" max="1440" id="rel-csr-limite" value="${Number(r.limiteMin) || 60}" style="${sty};width:90px">
+          </div>
+          <div>
+            <div style="font-size:11px;color:var(--text-muted);font-weight:600;margin-bottom:3px">Horário comercial</div>
+            <div style="display:flex;gap:4px;align-items:center">
+              <input type="time" id="rel-csr-janela-inicio" value="${esc((r.janela && r.janela.inicio) || '08:00')}" style="${sty}">
+              <span style="font-size:12px;color:var(--text-muted)">até</span>
+              <input type="time" id="rel-csr-janela-fim" value="${esc((r.janela && r.janela.fim) || '18:00')}" style="${sty}">
+            </div>
+          </div>
+          <div>
+            <div style="font-size:11px;color:var(--text-muted);font-weight:600;margin-bottom:3px">Sair da lista após (aparições)</div>
+            <input type="number" min="0" max="50" id="rel-csr-maxap" value="${Number(r.maxAparicoes) || 0}" style="${sty};width:90px">
+            <div style="font-size:10px;color:var(--text-muted);margin-top:2px">0 = nunca sair sozinho</div>
+          </div>
+        </div>
+
+        <div style="margin-bottom:10px">
+          <div style="font-size:11px;color:var(--text-muted);font-weight:600;margin-bottom:3px">Contatos ignorados (não monitorados)</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:6px">${chipsIgn}</div>
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+            <input id="rel-csr-novo-ignorado" list="rel-contatos-lista" placeholder="Número (com DDD) ou nome do contato" style="${sty};flex:1;min-width:220px">
+            <datalist id="rel-contatos-lista"></datalist>
+            <button type="button" class="btn btn-outline btn-sm" onclick="_relAddIgnorado()"><i class="bi bi-slash-circle me-1"></i>Ignorar</button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="_relBuscarContatos(this)"><i class="bi bi-arrow-repeat me-1"></i>Buscar contatos</button>
+          </div>
+          <div id="rel-csr-contatos-msg" style="font-size:11px;color:var(--text-muted);margin-top:4px"></div>
+        </div>
+
+        <div>
+          <button class="btn btn-outline btn-sm" onclick="_relTestar('conversasSemResposta', this)"><i class="bi bi-send me-1"></i>Enviar teste agora</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+// Salva o estado atual da tela em window._relCfg (evita perder edições ao re-renderizar os chips).
+function _relSync() { window._relCfg = _relColetarConfig(); }
+
+function _relAddHorario() {
+  const inp = document.getElementById('rel-csr-novo-horario');
+  const v = ((inp && inp.value) || '').trim();
+  if (!/^\d{2}:\d{2}$/.test(v)) { toast('Escolha um horário válido.', 'warning'); return; }
+  _relSync();
+  const arr = window._relCfg.conversasSemResposta.horas;
+  if (!arr.includes(v)) arr.push(v);
+  arr.sort();
+  _renderRelEditor();
+}
+function _relDelHorario(h) {
+  _relSync();
+  const csr = window._relCfg.conversasSemResposta;
+  csr.horas = (csr.horas || []).filter(x => x !== h);
+  _renderRelEditor();
+}
+function _relAddIgnorado() {
+  const inp = document.getElementById('rel-csr-novo-ignorado');
+  const v = ((inp && inp.value) || '').trim();
+  if (!v) { toast('Informe um número ou escolha um contato.', 'warning'); return; }
+  // Se o texto bate com o nome de um contato buscado, usa o telefone dele.
+  const achado = (window._relContatos || []).find(c => c.nome && c.nome.toLowerCase() === v.toLowerCase());
+  const dig = String(achado ? achado.phone : v).replace(/\D/g, '');
+  if (dig.length < 8) { toast('Número inválido. Use DDD + número, ou busque o contato pelo nome.', 'warning'); return; }
+  _relSync();
+  const arr = window._relCfg.conversasSemResposta.ignorados;
+  if (!arr.includes(dig)) arr.push(dig);
+  _renderRelEditor();
+}
+function _relDelIgnorado(d) {
+  _relSync();
+  const csr = window._relCfg.conversasSemResposta;
+  csr.ignorados = (csr.ignorados || []).filter(x => x !== d);
+  _renderRelEditor();
+}
+async function _relBuscarContatos(btn) {
+  const msg = document.getElementById('rel-csr-contatos-msg');
+  const orig = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px"></span> Buscando...';
+  try {
+    const r = await waApi('/contatos');
+    window._relContatos = (r.contatos || []).filter(c => c.nome);
+    const dl = document.getElementById('rel-contatos-lista');
+    if (dl) dl.innerHTML = window._relContatos.map(c => `<option value="${esc(c.nome)}"></option>`).join('');
+    if (msg) msg.textContent = window._relContatos.length ? `${window._relContatos.length} contato(s) encontrado(s). Digite o nome e clique em Ignorar.` : 'Nenhum contato com nome salvo. Digite o número direto.';
+  } catch (e) {
+    if (msg) msg.textContent = 'Não foi possível buscar os contatos: ' + e.message;
+  } finally { btn.disabled = false; btn.innerHTML = orig; }
+}
+
 function _renderRelEditor() {
   const el = document.getElementById('page-content');
   const c = window._relCfg;
@@ -10683,9 +10829,11 @@ function _renderRelEditor() {
     ${_relCard('deferidosDoDia', 'Processos Deferidos no Dia', 'bi-check2-circle', '#16a34a',
       'Lista os processos deferidos no dia (cliente, tipo e tempo de deferimento).', c.deferidosDoDia)}
 
+    ${_relCardConversas(c.conversasSemResposta)}
+
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">
       <button class="btn btn-primary" onclick="_relSalvar(this)"><i class="bi bi-save me-1"></i>Salvar configurações</button>
-      <button class="btn" style="background:#25D366;color:#fff;border:none" onclick="_relTestar('todos', this)"><i class="bi bi-send-check me-1"></i>Enviar os 3 agora (teste)</button>
+      <button class="btn" style="background:#25D366;color:#fff;border:none" onclick="_relTestar('todos', this)"><i class="bi bi-send-check me-1"></i>Enviar todos agora (teste)</button>
     </div>
     <p style="font-size:12px;color:var(--text-muted);margin-top:12px"><i class="bi bi-info-circle me-1"></i>Os envios automáticos rodam no servidor (VPS), no fuso de Brasília. As configurações são aplicadas em até ~2 minutos após salvar.</p>`;
 }
@@ -10699,6 +10847,22 @@ function _relColetarConfig() {
     c[tipo] = { ativo, hora, dias };
   });
   c.documentosVencendo.diasAntecedencia = Number(document.getElementById('rel-doc-antecedencia')?.value) || 21;
+
+  // Conversas sem resposta: campos próprios (horas[] e ignorados[] vêm do estado em memória,
+  // pois são editados via chips; os demais vêm direto dos campos da tela).
+  const prevCsr = (window._relCfg && window._relCfg.conversasSemResposta) || REL_DEFAULTS.conversasSemResposta;
+  c.conversasSemResposta = {
+    ativo: !!document.querySelector('.rel-ativo[data-tipo="conversasSemResposta"]')?.checked,
+    dias: Array.from(document.querySelectorAll('.rel-dia[data-tipo="conversasSemResposta"]:checked')).map(x => Number(x.value)),
+    horas: (prevCsr.horas || []).slice(),
+    limiteMin: Number(document.getElementById('rel-csr-limite')?.value) || 60,
+    maxAparicoes: Math.max(0, Number(document.getElementById('rel-csr-maxap')?.value) || 0),
+    janela: {
+      inicio: document.getElementById('rel-csr-janela-inicio')?.value || '08:00',
+      fim: document.getElementById('rel-csr-janela-fim')?.value || '18:00',
+    },
+    ignorados: (prevCsr.ignorados || []).slice(),
+  };
   return c;
 }
 
@@ -10739,7 +10903,7 @@ async function _relTestar(tipo, btn) {
     const r = await waApi('/relatorios/testar', { method: 'POST', body: JSON.stringify({ tipo }) });
     if (tipo === 'todos') {
       const res = r.resultado || {};
-      const nomes = { processosAProtocolar: 'Processos a protocolar', documentosVencendo: 'Documentos a vencer', deferidosDoDia: 'Deferidos do dia' };
+      const nomes = { processosAProtocolar: 'Processos a protocolar', documentosVencendo: 'Documentos a vencer', deferidosDoDia: 'Deferidos do dia', conversasSemResposta: 'Conversas sem resposta' };
       const partes = Object.keys(res).map(k => {
         const x = res[k];
         if (x.enviado) return `✅ ${nomes[k]}`;
@@ -11762,6 +11926,8 @@ function waConectar() {
       waRenderLista();
     });
     socket.on('reaction', d => waOnReaction(d));
+    // Conversa marcada como resolvida por algum atendente (só registra; não muda a lista de chats).
+    socket.on('resolved', () => {});
     socket.on('connect_error', err => { const el = document.getElementById('wa-status'); if (el) el.innerHTML = `<span style="color:var(--danger)"><i class="bi bi-x-circle me-1"></i>Erro de conexão: ${esc(err.message)}</span>`; });
   }).catch(e => { const el = document.getElementById('wa-status'); if (el) el.innerHTML = `<span style="color:var(--danger)">${esc(e.message)}</span>`; });
 }
@@ -12152,6 +12318,7 @@ function waRenderHeader() {
       </div>
     </div>
     <button class="btn btn-ghost btn-sm" title="Marcar como não lida" onclick="waMarcarNaoLida()"><i class="bi bi-envelope"></i></button>
+    ${waEhGrupo(chat) ? '' : `<button class="btn btn-ghost btn-sm" title="Marcar como resolvida (não entra no aviso de conversas sem resposta)" onclick="waResolverConversa()"><i class="bi bi-check2-all" style="color:#16a34a"></i></button>`}
     ${(() => {
       if (cli) return `<button class="btn btn-ghost btn-sm" onclick="navigate('clientes/perfil',{id:'${escJs(String(cli.id))}'})"><i class="bi bi-person-lines-fill me-1"></i>Ver cliente</button>`;
       const clube = waClubeDe(chat);
@@ -12174,6 +12341,18 @@ async function waMarcarNaoLida() {
   document.getElementById('wa-thread').innerHTML = '';
   waRenderLista();
   try { await waApi('/unread', { method: 'POST', body: JSON.stringify({ jid: principal }) }); } catch (e) {}
+}
+
+// Marca a conversa aberta como resolvida (não requer resposta) -> sai do aviso de
+// "conversas sem resposta" até o cliente mandar uma nova mensagem.
+async function waResolverConversa() {
+  const jid = window._wa.jidAtivo; if (!jid) return;
+  try {
+    await waApi('/resolver', { method: 'POST', body: JSON.stringify({ jid }) });
+    toast('Conversa marcada como resolvida. Não entrará no aviso de conversas sem resposta até o cliente escrever novamente.', 'success');
+  } catch (e) {
+    toast('Não foi possível marcar como resolvida: ' + e.message, 'error');
+  }
 }
 
 // ---- Vincular manualmente um número a um cliente ou clube ----
