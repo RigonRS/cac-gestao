@@ -257,13 +257,15 @@
   }
 
   // ---- Mostra/esconde o botão conforme a permissão (chamado após o login) ----
+  let _mobileAberto = false;
   function ariaAplicarVisibilidade() {
     const btn = document.getElementById('btn-aria');
     if (!btn) return;
     const liberado = (typeof isAdminUser === 'function' && isAdminUser()) && !!(window.CONFIG && CONFIG.ariaUrl);
     btn.style.display = liberado ? '' : 'none';
     // Link otimizado para celular: gestao.prbelico.com.br/?app=aria abre a ARIA em tela cheia
-    if (liberado && /(?:^|[?&])app=aria(?:&|$)/.test(location.search)) {
+    if (liberado && !_mobileAberto && /(?:^|[?&])app=aria(?:&|$)/.test(location.search)) {
+      _mobileAberto = true;
       document.body.classList.add('aria-mobile');
       setTimeout(abrirAria, 300);
     }
@@ -273,4 +275,14 @@
   window.abrirAria = abrirAria;
   window.fecharAria = fecharAria;
   window.ariaAplicarVisibilidade = ariaAplicarVisibilidade;
+
+  // À PROVA DE FALHAS: o app.js chama a função no login, mas o próprio ARIA também verifica
+  // sozinho (a cada 0,8s) até o login acontecer, e então mostra o botão. Assim não depende
+  // da ordem/tempo de carregamento dos scripts (era por isso que o botão não aparecia).
+  const _poll = setInterval(function () {
+    try { ariaAplicarVisibilidade(); } catch (e) {}
+    const b = document.getElementById('btn-aria');
+    if (b && b.style.display !== 'none') clearInterval(_poll);
+  }, 800);
+  setTimeout(function () { clearInterval(_poll); }, 90000);
 })();
