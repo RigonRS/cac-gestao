@@ -88,14 +88,46 @@
     vozPt = natural(br) || natural(pt) || br[0] || pt[0] || null;
   }
   if ('speechSynthesis' in window) { carregarVoz(); speechSynthesis.onvoiceschanged = carregarVoz; }
-  function falar(texto) {
-    if (_mudo || !('speechSynthesis' in window) || !texto) return;
+  let _audioAtual = null;
+  function pararAudio() {
+    if (_audioAtual) { try { _audioAtual.pause(); } catch (e) {} _audioAtual = null; }
+    if ('speechSynthesis' in window) { try { speechSynthesis.cancel(); } catch (e) {} }
+  }
+  // Voz do navegador (reserva, caso a voz do Piper não esteja disponível).
+  function falarNavegador(texto) {
+    if (!('speechSynthesis' in window) || !texto) return;
     speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(texto);
     u.lang = 'pt-BR';
     if (vozPt) u.voice = vozPt;
     u.rate = 1.03;
     speechSynthesis.speak(u);
+  }
+  // Fala: tenta a voz do Piper (gerada no assistente) e, se falhar, usa a do navegador.
+  async function falar(texto) {
+    if (_mudo || !texto) return;
+    pararAudio();
+    const url = baseUrl();
+    if (url) {
+      try {
+        const r = await fetch(url + '/falar', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: texto })
+        });
+        if (r.ok) {
+          const blob = await r.blob();
+          if (blob && blob.size > 44) {   // 44 bytes = cabeçalho WAV vazio
+            const a = new Audio(URL.createObjectURL(blob));
+            _audioAtual = a;
+            const limpa = () => { try { URL.revokeObjectURL(a.src); } catch (e) {} };
+            a.onended = limpa; a.onerror = limpa;
+            await a.play();
+            return;
+          }
+        }
+      } catch (e) { /* sem Piper -> cai para a voz do navegador */ }
+    }
+    falarNavegador(texto);
   }
   // Liga/desliga a voz (fica salvo no navegador). Botão ao lado da lixeira.
   function aplicarMudo() {
@@ -108,7 +140,7 @@
   function alternarMudo() {
     _mudo = !_mudo;
     try { localStorage.setItem('aria_mudo', _mudo ? '1' : '0'); } catch (e) {}
-    if (_mudo && 'speechSynthesis' in window) { try { speechSynthesis.cancel(); } catch (e) {} }
+    if (_mudo) pararAudio();
     aplicarMudo();
   }
 
@@ -272,7 +304,7 @@
     const b = document.getElementById('aria-backdrop'); if (b) b.classList.remove('aberto');
     const p = document.getElementById('aria-popup'); if (p) p.classList.remove('aberto');
     if (rec && ouvindo) { try { rec.stop(); } catch (e) {} }
-    if ('speechSynthesis' in window) { try { speechSynthesis.cancel(); } catch (e) {} }
+    pararAudio();
   }
 
   // ---- Mostra/esconde o botão conforme a permissão (chamado após o login) ----
