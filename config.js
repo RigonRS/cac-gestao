@@ -41,6 +41,14 @@ const CONFIG = {
   // URL do gateway de WhatsApp (deixe vazio '' enquanto não estiver no ar).
   waGatewayUrl: 'https://wa.prbelico.com.br',
 
+  // --- ARIA (assistente de voz local) ---
+  // URL do assistente local (projeto "assistente-local", roda no PC). O botão da ARIA
+  // (ao lado do sino) só aparece para Matheus e Simone enquanto estiver em teste.
+  //   • Testar no próprio PC:  'http://localhost:8765'
+  //   • Acessar de longe/celular: aponte um subdomínio (ex.: https://aria.prbelico.com.br)
+  //     para esse PC por um túnel SEGURO (ver orientações). Vazio '' desliga o botão.
+  ariaUrl: 'http://localhost:8765',
+
   // --- CONFIGURAÇÕES DO ESCRITÓRIO ---
   nomeEscritorio: 'Escritório CAC',
 

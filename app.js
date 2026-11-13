@@ -17231,6 +17231,8 @@ async function iniciarApp() {
     const btnConfig = document.getElementById('btn-config');
     if (btnConfig) btnConfig.style.display = '';
   }
+  // Botão da ARIA (assistente de voz) ao lado do sino — só Matheus e Simone por enquanto.
+  if (typeof ariaAplicarVisibilidade === 'function') ariaAplicarVisibilidade();
   if (isExtrasUser()) {
     const navExt = document.getElementById('nav-pagamentos-extras');
     if (navExt) navExt.style.display = '';
