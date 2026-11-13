@@ -205,7 +205,7 @@
 
   // ---- Enviar ao assistente ----
   let ocupado = false;
-  function baseUrl() { return (window.CONFIG && CONFIG.ariaUrl || '').replace(/\/+$/, ''); }
+  function baseUrl() { return ((typeof CONFIG !== 'undefined' && CONFIG && CONFIG.ariaUrl) || '').replace(/\/+$/, ''); }
   async function enviar(texto) {
     texto = (texto || '').trim();
     if (!texto || ocupado) return;
@@ -261,7 +261,7 @@
   function ariaAplicarVisibilidade() {
     const btn = document.getElementById('btn-aria');
     if (!btn) return;
-    const liberado = (typeof isAdminUser === 'function' && isAdminUser()) && !!(window.CONFIG && CONFIG.ariaUrl);
+    const liberado = (typeof isAdminUser === 'function' && isAdminUser()) && !!(typeof CONFIG !== 'undefined' && CONFIG && CONFIG.ariaUrl);
     btn.style.display = liberado ? '' : 'none';
     // Link otimizado para celular: gestao.prbelico.com.br/?app=aria abre a ARIA em tela cheia
     if (liberado && !_mobileAberto && /(?:^|[?&])app=aria(?:&|$)/.test(location.search)) {
