@@ -78,6 +78,8 @@
 
   // ---- Voz (fala do navegador; melhor no Edge) ----
   let vozPt = null;
+  let _mudo = false;
+  try { _mudo = localStorage.getItem('aria_mudo') === '1'; } catch (e) {}
   function carregarVoz() {
     const vozes = speechSynthesis.getVoices();
     const br = vozes.filter(v => /pt[-_]BR/i.test(v.lang));
@@ -87,13 +89,27 @@
   }
   if ('speechSynthesis' in window) { carregarVoz(); speechSynthesis.onvoiceschanged = carregarVoz; }
   function falar(texto) {
-    if (!('speechSynthesis' in window) || !texto) return;
+    if (_mudo || !('speechSynthesis' in window) || !texto) return;
     speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(texto);
     u.lang = 'pt-BR';
     if (vozPt) u.voice = vozPt;
     u.rate = 1.03;
     speechSynthesis.speak(u);
+  }
+  // Liga/desliga a voz (fica salvo no navegador). Botão ao lado da lixeira.
+  function aplicarMudo() {
+    const b = document.getElementById('aria-mudo');
+    if (!b) return;
+    b.innerHTML = _mudo ? '<i class="bi bi-volume-mute-fill"></i>' : '<i class="bi bi-volume-up-fill"></i>';
+    b.title = _mudo ? 'Ligar a voz' : 'Desligar a voz';
+    b.style.color = _mudo ? '#ef4444' : '';
+  }
+  function alternarMudo() {
+    _mudo = !_mudo;
+    try { localStorage.setItem('aria_mudo', _mudo ? '1' : '0'); } catch (e) {}
+    if (_mudo && 'speechSynthesis' in window) { try { speechSynthesis.cancel(); } catch (e) {} }
+    aplicarMudo();
   }
 
   // Frases de espera (sacola embaralhada: usa todas antes de repetir)
@@ -130,6 +146,7 @@
           <div class="aria-sub">Assistente virtual P&amp;R</div>
         </div>
         <div class="aria-acoes">
+          <button id="aria-mudo" title="Desligar a voz"><i class="bi bi-volume-up-fill"></i></button>
           <button id="aria-limpar" title="Limpar conversa"><i class="bi bi-trash"></i></button>
           <button id="aria-fechar" title="Fechar"><i class="bi bi-x-lg"></i></button>
         </div>
@@ -154,6 +171,8 @@
 
     popup.querySelector('#aria-fechar').onclick = fecharAria;
     popup.querySelector('#aria-limpar').onclick = limparConversa;
+    popup.querySelector('#aria-mudo').onclick = alternarMudo;
+    aplicarMudo();
     popup.querySelector('#aria-enviar').onclick = () => enviar(entrada.value);
     entrada.addEventListener('keydown', e => { if (e.key === 'Enter') enviar(entrada.value); });
     mic.onclick = microfoneClick;
