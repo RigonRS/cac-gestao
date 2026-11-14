@@ -254,6 +254,24 @@
     } catch (e) { /* ignora start duplicado */ }
   }
 
+  // ---- Ações na tela (a ARIA navega / aperta botões do sistema) ----
+  // Lista branca: só estas funções do sistema podem ser chamadas pela ARIA.
+  const FUNCOES_OK = {
+    imprimirDadosCliente: 1, imprimirArmasCliente: 1, acessarPortalCliente: 1,
+    novoOrcamentoComVerificacao: 1, abrirModalBloquearPortal: 1,
+    desbloquearPortalCliente: 1, inativarCliente: 1, ativarCliente: 1
+  };
+  function executarAcao(a) {
+    if (!a || !a.tipo) return;
+    try {
+      if (a.tipo === 'navegar' && typeof navigate === 'function') {
+        navigate(a.rota, a.params || {});
+      } else if (a.tipo === 'chamar' && FUNCOES_OK[a.fn] && typeof window[a.fn] === 'function') {
+        window[a.fn].apply(null, a.args || []);
+      }
+    } catch (e) { /* se a ação falhar, a ARIA só não executa (a fala já avisou) */ }
+  }
+
   // ---- Enviar ao assistente ----
   let ocupado = false;
   function baseUrl() { return ((typeof CONFIG !== 'undefined' && CONFIG && CONFIG.ariaUrl) || '').replace(/\/+$/, ''); }
@@ -276,6 +294,7 @@
       const j = await r.json();
       bolhaIA.textContent = j.reply || '(sem resposta)';
       falar(j.reply || '');
+      if (j.action) executarAcao(j.action);   // navega / aperta botão, se a ARIA decidiu agir
     } catch (e) {
       bolhaIA.textContent = 'Não consegui falar com a ARIA. Verifique se o assistente está ligado no computador.';
     } finally {
