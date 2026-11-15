@@ -1821,7 +1821,17 @@ async function renderClienteForm(id = null, importParams = {}) {
       <div class="form-body">
         <div class="form-grid">
           <div><label>Validade Avaliação Psicológica</label><input type="date" name="ValidadeAvaliPsi" value="${dateVal('ValidadeAvaliPsi')}" /></div>
-          <div><label>Validade Teste de Tiro</label><input type="date" name="ValidadeTesteTiro" value="${dateVal('ValidadeTesteTiro')}" /></div>
+        </div>
+        <div style="margin-top:16px">
+          <label>Validade Teste de Tiro</label>
+          <div id="testes-tiro-lista">
+            ${(() => {
+              const testes = testesTiroDoCliente(c);
+              if (!testes.length) testes.push({ data: '', tipo: '' });
+              return testes.map((t, i) => _linhaTesteTiroHtml(t, i > 0)).join('');
+            })()}
+          </div>
+          <button type="button" id="btn-add-teste-tiro" class="btn btn-outline btn-sm" onclick="adicionarTesteTiro()" style="${testesTiroDoCliente(c).length >= MAX_TESTES_TIRO ? 'display:none' : ''}"><i class="bi bi-plus-lg me-1"></i>Adicionar teste de tiro</button>
         </div>
       </div>
     </div>
@@ -1855,7 +1865,10 @@ async function renderClienteForm(id = null, importParams = {}) {
     </div>
 
     <div class="form-section">
-      <div class="form-section-title">1° Endereço</div>
+      <div class="form-section-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <span>1° Endereço</span>
+        <label class="checkbox-item"><input type="checkbox" name="NaoTitularEndereco1" ${c.NaoTitularEndereco1 === 'sim' ? 'checked' : ''} /> Não é o titular do endereço</label>
+      </div>
       <div class="form-body">
         <div class="form-grid">
           <div><label>CEP</label><input name="CEP1" value="${val('CEP1')}" oninput="this.value=fmtCEP(this.value)" maxlength="9" /></div>
@@ -1872,7 +1885,10 @@ async function renderClienteForm(id = null, importParams = {}) {
     <div class="form-section">
       <div class="form-section-title" style="display:flex;align-items:center;justify-content:space-between">
         <span>2° Endereço (opcional)</span>
-        <button type="button" class="btn btn-outline btn-sm" onclick="limparSegundoEndereco()"><i class="bi bi-eraser me-1"></i>Limpar Dados</button>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <label class="checkbox-item"><input type="checkbox" name="NaoTitularEndereco2" ${c.NaoTitularEndereco2 === 'sim' ? 'checked' : ''} /> Não é o titular do endereço</label>
+          <button type="button" class="btn btn-outline btn-sm" onclick="limparSegundoEndereco()"><i class="bi bi-eraser me-1"></i>Limpar Dados</button>
+        </div>
       </div>
       <div class="form-body">
         <div class="form-grid">
@@ -1908,6 +1924,58 @@ function limparSegundoEndereco() {
     const el = document.querySelector(`[name="${name}"]`);
     if (el) el.value = '';
   });
+  const chk = document.querySelector('[name="NaoTitularEndereco2"]');
+  if (chk) chk.checked = false;
+}
+
+// ---- Testes de Tiro (até 4, cada um com tipo de arma) ----
+// Guardados em campos planos: ValidadeTesteTiro/TipoTesteTiro (1°), ...2, ...3, ...4
+const TIPOS_TESTE_TIRO = ['Revólver', 'Pistola', 'Espingarda', 'Carabina/Fuzil/Rifle'];
+const MAX_TESTES_TIRO = 4;
+const _sufixoTesteTiro = (i) => i === 0 ? '' : String(i + 1);
+
+function testesTiroDoCliente(c) {
+  const lista = [];
+  for (let i = 0; i < MAX_TESTES_TIRO; i++) {
+    const s = _sufixoTesteTiro(i);
+    const data = c['ValidadeTesteTiro' + s] ? String(c['ValidadeTesteTiro' + s]).split('T')[0] : '';
+    const tipo = c['TipoTesteTiro' + s] || '';
+    if (data || tipo) lista.push({ data, tipo });
+  }
+  return lista;
+}
+
+function _linhaTesteTiroHtml(t, removivel) {
+  return `<div class="teste-tiro-row" style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 36px;gap:8px;align-items:center;margin-bottom:8px">
+    <input type="date" name="tt_data" value="${esc(t.data || '')}" />
+    <select name="tt_tipo">
+      <option value="">Tipo de arma...</option>
+      ${TIPOS_TESTE_TIRO.map(v => `<option value="${v}" ${t.tipo === v ? 'selected' : ''}>${v}</option>`).join('')}
+    </select>
+    ${removivel ? `<button type="button" class="btn btn-ghost btn-sm" onclick="removerTesteTiro(this)" title="Remover este teste"><i class="bi bi-trash" style="color:var(--danger)"></i></button>` : '<span></span>'}
+  </div>`;
+}
+
+function _atualizarBotaoTesteTiro() {
+  const n = document.querySelectorAll('#testes-tiro-lista .teste-tiro-row').length;
+  const btn = document.getElementById('btn-add-teste-tiro');
+  if (btn) btn.style.display = n >= MAX_TESTES_TIRO ? 'none' : '';
+}
+
+function adicionarTesteTiro() {
+  const lista = document.getElementById('testes-tiro-lista');
+  if (!lista) return;
+  if (lista.querySelectorAll('.teste-tiro-row').length >= MAX_TESTES_TIRO) {
+    toast(`Máximo de ${MAX_TESTES_TIRO} testes de tiro.`, 'warning');
+    return;
+  }
+  lista.insertAdjacentHTML('beforeend', _linhaTesteTiroHtml({ data: '', tipo: '' }, true));
+  _atualizarBotaoTesteTiro();
+}
+
+function removerTesteTiro(btn) {
+  btn.closest('.teste-tiro-row')?.remove();
+  _atualizarBotaoTesteTiro();
 }
 
 async function verificarCPFDuplicado(cpf, idAtual) {
@@ -1943,6 +2011,18 @@ async function salvarCliente(e, id) {
   if (fd.get('cat_atirador'))     cats.push('Atirador');
   if (fd.get('cat_cacador'))      cats.push('Caçador');
 
+  const ttDatas = fd.getAll('tt_data');
+  const ttTipos = fd.getAll('tt_tipo');
+  const testesTiro = ttDatas.map((data, i) => ({ data: data || '', tipo: ttTipos[i] || '' }))
+    .filter(t => t.data || t.tipo)
+    .slice(0, MAX_TESTES_TIRO);
+  const camposTesteTiro = {};
+  for (let i = 0; i < MAX_TESTES_TIRO; i++) {
+    const s = _sufixoTesteTiro(i);
+    camposTesteTiro['ValidadeTesteTiro' + s] = testesTiro[i]?.data || null;
+    camposTesteTiro['TipoTesteTiro' + s]     = testesTiro[i]?.tipo || null;
+  }
+
   const fields = {
     Title:            toTitleCase(fd.get('NomeCompleto')),
     CPF:              fd.get('CPF'),
@@ -1975,7 +2055,9 @@ async function salvarCliente(e, id) {
     DataValidadeCTF:    fd.get('DataValidadeCTF') || null,
     NaoRenovarCTF:      fd.get('NaoRenovarCTF') || null,
     ValidadeAvaliPsi:   fd.get('ValidadeAvaliPsi') || null,
-    ValidadeTesteTiro:  fd.get('ValidadeTesteTiro') || null,
+    ...camposTesteTiro,
+    NaoTitularEndereco1: fd.get('NaoTitularEndereco1') ? 'sim' : null,
+    NaoTitularEndereco2: (fd.get('NaoTitularEndereco2') && ((fd.get('Endereco2') || '').trim() || (fd.get('Cidade2') || '').trim())) ? 'sim' : null,
     CEP1:             fd.get('CEP1'),
     Endereco1:        toTitleCase(fd.get('Endereco1')),
     Numero1:          fd.get('Numero1'),
@@ -2093,18 +2175,23 @@ function abrirConversaWhatsAppCliente(celular) {
   navigate('whatsapp');
 }
 
+function _perfilInfoRow(label, value) {
+  const hasVal = !!(value && value !== '');
+  return `<div class="info-item">
+    <label>${label}</label>
+    <div style="display:flex;align-items:center;gap:6px">
+      <div class="value ${!hasVal?'empty':''}">${value || 'Não informado'}</div>
+      ${hasVal ? `<button class="btn-copy" onclick="copiarCampo(this)" data-val="${esc(value)}" title="Copiar"><i class="bi bi-clipboard"></i></button>` : ''}
+    </div>
+  </div>`;
+}
+
+const _badgeNaoTitular = `<span class="badge badge-orange" title="O cliente não é o titular da conta neste endereço"><i class="bi bi-exclamation-triangle me-1"></i>Não é o titular do endereço</span>`;
+
 function renderPerfilDados(c) {
-  const row = (label, value) => {
-    const hasVal = !!(value && value !== '');
-    return `<div class="info-item">
-      <label>${label}</label>
-      <div style="display:flex;align-items:center;gap:6px">
-        <div class="value ${!hasVal?'empty':''}">${value || 'Não informado'}</div>
-        ${hasVal ? `<button class="btn-copy" onclick="copiarCampo(this)" data-val="${esc(value)}" title="Copiar"><i class="bi bi-clipboard"></i></button>` : ''}
-      </div>
-    </div>`;
-  };
+  const row = _perfilInfoRow;
   const dateRow = (label, f) => row(label, c[f] ? fmtDate(normISO(c[f])) : '');
+  const testesTiro = testesTiroDoCliente(c);
 
   return `
     <div class="form-section">
@@ -2123,15 +2210,9 @@ function renderPerfilDados(c) {
       <div class="form-section-title">Avaliações</div>
       <div class="form-body"><div class="info-grid">
         ${dateRow('Validade Avaliação Psicológica', 'ValidadeAvaliPsi')}
-        ${dateRow('Validade Teste de Tiro', 'ValidadeTesteTiro')}
-      </div></div>
-    </div>
-    <div class="form-section">
-      <div class="form-section-title">CR e Categorias</div>
-      <div class="form-body"><div class="info-grid">
-        ${row('N° CR', c.NumeroCR)} ${dateRow('Validade CR', 'DataValidadeCR')}
-        ${row('Categorias', (c.Categoria||'').replace(/,/g,', '))}
-        ${(c.Categoria||'').includes('Atirador') ? row('Nível Atirador', c.NivelAtirador || 'I') : ''}
+        ${testesTiro.length
+          ? testesTiro.map(t => row(`Validade Teste de Tiro${t.tipo ? ' — ' + esc(t.tipo) : ''}`, t.data ? fmtDate(t.data) : '')).join('')
+          : row('Validade Teste de Tiro', '')}
       </div></div>
     </div>
     <div class="form-section">
@@ -2151,7 +2232,7 @@ function renderPerfilDados(c) {
     </div>
     <div class="form-section">
       <div class="form-section-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
-        <span>1° Endereço</span>
+        <span>1° Endereço ${c.NaoTitularEndereco1 === 'sim' ? _badgeNaoTitular : ''}</span>
         <button class="btn btn-outline btn-sm" onclick="abrirDeclaracaoResidencia('${c.id}',1)"><i class="bi bi-file-earmark-text me-1"></i>Emitir Declaração de Residência</button>
       </div>
       <div class="form-body"><div class="info-grid">
@@ -2162,7 +2243,7 @@ function renderPerfilDados(c) {
     </div>
     ${c.Endereco2 ? `<div class="form-section">
       <div class="form-section-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
-        <span>2° Endereço</span>
+        <span>2° Endereço ${c.NaoTitularEndereco2 === 'sim' ? _badgeNaoTitular : ''}</span>
         <button class="btn btn-outline btn-sm" onclick="abrirDeclaracaoResidencia('${c.id}',2)"><i class="bi bi-file-earmark-text me-1"></i>Emitir Declaração de Residência</button>
       </div>
       <div class="form-body"><div class="info-grid">
@@ -2840,6 +2921,54 @@ function _docsRowsHtml(docs, clienteId) {
   }).join('');
 }
 
+// ---- Ordenação das colunas da aba Documentos (clique no cabeçalho alterna crescente/decrescente) ----
+const _DOCS_SORT_ORDEM_STATUS = { vencido: 0, vencendo: 1, valido: 2, desconsiderada: 3 };
+const _DOCS_SORT_VALOR = {
+  tipo:     d => (d.TipoDocumento || '').trim(),
+  arma:     d => _docArmaLocalTxt(d).trim(),
+  origem:   d => (d.EnderecoGuia || '').trim(),
+  emissao:  d => d.DataEmissao ? String(d.DataEmissao).split('T')[0] : '',
+  validade: d => d.DataValidade ? String(d.DataValidade).split('T')[0] : '',
+  status:   d => _DOCS_SORT_ORDEM_STATUS[_docStatusCat(d)],
+};
+
+function _ordenarDocsPerfil(lista) {
+  const s = window._docsPerfilSort;
+  if (!s || !_DOCS_SORT_VALOR[s.col]) return lista;
+  const getV = _DOCS_SORT_VALOR[s.col];
+  return lista.slice().sort((a, b) => {
+    const va = getV(a), vb = getV(b);
+    const vazioA = va === '' || va == null, vazioB = vb === '' || vb == null;
+    if (vazioA || vazioB) return vazioA === vazioB ? 0 : (vazioA ? 1 : -1); // vazios sempre no fim
+    const cmp = typeof va === 'number' ? va - vb : String(va).localeCompare(String(vb), 'pt-BR', { sensitivity: 'base' });
+    return s.dir * cmp;
+  });
+}
+
+const _DOCS_SORT_LABEL = { tipo: 'Tipo', arma: 'Arma / Local', origem: 'End. Origem', emissao: 'Emissão', validade: 'Validade', status: 'Status' };
+
+function _docsSortTh(col) {
+  const label = _DOCS_SORT_LABEL[col];
+  const s = window._docsPerfilSort;
+  const ativo = s && s.col === col;
+  const icone = ativo
+    ? `<i class="bi bi-arrow-${s.dir === 1 ? 'up' : 'down'}" style="font-size:11px;color:var(--accent)"></i>`
+    : `<i class="bi bi-arrow-down-up" style="font-size:11px;opacity:.35"></i>`;
+  return `<th style="cursor:pointer;user-select:none;white-space:nowrap" onclick="ordenarDocsPerfil('${col}')" title="Ordenar por ${label}">${label} <span id="docs-sort-icon-${col}">${icone}</span></th>`;
+}
+
+function ordenarDocsPerfil(col) {
+  const s = window._docsPerfilSort;
+  window._docsPerfilSort = (s && s.col === col)
+    ? { ...s, dir: -s.dir }
+    : { col, dir: 1, clienteId: window._docsPerfil?.clienteId };
+  Object.keys(_DOCS_SORT_VALOR).forEach(c => {
+    const th = document.getElementById('docs-sort-icon-' + c)?.closest('th');
+    if (th) th.outerHTML = _docsSortTh(c);
+  });
+  filtrarDocsPerfil();
+}
+
 function filtrarDocsPerfil() {
   const ctx = window._docsPerfil; if (!ctx) return;
   const tipo   = document.getElementById('docf-tipo')?.value || '';
@@ -2852,14 +2981,24 @@ function filtrarDocsPerfil() {
   if (origem) lista = lista.filter(d => (d.EnderecoGuia || '').toLowerCase().includes(origem));
   if (status) lista = lista.filter(d => _docStatusCat(d) === status);
   const tb = document.getElementById('docs-perfil-tbody');
-  if (tb) tb.innerHTML = _docsRowsHtml(lista, ctx.clienteId);
+  if (tb) tb.innerHTML = _docsRowsHtml(_ordenarDocsPerfil(lista), ctx.clienteId);
 }
 
 function renderPerfilDocumentos(docs, clienteId, cliente) {
   window._docsPerfil = { docs, clienteId, cliente };
+  if (window._docsPerfilSort && String(window._docsPerfilSort.clienteId) !== String(clienteId)) window._docsPerfilSort = null;
   const tipos = [...new Set(docs.map(d => d.TipoDocumento).filter(Boolean))].sort();
   const selSty = 'border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:12px';
+  const row = _perfilInfoRow;
   return `
+    <div class="form-section">
+      <div class="form-section-title">CR e Categorias</div>
+      <div class="form-body"><div class="info-grid">
+        ${row('N° CR', cliente.NumeroCR)} ${row('Validade CR', cliente.DataValidadeCR ? fmtDate(normISO(cliente.DataValidadeCR)) : '')}
+        ${row('Categorias', (cliente.Categoria||'').replace(/,/g,', '))}
+        ${(cliente.Categoria||'').includes('Atirador') ? row('Nível Atirador', cliente.NivelAtirador || 'I') : ''}
+      </div></div>
+    </div>
     <div class="toolbar">
       <span style="font-size:13px;color:var(--text-muted)">${docs.length} documento(s)</span>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -2889,10 +3028,13 @@ function renderPerfilDocumentos(docs, clienteId, cliente) {
     <div class="card">
       <div class="table-wrapper">
         <table>
-          <thead><tr><th>Tipo</th><th>Arma / Local</th><th>End. Origem</th><th>Emissão</th><th>Validade</th><th>Status</th><th>Ações</th></tr></thead>
+          <thead><tr>
+            ${Object.keys(_DOCS_SORT_LABEL).map(_docsSortTh).join('')}
+            <th>Ações</th>
+          </tr></thead>
           <tbody id="docs-perfil-tbody">${docs.length === 0
             ? `<tr><td colspan="7"><div class="empty-state"><i class="bi bi-file-earmark-x"></i><p>Nenhum documento cadastrado.</p></div></td></tr>`
-            : _docsRowsHtml(docs, clienteId)
+            : _docsRowsHtml(_ordenarDocsPerfil(docs), clienteId)
           }</tbody>
         </table>
       </div>
@@ -6534,6 +6676,41 @@ ${hdr}
 // ============================================================
 // PROCESSOS — DETALHE
 // ============================================================
+// Itens de checklist que pedem comprovante de residência → qual endereço cada um envolve (0 = qualquer um)
+const _CHECKLIST_COMPROVANTE_RESIDENCIA = {
+  'comprovante de residência': 0,
+  'comprovante de residência comprador': 0,
+  'comprovante de residência do comprador': 0,
+  'comprovante de residência 1° endereço': 1,
+  'comprovante de residência 2° endereço': 2,
+  'comprovante de 2° endereço': 2,
+};
+
+// Card de aviso quando o cliente não é titular de um endereço e o processo pede comprovante de residência
+function _avisoNaoTitularProcessoHtml(cliente, checklist) {
+  const naoTit1 = cliente.NaoTitularEndereco1 === 'sim';
+  const naoTit2 = cliente.NaoTitularEndereco2 === 'sim' && _temSegundoEndereco(cliente);
+  if (!naoTit1 && !naoTit2) return '';
+  const enderecos = new Set();
+  (checklist || []).forEach(item => {
+    const nome = String(item.nome || '').trim().toLowerCase().replace(/º/g, '°');
+    if (!(nome in _CHECKLIST_COMPROVANTE_RESIDENCIA)) return;
+    const qual = _CHECKLIST_COMPROVANTE_RESIDENCIA[nome];
+    if ((qual === 0 || qual === 1) && naoTit1) enderecos.add(1);
+    if ((qual === 0 || qual === 2) && naoTit2) enderecos.add(2);
+  });
+  if (!enderecos.size) return '';
+  const linhas = [...enderecos].sort().map(n => {
+    const resumo = _enderecoResumoCliente(cliente, n === 2);
+    return `<li><strong>${n}° Endereço</strong>${resumo ? ` — ${esc(resumo)}` : ''}</li>`;
+  }).join('');
+  return `<div style="background:#fff7ed;border:1px solid #fdba74;border-left:5px solid #f97316;color:#9a3412;border-radius:10px;padding:12px 16px;margin-bottom:20px;font-size:13px">
+    <div style="font-weight:700;font-size:14px;margin-bottom:4px"><i class="bi bi-exclamation-triangle-fill me-1"></i>Atenção: o cliente não é o titular do endereço</div>
+    <div>Este processo pede comprovante de residência, mas o cliente <strong>não é o titular da conta</strong> no(s) endereço(s) abaixo:</div>
+    <ul style="margin:6px 0 0 18px;padding:0">${linhas}</ul>
+  </div>`;
+}
+
 async function renderProcessoDetalhe(id) {
   document.getElementById('page-title').textContent = 'Detalhe do Processo';
   const processo = await App.graph.getItem(CONFIG.listas.processos, id);
@@ -6656,6 +6833,8 @@ async function renderProcessoDetalhe(id) {
       </div>
       <div id="cadeia-vinculados"></div>
     </div>
+
+    ${_avisoNaoTitularProcessoHtml(_clienteDetalhe, checklist)}
 
     <div style="display:grid;grid-template-columns:1fr 340px;gap:20px;align-items:start">
       <div>
