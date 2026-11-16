@@ -565,6 +565,7 @@ async function renderPage() {
       case 'processos/editar':     await renderProcessoEditar(params.id); break;
       case 'processos/detalhe':    await renderProcessoDetalhe(params.id); break;
       case 'validades':            await renderValidades(); break;
+      case 'importar-documentos':  await renderImportarDocumentos(); break;
       case 'pagamentos':           await renderPagamentos(); break;
       case 'recebidos':            await renderRecebidos(); break;
       case 'pagamentos-gru':       await renderPagamentosGRU(); break;
@@ -922,22 +923,30 @@ function descricaoCurtaDoc(d) {
 // Registra uma ação de documento num log central (arquivo documentos_historico.json).
 // Sobrevive a exclusões e alimenta o botão "Histórico" da aba Documentos.
 async function registrarHistDoc(clienteId, doc, acao) {
+  await registrarHistDocVarios([{ clienteId, doc, acao }]);
+}
+// Mesmo registro, para vários documentos de uma vez (uma única gravação).
+async function registrarHistDocVarios(itens) {
   try {
     const agora = new Date();
-    const entrada = {
-      ts:            agora.toISOString(),
-      data:          agora.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
-      hora:          agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }),
-      usuario:       getCurrentUserName(),
-      clienteId:     String(clienteId),
-      docId:         doc && doc.id ? String(doc.id) : null,
-      tipo:          (doc && doc.TipoDocumento) || '',
-      identificacao: descricaoCurtaDoc(doc),
-      acao,
+    const base = {
+      ts:      agora.toISOString(),
+      data:    agora.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
+      hora:    agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }),
+      usuario: getCurrentUserName(),
     };
     let lista = [];
     try { const raw = await App.graph._readFile('documentos_historico'); if (Array.isArray(raw)) lista = raw; } catch (e) {}
-    lista.push(entrada);
+    for (const { clienteId, doc, acao } of itens) {
+      lista.push({
+        ...base,
+        clienteId:     String(clienteId),
+        docId:         doc && doc.id ? String(doc.id) : null,
+        tipo:          (doc && doc.TipoDocumento) || '',
+        identificacao: descricaoCurtaDoc(doc),
+        acao,
+      });
+    }
     if (lista.length > 5000) lista = lista.slice(-5000);
     await App.graph._writeFile('documentos_historico', lista);
   } catch (e) { console.warn('registrarHistDoc:', e); }
@@ -3004,6 +3013,7 @@ function renderPerfilDocumentos(docs, clienteId, cliente) {
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-outline" onclick="verHistoricoDocumentos('${clienteId}')"><i class="bi bi-clock-history"></i> Histórico</button>
         <button class="btn btn-outline" onclick="abrirInformarVencimento('${clienteId}')"><i class="bi bi-chat-left-text"></i> Informar Vencimento</button>
+        ${(CONFIG.waGatewayUrl && isExtrasUser() && !isClienteInativo(cliente)) ? `<button class="btn btn-outline" onclick="importarDocsPastaCliente('${clienteId}')" title="Lê os PDFs da pasta DOCUMENTOS PORTAL do cliente (CRAF, Guia de Tráfego, SIMAF)"><i class="bi bi-folder-symlink"></i> Importar da pasta</button>` : ''}
         ${!isClienteInativo(cliente) ? `<button class="btn btn-primary" onclick="navigate('documentos/novo',{clienteId:'${clienteId}'})"><i class="bi bi-plus-lg"></i> Adicionar Documento</button>` : ''}
       </div>
     </div>
@@ -17421,6 +17431,8 @@ async function iniciarApp() {
   if (isExtrasUser() && CONFIG.waGatewayUrl) {
     const navWa = document.getElementById('nav-whatsapp');
     if (navWa) navWa.style.display = '';
+    const navImp = document.getElementById('nav-importar-documentos');
+    if (navImp) navImp.style.display = '';
   }
 
   // Carrega tipos de processo personalizados (adicionados/ocultos) ANTES de valores/taxas,
@@ -18295,4 +18307,626 @@ function abrirImportSisgcorp(clienteId) {
   const link = document.getElementById('bm-armas-sisgcorp-link');
   if (link) link.href = getBookmarkletArmasSisgcorpHref();
   painel.style.display = '';
+}
+
+// ============================================================
+// IMPORTAÇÃO DA PASTA "DOCUMENTOS PORTAL" (CRAF, Guia de Tráfego, SIMAF)
+// O servidor do WhatsApp lê os PDFs da pasta de cada cliente (docsportal.js no
+// gateway). Aqui: 1) oferece renomear os arquivos fora do padrão do renomeador,
+// 2) compara os dados lidos com o cadastro e mostra a revisão, 3) grava o marcado.
+// ============================================================
+const _IMP_TIPO_GUIA = { 'Caça': 'Caça', 'Caça-Treinamento': 'Caça-Treinamento Tiro', 'Treinamento': 'Caça-Treinamento Tiro', 'Tiro Desportivo': 'Tiro Esportivo' };
+const _IMP_LABELS = {
+  DataEmissao: 'Emissão', DataValidade: 'Validade', LinkArquivo: 'Link do arquivo', NumeroGT: 'Nº GT',
+  TipoGuia: 'Tipo de guia', EnderecoGuia: 'Endereço de origem', CidadeGuia: 'Cidade', UFGuia: 'UF',
+  NomeClubeTiro: 'Clube', CRClubeTiro: 'CR do clube', EnderecoClubeTiro: 'Endereço do clube',
+  NomePropriedade: 'Propriedade', CARPropriedade: 'CAR', NomeProprietario: 'Proprietário', CidadeSimaf: 'Cidade', UFSimaf: 'UF',
+};
+const _IMP_CAMPOS = {
+  'CRAF':            ['DataEmissao', 'DataValidade', 'LinkArquivo'],
+  'Guia de Tráfego': ['NumeroGT', 'TipoGuia', 'DataEmissao', 'DataValidade', 'CidadeGuia', 'UFGuia', 'NomeClubeTiro', 'CRClubeTiro', 'EnderecoClubeTiro', 'LinkArquivo'],
+  'SIMAF':           ['NomePropriedade', 'CARPropriedade', 'NomeProprietario', 'CidadeSimaf', 'UFSimaf', 'DataValidade', 'LinkArquivo'],
+};
+
+function _impSerie(s) { return _armaUp(s).replace(/[^A-Z0-9]/g, ''); }
+function _impDig(s) { return String(s || '').replace(/\D/g, ''); }
+function _impData(s) { return s ? String(s).split('T')[0] : ''; }
+function _impIgual(a, b) { return _armaUp(a) === _armaUp(b); }
+function _impNovoId() { return `${Date.now()}${Math.random().toString(36).substr(2, 6)}`; }
+function _impEspecie(raw) {
+  const u = _armaUp(raw);
+  if (u.includes('PISTOLA')) return 'Pistola';
+  if (u.includes('ESPINGARDA')) return 'Espingarda';
+  if (u.includes('REVOLVER')) return 'Revólver';
+  if (u.includes('CARABINA') || u.includes('FUZIL') || u.includes('RIFLE')) return 'Carabina/Fuzil';
+  return '';
+}
+function _impArmaDesc(a) { return `${a.NumeroSerie || ''} ${a.Marca || ''} ${a.Modelo || ''}`.replace(/\s+/g, ' ').trim(); }
+
+function _impAcharArma(armas, serie, sigma) {
+  const s = _impSerie(serie), g = _impDig(sigma);
+  return (s && armas.find(a => _impSerie(a.NumeroSerie) === s)) || (g && armas.find(a => _impDig(a.NumeroSIGMA) === g)) || null;
+}
+
+function _impAcharClube(clubes, nome) {
+  const n = _armaUp(nome);
+  if (n.length < 4) return null;
+  return clubes.find(cl => _armaUp(cl.Title) === n)
+    || clubes.find(cl => { const t = _armaUp(cl.Title); return t.length >= 6 && (t.includes(n) || n.includes(t)); })
+    || null;
+}
+
+// Qual endereço do cliente aparece no "Local de origem" da guia (rua, depois cidade).
+function _impEnderecoGuia(cliente, origem) {
+  const o = _armaUp(origem);
+  if (!o || !_temSegundoEndereco(cliente)) return '1° Endereço';
+  const pontos = (rua, cidade) => (_armaUp(rua) && o.includes(_armaUp(rua))) ? 2 : ((_armaUp(cidade) && o.includes(_armaUp(cidade))) ? 1 : 0);
+  return pontos(cliente.Endereco2, cliente.Cidade2) > pontos(cliente.Endereco1, cliente.Cidade1) ? '2° Endereço' : '1° Endereço';
+}
+
+// O documento é mesmo deste cliente? (CPF; sem CPF, o nome)
+function _impConferirTitular(cliente, arq) {
+  const c = arq.campos || {};
+  const cpfCli = _impDig(cliente.CPF);
+  if (arq.tipo === 'simaf') {
+    const cpfs = c.cpfs_participantes || [];
+    return (cpfs.length && cpfCli && !cpfs.includes(cpfCli)) ? 'O CPF do cliente não está entre os participantes deste SIMAF.' : null;
+  }
+  const cpfDoc = _impDig(c.cpf);
+  if (cpfDoc && cpfCli && cpfDoc !== cpfCli) return `CPF do documento (${c.cpf}) diferente do CPF do cliente.`;
+  if (!cpfDoc && c.nome && !_impIgual(c.nome, cliente.Title)) return `Nome no documento (${c.nome}) diferente do cliente.`;
+  return null;
+}
+
+// Arma citada no documento e ainda não cadastrada: guardada uma vez por cliente+série
+function _impArmaNova(ctx, cliente, d, atividade) {
+  const key = `${cliente.id}|${_impSerie(d.NumeroSerie)}`;
+  const nova = {
+    ClienteId: cliente.id, ClienteNome: cliente.Title,
+    NumeroSerie: (d.NumeroSerie || '').trim(), NumeroSIGMA: (d.NumeroSIGMA || '').trim() || null,
+    Especie: _impEspecie(d.Especie), Marca: (d.Marca || '').replace(/,$/, '').trim(), Modelo: (d.Modelo || '').trim(),
+    Calibre: String(d.Calibre || '').replace(/\s*\((permitido|restrito)\)\s*/i, '').trim(),
+    GrupoCalibre: /restrito/i.test(d.Calibre || '') ? 'Restrito' : (/permitido/i.test(d.Calibre || '') ? 'Permitido' : ''),
+    StatusArma: 'Ativa', OrgaoCadastro: 'PF - Exército', AtividadeCadastrada: atividade || '',
+  };
+  const atual = ctx.armasNovas[key];
+  if (!atual) ctx.armasNovas[key] = nova;
+  else Object.keys(nova).forEach(k => { if (!atual[k] && nova[k]) atual[k] = nova[k]; }); // completa o que faltava
+  return key;
+}
+
+function _impLinha(cliente, arq, tipo, sub) {
+  return {
+    key: `${cliente.id}|${arq.id}|${sub || 0}`, clienteId: String(cliente.id), clienteNome: cliente.Title,
+    arquivo: arq, tipo, acao: 'criar', alvo: null, armaId: null, armaDesc: '', armaNovaKey: null,
+    antes: {}, depois: {}, avisos: [], marcado: true, validade: '', grupo: '',
+  };
+}
+
+// Compara com o registro existente: 'antigo' (arquivo mais velho que o cadastro),
+// 'igual' (nada a mudar) ou 'atualizar' (só os campos que mudaram).
+function _impComparar(L, atual, proposto) {
+  const novaVal = _impData(proposto.DataValidade), velhaVal = _impData(atual.DataValidade);
+  if (novaVal && velhaVal && novaVal < velhaVal) { L.acao = 'antigo'; return L; }
+  for (const k of _IMP_CAMPOS[L.tipo]) {
+    const novo = proposto[k];
+    if (novo == null || novo === '') continue;
+    const velho = atual[k];
+    const igual = /^Data/.test(k) ? _impData(velho) === _impData(novo)
+      : k === 'CARPropriedade' ? _impSerie(velho) === _impSerie(novo)
+      : k === 'LinkArquivo' ? String(velho || '') === String(novo)
+      : _impIgual(velho, novo);
+    if (!igual) { L.antes[k] = velho || ''; L.depois[k] = novo; }
+  }
+  L.acao = Object.keys(L.depois).length ? 'atualizar' : 'igual';
+  return L;
+}
+
+function _impLinhaCraf(cliente, arq, ctx, docsCli, armasCli) {
+  const c = arq.campos || {};
+  const L = _impLinha(cliente, arq, 'CRAF');
+  L.validade = c.validade || '';
+  L.grupo = `CRAF|${cliente.id}|${_impSerie(c.numero_serie) || arq.id}`;
+  const proposto = { DataEmissao: c.data_expedicao || null, DataValidade: c.validade || null, LinkArquivo: arq.webUrl || '' };
+  const arma = _impAcharArma(armasCli, c.numero_serie, c.numero_sigma);
+  if (arma) {
+    L.armaId = arma.id; L.armaDesc = _impArmaDesc(arma);
+    const doc = docsCli.find(d => d.TipoDocumento === 'CRAF' && String(d.ArmaVinculadaId) === String(arma.id));
+    if (doc) { L.alvo = doc.id; return _impComparar(L, doc, proposto); }
+  } else {
+    L.armaNovaKey = _impArmaNova(ctx, cliente, { NumeroSerie: c.numero_serie, NumeroSIGMA: c.numero_sigma, Especie: c.especie, Marca: c.marca, Modelo: c.modelo, Calibre: c.calibre });
+  }
+  L.depois = proposto;
+  return L;
+}
+
+function _impLinhaGt(cliente, arq, p, idx, ctx, docsCli, armasCli) {
+  const c = arq.campos || {};
+  const L = _impLinha(cliente, arq, 'Guia de Tráfego', idx);
+  const tipoGuia = _IMP_TIPO_GUIA[c.finalidade] || '';
+  if (!tipoGuia) L.avisos.push('Não identifiquei o tipo da guia (finalidade) — confira no editar.');
+  const proposto = {
+    NumeroGT: c.numero_gt || '', TipoGuia: tipoGuia, EnderecoGuia: _impEnderecoGuia(cliente, c.origem_endereco),
+    DataEmissao: c.data_emissao || null, DataValidade: c.validade || null, LinkArquivo: arq.webUrl || '',
+  };
+  if (tipoGuia === 'Caça') {
+    proposto.CidadeGuia = c.destino_cidade || '';
+    proposto.UFGuia = (c.destino_uf || '').toUpperCase();
+  } else if (tipoGuia) {
+    // "XXX" = campo em branco na guia; um logradouro no lugar do nome também não serve como nome do clube
+    const valido = (v) => v && !/^X+$/i.test(String(v).trim()) && !/^(RUA|AV\.?|AVENIDA|ESTRADA|RODOVIA|TRAVESSA|ALAMEDA|PRA[CÇ]A)\b/i.test(String(v).trim());
+    const nomeDestino = valido(c.destino_nome) ? c.destino_nome : (valido(c.destino) ? c.destino : '');
+    const clube = _impAcharClube(ctx.clubes, nomeDestino);
+    proposto.NomeClubeTiro = clube ? clube.Title : nomeDestino;
+    proposto.CRClubeTiro = clube ? (clube.CertificadoRegistro || '') : '';
+    proposto.EnderecoClubeTiro = clube ? (clube.Endereco || '') : (c.destino_endereco || '');
+    if (!nomeDestino) L.avisos.push('A guia não traz o nome do clube/local de destino — confira no editar.');
+  }
+  L.validade = c.validade || '';
+  L.grupo = `GT|${cliente.id}|${c.numero_gt || arq.id}|${_impSerie(p.numero_serie)}`;
+  const arma = _impAcharArma(armasCli, p.numero_serie, null);
+  if (arma) {
+    L.armaId = arma.id; L.armaDesc = _impArmaDesc(arma);
+    const doc = docsCli.find(d => d.TipoDocumento === 'Guia de Tráfego' && String(d.ArmaVinculadaId) === String(arma.id) && (
+      (c.numero_gt && String(d.NumeroGT || '').trim() === c.numero_gt) ||
+      (!String(d.NumeroGT || '').trim() && d.TipoGuia === tipoGuia && _impData(d.DataValidade) === L.validade
+        && (tipoGuia !== 'Caça' || _impIgual(d.CidadeGuia, proposto.CidadeGuia)))));
+    if (doc) { L.alvo = doc.id; return _impComparar(L, doc, proposto); }
+  } else {
+    const atividade = tipoGuia === 'Caça' ? 'Caçador' : (tipoGuia ? 'Atirador' : '');
+    L.armaNovaKey = _impArmaNova(ctx, cliente, { NumeroSerie: p.numero_serie, Especie: p.especie, Marca: p.marca, Modelo: p.modelo, Calibre: p.calibre }, atividade);
+  }
+  if (L.validade && L.validade < hojeISO()) { L.avisos.push('Guia vencida'); L.marcado = false; }
+  L.depois = proposto;
+  return L;
+}
+
+function _impLinhaSimaf(cliente, arq, prop, idx, simafs) {
+  const c = arq.campos || {};
+  const L = _impLinha(cliente, arq, 'SIMAF', idx);
+  const proposto = {
+    NomePropriedade: prop.propriedade || '', CARPropriedade: prop.car || '', NomeProprietario: prop.proprietario || '',
+    CidadeSimaf: prop.cidade || '', UFSimaf: (prop.uf || '').toUpperCase(), DataValidade: c.validade || null, LinkArquivo: arq.webUrl || '',
+  };
+  L.validade = c.validade || '';
+  L.grupo = `SIMAF|${cliente.id}|${_impSerie(prop.car) || _armaUp(prop.propriedade)}`;
+  const i = simafs.findIndex(s => (_impSerie(s.CARPropriedade) && _impSerie(s.CARPropriedade) === _impSerie(prop.car))
+    || (_armaUp(s.NomePropriedade) && _armaUp(s.NomePropriedade) === _armaUp(prop.propriedade)));
+  if (i >= 0) {
+    L.alvo = { car: simafs[i].CARPropriedade || '', nome: simafs[i].NomePropriedade || '' };
+    return _impComparar(L, simafs[i], proposto);
+  }
+  if (L.validade && L.validade < hojeISO()) { L.avisos.push('SIMAF vencido'); L.marcado = false; }
+  L.depois = proposto;
+  return L;
+}
+
+// Monta as linhas da revisão para um cliente.
+function _impPropostasCliente(cliente, arquivos, ctx) {
+  const docsCli = ctx.docs.filter(d => String(d.ClienteId) === String(cliente.id));
+  const armasCli = ctx.armas.filter(a => String(a.ClienteId) === String(cliente.id));
+  let simafs = [];
+  try { const s = JSON.parse(cliente.SIMAFs || '[]'); if (Array.isArray(s)) simafs = s; } catch (e) {}
+  const linhas = [];
+  for (const arq of arquivos) {
+    const c = arq.campos || {};
+    let novas = [];
+    if (arq.tipo === 'craf') novas = [_impLinhaCraf(cliente, arq, ctx, docsCli, armasCli)];
+    else if (arq.tipo === 'gt') novas = (c.produtos || []).map((p, i) => _impLinhaGt(cliente, arq, p, i, ctx, docsCli, armasCli));
+    else if (arq.tipo === 'simaf') novas = (c.propriedades || []).map((p, i) => _impLinhaSimaf(cliente, arq, p, i, simafs));
+    const titular = _impConferirTitular(cliente, arq);
+    novas.forEach(L => {
+      L.avisos.push(...(arq.avisos || []));
+      if (titular) { L.avisos.unshift(titular); L.marcado = false; }
+    });
+    linhas.push(...novas);
+  }
+  // Vários arquivos do mesmo documento (ex.: CRAF antigo e renovado): fica o de validade mais nova.
+  const grupos = {};
+  linhas.forEach(L => { (grupos[L.grupo] = grupos[L.grupo] || []).push(L); });
+  Object.values(grupos).filter(g => g.length > 1).forEach(g => {
+    g.sort((a, b) => (b.validade || '').localeCompare(a.validade || ''));
+    g.slice(1).forEach(L => { if (L.acao === 'criar' || L.acao === 'atualizar') L.acao = 'antigo'; });
+  });
+  return linhas;
+}
+
+// ---- Passo 1: arquivos fora do padrão de nome do renomeador ----
+function _impPassoNomes(resultados, nomesClientes) {
+  const fora = [];
+  Object.entries(resultados).forEach(([cid, r]) => (r.arquivos || []).forEach(a => {
+    if (a.nome_ok === false && a.nome_final) fora.push({ cid, a, marcado: true });
+  }));
+  if (!fora.length) return Promise.resolve(true);
+  return new Promise(resolve => {
+    window._impNomes = { fora, resolve };
+    document.getElementById('modal-imp-nomes')?.remove();
+    const porCliente = {};
+    fora.forEach((f, i) => { (porCliente[f.cid] = porCliente[f.cid] || []).push(i); });
+    const varios = Object.keys(porCliente).length > 1;
+    const linhas = Object.entries(porCliente).map(([cid, idxs]) => `
+      ${varios ? `<div style="font-weight:700;font-size:13px;margin:12px 0 4px">${esc(nomesClientes[cid] || cid)}</div>` : ''}
+      ${idxs.map(i => { const a = fora[i].a; return `
+        <label style="display:flex;gap:8px;align-items:flex-start;padding:7px 0;border-bottom:1px solid var(--border);cursor:pointer;font-size:12.5px">
+          <input type="checkbox" checked onchange="window._impNomes.fora[${i}].marcado=this.checked" style="margin-top:3px">
+          <span style="flex:1;min-width:0;word-break:break-word"><span style="color:var(--text-muted)">${esc(a.nome)}</span><br><i class="bi bi-arrow-return-right"></i> <strong>${esc(a.nome_final)}</strong></span>
+        </label>`; }).join('')}`).join('');
+    const modal = document.createElement('div');
+    modal.id = 'modal-imp-nomes';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px';
+    modal.innerHTML = `
+      <div style="background:#fff;border-radius:12px;padding:22px;max-width:720px;width:100%;max-height:88vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+        <h3 style="margin:0 0 4px;font-size:16px"><i class="bi bi-pencil-square me-2" style="color:var(--accent)"></i>Arquivos fora do padrão de nome</h3>
+        <p style="font-size:12.5px;color:var(--text-muted);margin:0 0 10px">${fora.length} arquivo(s) da pasta DOCUMENTOS PORTAL não seguem o padrão do renomeador. Quer renomear antes de importar os dados? (o cliente vê esses nomes no portal)</p>
+        ${linhas}
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;flex-wrap:wrap">
+          <button class="btn btn-outline btn-sm" onclick="_impNomesFechar(false)">Cancelar</button>
+          <button class="btn btn-outline btn-sm" onclick="_impNomesFechar(true)">Continuar sem renomear</button>
+          <button class="btn btn-primary btn-sm" onclick="_impNomesRenomear(this)"><i class="bi bi-check-lg me-1"></i>Renomear e continuar</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+  });
+}
+function _impNomesFechar(continuar) {
+  document.getElementById('modal-imp-nomes')?.remove();
+  const st = window._impNomes; window._impNomes = null;
+  if (st) st.resolve(continuar);
+}
+async function _impNomesRenomear(btn) {
+  const st = window._impNomes; if (!st) return;
+  const marcados = st.fora.filter(f => f.marcado);
+  if (!marcados.length) { _impNomesFechar(true); return; }
+  btn.disabled = true;
+  showLoading();
+  let ok = 0; const falhas = [];
+  try {
+    const porCliente = {};
+    marcados.forEach(f => { (porCliente[f.cid] = porCliente[f.cid] || []).push(f); });
+    for (const [cid, lista] of Object.entries(porCliente)) {
+      try {
+        const r = await waApi('/docs-portal/renomear', { method: 'POST', body: JSON.stringify({ clienteId: cid, itens: lista.map(f => ({ itemId: f.a.id, novoNome: f.a.nome_final })) }) });
+        (r.resultados || []).forEach(res => {
+          const f = lista.find(x => x.a.id === res.itemId);
+          if (res.ok && f) { f.a.nome = res.nome || f.a.nome_final; if (res.webUrl) f.a.webUrl = res.webUrl; f.a.nome_ok = true; ok++; }
+          else if (f) falhas.push(`${f.a.nome}: ${res.erro || 'erro'}`);
+        });
+      } catch (e) { lista.forEach(f => falhas.push(`${f.a.nome}: ${e.message}`)); }
+    }
+  } finally { hideLoading(); }
+  if (ok) registrarMovimentacao('Renomear Documentos da Pasta', `${ok} arquivo(s)`);
+  if (falhas.length) toast(`${ok} renomeado(s). Não foi possível renomear ${falhas.length}: ${falhas.slice(0, 3).join(' | ')}`, 'warning');
+  else toast(`${ok} arquivo(s) renomeado(s).`, 'success');
+  _impNomesFechar(true);
+}
+
+// ---- Fluxo completo (um cliente ou o resultado da varredura) ----
+async function _impFluxo(resultados, contexto) {
+  const clientes = await App.getClientes();
+  const nomes = {};
+  clientes.forEach(c => { nomes[String(c.id)] = c.Title; });
+  if (contexto === 'lote') {
+    Object.keys(resultados).forEach(cid => {
+      const c = clientes.find(x => String(x.id) === String(cid));
+      if (!c || isClienteInativo(c)) delete resultados[cid];
+    });
+  }
+  if (!(await _impPassoNomes(resultados, nomes))) return;
+  showLoading();
+  try {
+    ['clientes', 'documentos', 'armas', 'clubes'].forEach(t => App.invalidateCache(t));
+    const [cls, docs, armas, clubes] = await Promise.all([App.getClientes(), App.getDocumentos(), App.getArmas(), App.getClubes()]);
+    const ctx = { docs, armas, clubes, armasNovas: {} };
+    const linhas = [];
+    let semDados = 0;
+    for (const [cid, r] of Object.entries(resultados)) {
+      const cli = cls.find(c => String(c.id) === String(cid));
+      if (!cli) continue;
+      semDados += (r.arquivos || []).filter(a => !['craf', 'gt', 'simaf'].includes(a.tipo)).length;
+      linhas.push(..._impPropostasCliente(cli, r.arquivos || [], ctx));
+    }
+    window._impDocs = { linhas, armasNovas: ctx.armasNovas, contexto, semDados, clienteId: contexto === 'cliente' ? Object.keys(resultados)[0] : null };
+  } catch (e) { toast(e.message, 'error'); return; } finally { hideLoading(); }
+  _impMostrarRevisao();
+}
+
+// Botão "Importar da pasta" da aba Documentos do cliente
+async function importarDocsPastaCliente(clienteId) {
+  let r;
+  showLoading();
+  try { r = await waApi('/docs-portal/cliente/' + encodeURIComponent(clienteId)); }
+  catch (e) { toast('Não foi possível ler a pasta do cliente: ' + e.message, 'error'); return; }
+  finally { hideLoading(); }
+  if (!r.pasta) { toast('Não encontrei a pasta DOCUMENTOS PORTAL deste cliente (o nome da pasta deve ser igual ao nome do cliente).', 'warning'); return; }
+  if (!(r.arquivos || []).length) { toast('A pasta DOCUMENTOS PORTAL deste cliente não tem PDFs.', 'info'); return; }
+  await _impFluxo({ [String(clienteId)]: r }, 'cliente');
+}
+
+// ---- Passo 2: revisão ----
+function _impValorHtml(k, v) {
+  if (v == null || v === '') return '<span style="color:var(--text-muted)">—</span>';
+  if (k === 'LinkArquivo') return '<i class="bi bi-link-45deg"></i> arquivo';
+  if (/^Data/.test(k)) return esc(fmtDate(_impData(v)));
+  return esc(String(v));
+}
+
+function _impResumoHtml(L) {
+  const d = L.depois;
+  if (L.acao === 'atualizar') {
+    return Object.keys(d).map(k => `<div><span style="color:var(--text-muted)">${_IMP_LABELS[k] || k}:</span> <s style="color:#b91c1c">${_impValorHtml(k, L.antes[k])}</s> <i class="bi bi-arrow-right"></i> <strong style="color:#15803d">${_impValorHtml(k, d[k])}</strong></div>`).join('');
+  }
+  const partes = [];
+  if (L.tipo === 'CRAF' || L.tipo === 'Guia de Tráfego') {
+    const an = L.armaNovaKey ? window._impDocs?.armasNovas[L.armaNovaKey] : null;
+    partes.push(`<strong>Arma:</strong> ${esc(an ? [an.Especie, _impArmaDesc(an)].filter(Boolean).join(' · ') : (L.armaDesc || '—'))}`);
+  }
+  if (L.tipo === 'Guia de Tráfego') {
+    const dest = d.TipoGuia === 'Caça' ? [d.CidadeGuia, d.UFGuia].filter(Boolean).join('/') : d.NomeClubeTiro;
+    partes.push(`<strong>${esc(d.TipoGuia || 'Tipo ?')}</strong>${dest ? ' · ' + esc(dest) : ''}${d.NumeroGT ? ' · Nº ' + esc(d.NumeroGT) : ''} · ${esc(d.EnderecoGuia || '')}`);
+  }
+  if (L.tipo === 'SIMAF') partes.push(`<strong>${esc(d.NomePropriedade || '—')}</strong> · ${esc([d.CidadeSimaf, d.UFSimaf].filter(Boolean).join('/'))} · CAR ${esc(d.CARPropriedade || '—')}`);
+  partes.push(`${d.DataEmissao ? `Emissão ${_impValorHtml('DataEmissao', d.DataEmissao)} · ` : ''}Validade <strong>${_impValorHtml('DataValidade', d.DataValidade)}</strong>`);
+  return partes.map(p => `<div>${p}</div>`).join('');
+}
+
+function _impRevisaoHtml() {
+  const est = window._impDocs;
+  const visiveis = est.linhas.map((L, i) => ({ L, i })).filter(x => x.L.acao === 'criar' || x.L.acao === 'atualizar');
+  const iguais = est.linhas.filter(L => L.acao === 'igual').length;
+  const antigos = est.linhas.filter(L => L.acao === 'antigo').length;
+  const nSel = visiveis.filter(x => x.L.marcado).length;
+  const lote = est.contexto === 'lote';
+  const tipoBadge = { 'CRAF': 'badge-blue', 'Guia de Tráfego': 'badge-purple', 'SIMAF': 'badge-green' };
+  const porCliente = {};
+  visiveis.forEach(x => { (porCliente[x.L.clienteId] = porCliente[x.L.clienteId] || []).push(x); });
+  const corpo = Object.entries(porCliente).map(([cid, itens]) => `
+    ${lote ? `<tr style="background:var(--bg-light)"><td style="text-align:center"><input type="checkbox" ${itens.every(x => x.L.marcado) ? 'checked' : ''} onchange="_impMarcarCliente('${escJs(cid)}',this.checked)" title="Marcar tudo deste cliente"></td>
+      <td colspan="4" style="font-weight:700"><a style="cursor:pointer;color:var(--accent)" onclick="navigate('clientes/perfil',{id:'${escJs(cid)}',tab:'documentos'})">${esc(itens[0].L.clienteNome)}</a> <span style="font-weight:400;color:var(--text-muted);font-size:12px">${itens.length} item(ns)</span></td></tr>` : ''}
+    ${itens.map(({ L, i }) => `<tr${L.marcado ? '' : ' style="opacity:.6"'}>
+      <td style="text-align:center"><input type="checkbox" ${L.marcado ? 'checked' : ''} onchange="_impMarcar(${i},this.checked)"></td>
+      <td style="font-size:12px;max-width:220px;word-break:break-word"><span class="badge ${tipoBadge[L.tipo] || 'badge-gray'}" style="font-size:10px">${esc(L.tipo)}</span><br><a href="${esc(L.arquivo.webUrl || '#')}" target="_blank" rel="noopener">${esc(L.arquivo.nome)}</a></td>
+      <td>${L.acao === 'criar' ? '<span class="badge badge-green">Criar</span>' : '<span class="badge badge-orange">Atualizar</span>'}${L.armaNovaKey ? '<br><span class="badge badge-blue" style="font-size:10px;margin-top:3px">+ arma nova</span>' : ''}</td>
+      <td style="font-size:12px">${_impResumoHtml(L)}${L.avisos.length ? `<div style="margin-top:4px">${L.avisos.map(a => `<span class="badge badge-red" style="font-size:10px;white-space:normal;margin:1px 2px 1px 0">${esc(a)}</span>`).join('')}</div>` : ''}</td>
+      <td style="text-align:center"><button class="btn btn-outline btn-sm" onclick="_impEditar(${i})" title="Revisar/editar antes de gravar"><i class="bi bi-pencil"></i></button></td>
+    </tr>`).join('')}`).join('');
+  return `
+    <div style="font-size:12.5px;color:var(--text-muted);margin-bottom:10px">
+      ${visiveis.length ? `${visiveis.length} item(ns) com novidade.` : 'Nenhuma novidade: o cadastro já está igual aos documentos da pasta.'}
+      ${iguais ? ` · ${iguais} já estão iguais no cadastro.` : ''}${antigos ? ` · ${antigos} arquivo(s) mais antigo(s) que o cadastro (ignorados).` : ''}${est.semDados ? ` · ${est.semDados} PDF(s) sem dados para importar (CR, CTF, teste de tiro, imagem...).` : ''}
+    </div>
+    ${visiveis.length ? `<div class="card"><div class="table-wrapper"><table>
+      <thead><tr><th style="text-align:center;width:40px"><input type="checkbox" ${nSel === visiveis.length ? 'checked' : ''} onchange="_impMarcarTodos(this.checked)" title="Marcar tudo"></th><th>Arquivo</th><th>Ação</th><th>Dados</th><th></th></tr></thead>
+      <tbody>${corpo}</tbody></table></div></div>` : ''}
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px">
+      <span style="font-size:13px;color:var(--text-muted)">${nSel} item(ns) marcado(s)</span>
+      <div style="display:flex;gap:8px">
+        ${lote ? '' : `<button class="btn btn-outline btn-sm" onclick="document.getElementById('modal-imp-docs')?.remove()">Fechar</button>`}
+        <button class="btn btn-primary btn-sm" ${nSel ? '' : 'disabled'} onclick="_impGravar()"><i class="bi bi-download me-1"></i>Gravar ${nSel} item(ns)</button>
+      </div>
+    </div>`;
+}
+
+function _impMostrarRevisao() {
+  const est = window._impDocs; if (!est) return;
+  if (est.contexto === 'lote') {
+    const alvo = document.getElementById('imp-revisao');
+    if (alvo) alvo.innerHTML = _impRevisaoHtml();
+    return;
+  }
+  let modal = document.getElementById('modal-imp-docs');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'modal-imp-docs';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9990;display:flex;align-items:center;justify-content:center;padding:16px';
+    document.body.appendChild(modal);
+  }
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;padding:22px;max-width:1000px;width:100%;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <h3 style="margin:0;font-size:16px"><i class="bi bi-folder-symlink me-2" style="color:var(--accent)"></i>Importar da pasta DOCUMENTOS PORTAL</h3>
+        <button onclick="document.getElementById('modal-imp-docs').remove()" style="background:none;border:none;font-size:22px;color:#666;cursor:pointer;line-height:1">×</button>
+      </div>
+      ${_impRevisaoHtml()}
+    </div>`;
+}
+
+function _impMarcar(i, v) { const L = window._impDocs?.linhas[i]; if (L) L.marcado = v; _impMostrarRevisao(); }
+function _impMarcarTodos(v) { (window._impDocs?.linhas || []).forEach(L => { if (L.acao === 'criar' || L.acao === 'atualizar') L.marcado = v; }); _impMostrarRevisao(); }
+function _impMarcarCliente(cid, v) { (window._impDocs?.linhas || []).forEach(L => { if (L.clienteId === cid && (L.acao === 'criar' || L.acao === 'atualizar')) L.marcado = v; }); _impMostrarRevisao(); }
+
+// Editar uma linha antes de gravar (campos do documento e, se houver, da arma nova)
+function _impEditar(i) {
+  const est = window._impDocs; const L = est?.linhas[i]; if (!L) return;
+  const inp = (grupo, k, v) => {
+    const st = 'width:100%;box-sizing:border-box;padding:7px;border:1px solid var(--border);border-radius:6px';
+    const opts = k === 'TipoGuia' ? ['Caça', 'Caça-Treinamento Tiro', 'Tiro Esportivo'] : k === 'EnderecoGuia' ? ['1° Endereço', '2° Endereço']
+      : (grupo === 'arma' && ARMA_ENUMS[k] && k !== 'PaisFabricacao') ? ARMA_ENUMS[k] : null;
+    if (opts) return `<select data-g="${grupo}" data-k="${k}" style="${st}"><option value="">Selecione...</option>${opts.map(o => `<option ${o === v ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+    return `<input data-g="${grupo}" data-k="${k}" type="${/^Data/.test(k) ? 'date' : 'text'}" value="${esc(/^Data/.test(k) ? _impData(v) : (v || ''))}" style="${st}">`;
+  };
+  const campo = (lbl, html) => `<div style="margin-bottom:10px"><label style="font-size:12px;font-weight:600;display:block;margin-bottom:3px">${lbl}</label>${html}</div>`;
+  const docKeys = Object.keys(L.depois).filter(k => k !== 'LinkArquivo');
+  const an = L.armaNovaKey ? est.armasNovas[L.armaNovaKey] : null;
+  const armaLbl = { Especie: 'Espécie', Marca: 'Marca', Modelo: 'Modelo', Calibre: 'Calibre', GrupoCalibre: 'Grupo do calibre', NumeroSerie: 'Nº de série', NumeroSIGMA: 'Nº SIGMA' };
+  document.getElementById('modal-imp-editar')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'modal-imp-editar';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:10001;display:flex;align-items:center;justify-content:center;padding:16px';
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;padding:22px;max-width:640px;width:100%;max-height:88vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+      <h3 style="margin:0 0 4px;font-size:16px"><i class="bi bi-pencil me-2"></i>${esc(L.tipo)} — ${L.acao === 'criar' ? 'novo' : 'atualizar'}</h3>
+      <p style="font-size:12px;color:var(--text-muted);margin:0 0 12px">${esc(L.arquivo.nome)}</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:0 14px">
+        ${docKeys.map(k => campo(_IMP_LABELS[k] || k, inp('doc', k, L.depois[k]))).join('')}
+      </div>
+      ${an ? `<div style="font-weight:700;font-size:13px;margin:6px 0 8px">Arma nova (será cadastrada no cliente)</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:0 14px">
+        ${Object.keys(armaLbl).map(k => campo(armaLbl[k], inp('arma', k, an[k]))).join('')}
+      </div>` : ''}
+      <div style="text-align:right;margin-top:6px">
+        <button class="btn btn-outline btn-sm" onclick="document.getElementById('modal-imp-editar').remove()">Cancelar</button>
+        <button class="btn btn-primary btn-sm" onclick="_impSalvarEdicao(${i})"><i class="bi bi-check-lg me-1"></i>Aplicar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+}
+function _impSalvarEdicao(i) {
+  const est = window._impDocs; const L = est?.linhas[i]; const modal = document.getElementById('modal-imp-editar');
+  if (!L || !modal) return;
+  modal.querySelectorAll('[data-k]').forEach(el => {
+    const k = el.getAttribute('data-k'); const v = el.value || (el.type === 'date' ? null : '');
+    if (el.getAttribute('data-g') === 'arma') est.armasNovas[L.armaNovaKey][k] = v;
+    else L.depois[k] = (k === 'UFGuia' || k === 'UFSimaf') ? String(v || '').toUpperCase() : v;
+  });
+  modal.remove();
+  _impMostrarRevisao();
+}
+
+// ---- Passo 3: gravar (uma leitura e uma gravação por arquivo de dados) ----
+async function _impGravar() {
+  const est = window._impDocs; if (!est) return;
+  const sel = est.linhas.filter(L => L.marcado && (L.acao === 'criar' || L.acao === 'atualizar'));
+  if (!sel.length) { toast('Nada marcado para gravar.', 'warning'); return; }
+  showLoading();
+  try {
+    // 1) armas novas (antes, para ter o id que vai no documento)
+    const armasCriadas = {};
+    const novasKeys = [...new Set(sel.map(L => L.armaNovaKey).filter(Boolean))];
+    let nArmas = 0;
+    if (novasKeys.length) {
+      const armas = await App.graph._readFile(CONFIG.listas.armas);
+      for (const k of novasKeys) {
+        const a = est.armasNovas[k];
+        const ja = armas.find(x => String(x.ClienteId) === String(a.ClienteId) && _impSerie(x.NumeroSerie) === _impSerie(a.NumeroSerie));
+        if (ja) { armasCriadas[k] = ja; continue; }
+        const nova = { id: _impNovoId(), Title: `${a.Marca || ''} ${a.Modelo || ''} - ${a.NumeroSerie || ''}`.trim(), ...a };
+        armas.push(nova); armasCriadas[k] = nova; nArmas++;
+      }
+      if (nArmas) await App.graph._writeFile(CONFIG.listas.armas, armas);
+    }
+    // 2) documentos (CRAF e Guias)
+    const hist = [];
+    const selDocs = sel.filter(L => L.tipo !== 'SIMAF');
+    if (selDocs.length) {
+      const docs = await App.graph._readFile(CONFIG.listas.documentos);
+      for (const L of selDocs) {
+        if (L.acao === 'atualizar') {
+          const i = docs.findIndex(d => String(d.id) === String(L.alvo));
+          if (i < 0) continue;
+          docs[i] = { ...docs[i], ...L.depois };
+          hist.push({ clienteId: L.clienteId, doc: docs[i], acao: 'Atualizado pela pasta DOCUMENTOS PORTAL' });
+        } else {
+          const arma = L.armaNovaKey ? armasCriadas[L.armaNovaKey] : null;
+          const novo = {
+            id: _impNovoId(), Title: `${L.tipo} — ${L.clienteNome}`, ClienteId: L.clienteId, ClienteNome: L.clienteNome,
+            TipoDocumento: L.tipo, ...L.depois,
+            ArmaVinculadaId: arma ? arma.id : (L.armaId || null), ArmaVinculadaDesc: arma ? _impArmaDesc(arma) : (L.armaDesc || ''),
+          };
+          if (L.tipo === 'CRAF') { novo.ClienteDonoCRAFId = L.clienteId; novo.ClienteDonoCRAFNome = L.clienteNome; }
+          docs.push(novo);
+          hist.push({ clienteId: L.clienteId, doc: novo, acao: 'Importado da pasta DOCUMENTOS PORTAL' });
+        }
+      }
+      await App.graph._writeFile(CONFIG.listas.documentos, docs);
+    }
+    // 3) SIMAFs (ficam dentro do cliente)
+    const selSimaf = sel.filter(L => L.tipo === 'SIMAF');
+    if (selSimaf.length) {
+      const clientes = await App.graph._readFile(CONFIG.listas.clientes);
+      for (const L of selSimaf) {
+        const ci = clientes.findIndex(c => String(c.id) === String(L.clienteId));
+        if (ci < 0) continue;
+        let lista = [];
+        try { const s = JSON.parse(clientes[ci].SIMAFs || '[]'); if (Array.isArray(s)) lista = s; } catch (e) {}
+        if (L.acao === 'atualizar') {
+          const i = lista.findIndex(s => _impSerie(L.alvo.car)
+            ? _impSerie(s.CARPropriedade) === _impSerie(L.alvo.car)
+            : _armaUp(s.NomePropriedade) === _armaUp(L.alvo.nome));
+          if (i < 0) continue;
+          lista[i] = { ...lista[i], ...L.depois };
+        } else {
+          lista.push({ ...L.depois });
+        }
+        clientes[ci] = { ...clientes[ci], SIMAFs: JSON.stringify(lista) };
+      }
+      await App.graph._writeFile(CONFIG.listas.clientes, clientes);
+    }
+    if (hist.length) await registrarHistDocVarios(hist);
+    ['clientes', 'documentos', 'armas'].forEach(t => App.invalidateCache(t));
+    const nCli = new Set(sel.map(L => L.clienteId)).size;
+    registrarMovimentacao('Importar Documentos da Pasta', `${sel.length} item(ns)${nArmas ? `, ${nArmas} arma(s) nova(s)` : ''} em ${nCli} cliente(s)`);
+    toast(`Gravado: ${sel.length} item(ns)${nArmas ? ` e ${nArmas} arma(s) nova(s)` : ''}.`, 'success');
+    const contexto = est.contexto, clienteId = est.clienteId;
+    window._impDocs = null;
+    if (contexto === 'cliente') {
+      document.getElementById('modal-imp-docs')?.remove();
+      navigate('clientes/perfil', { id: clienteId, tab: 'documentos' });
+    } else {
+      const alvo = document.getElementById('imp-revisao');
+      if (alvo) alvo.innerHTML = `<div class="card"><div class="card-body" style="text-align:center;color:#15803d;font-weight:600"><i class="bi bi-check-circle me-1"></i>Importação gravada. Rode uma nova varredura para conferir.</div></div>`;
+    }
+  } catch (e) {
+    toast('Erro ao gravar: ' + e.message, 'error');
+  } finally { hideLoading(); }
+}
+
+// ---- Página "Importar Documentos" (varredura de todos os clientes) ----
+async function renderImportarDocumentos() {
+  document.getElementById('page-title').textContent = 'Importar Documentos da Pasta';
+  document.getElementById('page-content').innerHTML = `
+    <div class="card" style="margin-bottom:16px"><div class="card-body">
+      <p style="margin:0 0 10px;font-size:13.5px">Lê os PDFs da pasta <strong>DOCUMENTOS PORTAL</strong> de todos os clientes ativos (CRAF, Guia de Tráfego e SIMAF), confere os nomes dos arquivos e mostra o que está faltando ou diferente no cadastro. Nada é gravado sem a sua revisão.</p>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <button id="imp-btn-varrer" class="btn btn-primary" onclick="_impIniciarVarredura()"><i class="bi bi-search me-1"></i>Iniciar varredura</button>
+        <div id="imp-varr-status" style="flex:1;min-width:240px;font-size:13px;color:var(--text-muted)">Carregando...</div>
+      </div>
+    </div></div>
+    <div id="imp-revisao"></div>`;
+  _impAcompanharVarredura();
+}
+
+async function _impIniciarVarredura() {
+  try { await waApi('/docs-portal/varredura', { method: 'POST' }); }
+  catch (e) { toast('Não foi possível iniciar: ' + e.message, 'error'); return; }
+  const rev = document.getElementById('imp-revisao'); if (rev) rev.innerHTML = '';
+  _impAcompanharVarredura();
+}
+
+function _impAcompanharVarredura() {
+  clearInterval(window._impVarrTimer);
+  const tick = async () => {
+    const st = document.getElementById('imp-varr-status');
+    if (!st) { clearInterval(window._impVarrTimer); return; } // saiu da página
+    let s;
+    try { s = await waApi('/docs-portal/varredura'); }
+    catch (e) { st.innerHTML = `<span style="color:var(--danger)">Servidor indisponível: ${esc(e.message)}</span>`; clearInterval(window._impVarrTimer); return; }
+    const btn = document.getElementById('imp-btn-varrer');
+    if (btn) btn.disabled = !!s.rodando;
+    if (s.rodando) {
+      const pct = s.total ? Math.round(s.feitos / s.total * 100) : 0;
+      st.innerHTML = `<div>Lendo as pastas... ${s.feitos} de ${s.total || '?'} clientes (${pct}%). Na primeira vez pode levar alguns minutos.</div>
+        <div style="height:8px;background:#e5e7eb;border-radius:999px;margin-top:6px;overflow:hidden"><div style="height:100%;width:${pct}%;background:var(--accent)"></div></div>`;
+      return;
+    }
+    clearInterval(window._impVarrTimer);
+    if (!s.fim) { st.textContent = 'Nenhuma varredura feita ainda.'; return; }
+    const quando = new Date(s.fim).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const nCli = Object.keys(s.resultados || {}).length;
+    st.innerHTML = `Última varredura: <strong>${quando}</strong> · ${nCli} cliente(s) com PDFs${s.erros && s.erros.length ? ` · <span style="color:var(--danger)">${s.erros.length} erro(s)</span>` : ''}
+      <button class="btn btn-outline btn-sm" style="margin-left:8px" onclick="_impRevisarVarredura()"><i class="bi bi-list-check me-1"></i>Revisar resultado</button>`;
+  };
+  tick();
+  window._impVarrTimer = setInterval(tick, 3000);
+}
+
+async function _impRevisarVarredura() {
+  let s;
+  showLoading();
+  try { s = await waApi('/docs-portal/varredura'); }
+  catch (e) { toast(e.message, 'error'); return; }
+  finally { hideLoading(); }
+  if (!s || s.rodando || !s.resultados) { toast('A varredura ainda não terminou.', 'info'); return; }
+  const rev = document.getElementById('imp-revisao');
+  if (rev) rev.innerHTML = '';
+  await _impFluxo(s.resultados, 'lote');
 }
