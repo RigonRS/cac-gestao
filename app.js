@@ -1293,9 +1293,12 @@ async function renderClientesList() {
   const clubesOrd = [...(Array.isArray(clubes) ? clubes : [])].sort((a, b) => (a.Title || '').localeCompare(b.Title || '', 'pt-BR'));
   window._clientes_filtro = clientes;
 
+  if (!CLIENTES_TABS.some(t => t.key === window._clientesTab)) window._clientesTab = 'ativos';
+
   const inputStyle = 'border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:13px';
   const el = document.getElementById('page-content');
   el.innerHTML = `
+    <div class="tabs" id="clientes-tabs"></div>
     <div class="toolbar">
       <div class="search-bar"><i class="bi bi-search"></i><input id="busca-cliente" placeholder="Buscar por nome ou CPF..." oninput="filtrarClientes()" /></div>
       <div style="display:flex;gap:8px">
@@ -1338,10 +1341,23 @@ async function renderClientesList() {
             <th>Nome</th><th>CPF</th><th>Senha GOV</th><th>2 Etapas</th><th>Celular</th>
             <th>N° CR</th><th>Val. CR</th><th>Categorias</th><th>Cadastro</th><th>Ações</th>
           </tr></thead>
-          <tbody id="tbody-clientes">${renderClientesRows(clientes)}</tbody>
+          <tbody id="tbody-clientes"></tbody>
         </table>
       </div>
     </div>`;
+  filtrarClientes();
+}
+
+// Abas da lista de clientes (filtram pelo status). O número ao lado é a
+// quantidade de cada aba já considerando a busca e os filtros.
+const CLIENTES_TABS = [
+  { key: 'ativos',   label: 'Ativos',   filtro: c => !isClienteInativo(c) },
+  { key: 'inativos', label: 'Inativos', filtro: c => isClienteInativo(c) },
+  { key: 'todos',    label: 'Todos',    filtro: () => true },
+];
+function mudarTabClientes(key) {
+  window._clientesTab = key;
+  filtrarClientes();
 }
 
 function toggleFiltrosClientes() {
@@ -1471,6 +1487,13 @@ function filtrarClientes() {
   if (mes)     lista = lista.filter(c => { const iso = normISO(c.DataNascimento); return iso && parseInt(iso.slice(5, 7), 10) === parseInt(mes, 10); });
   if (clubeId) lista = lista.filter(c => String(c.ClubeId || '') === String(clubeId));
   if (cats.length) lista = lista.filter(c => { const cc = c.Categoria || ''; return cats.every(cat => cc.includes(cat)); });
+
+  const tabAtual = CLIENTES_TABS.find(t => t.key === window._clientesTab) || CLIENTES_TABS[0];
+  const tabsEl = document.getElementById('clientes-tabs');
+  if (tabsEl) tabsEl.innerHTML = CLIENTES_TABS.map(t =>
+    `<button class="tab-btn ${t.key === tabAtual.key ? 'active' : ''}" onclick="mudarTabClientes('${t.key}')">${esc(t.label)} (${lista.filter(t.filtro).length})</button>`
+  ).join('');
+  lista = lista.filter(tabAtual.filtro);
 
   document.getElementById('tbody-clientes').innerHTML = renderClientesRows(lista);
   const cnt = document.getElementById('clientes-count');
@@ -2200,7 +2223,6 @@ const _badgeNaoTitular = `<span class="badge badge-orange" title="O cliente não
 function renderPerfilDados(c) {
   const row = _perfilInfoRow;
   const dateRow = (label, f) => row(label, c[f] ? fmtDate(normISO(c[f])) : '');
-  const testesTiro = testesTiroDoCliente(c);
 
   return `
     <div class="form-section">
@@ -2213,15 +2235,6 @@ function renderPerfilDados(c) {
         ${row('Nacionalidade', c.Nacionalidade)}
         ${row('Naturalidade', c.Naturalidade)} ${row('UF Naturalidade', c.UFNaturalidade)}
         ${row('Profissão', c.Profissao)}
-      </div></div>
-    </div>
-    <div class="form-section">
-      <div class="form-section-title">Avaliações</div>
-      <div class="form-body"><div class="info-grid">
-        ${dateRow('Validade Avaliação Psicológica', 'ValidadeAvaliPsi')}
-        ${testesTiro.length
-          ? testesTiro.map(t => row(`Validade Teste de Tiro${t.tipo ? ' — ' + esc(t.tipo) : ''}`, t.data ? fmtDate(t.data) : '')).join('')
-          : row('Validade Teste de Tiro', '')}
       </div></div>
     </div>
     <div class="form-section">
@@ -2999,6 +3012,7 @@ function renderPerfilDocumentos(docs, clienteId, cliente) {
   const tipos = [...new Set(docs.map(d => d.TipoDocumento).filter(Boolean))].sort();
   const selSty = 'border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:12px';
   const row = _perfilInfoRow;
+  const testesTiro = testesTiroDoCliente(cliente);
   return `
     <div class="form-section">
       <div class="form-section-title">CR e Categorias</div>
@@ -3006,6 +3020,15 @@ function renderPerfilDocumentos(docs, clienteId, cliente) {
         ${row('N° CR', cliente.NumeroCR)} ${row('Validade CR', cliente.DataValidadeCR ? fmtDate(normISO(cliente.DataValidadeCR)) : '')}
         ${row('Categorias', (cliente.Categoria||'').replace(/,/g,', '))}
         ${(cliente.Categoria||'').includes('Atirador') ? row('Nível Atirador', cliente.NivelAtirador || 'I') : ''}
+      </div></div>
+    </div>
+    <div class="form-section">
+      <div class="form-section-title">Avaliações</div>
+      <div class="form-body"><div class="info-grid">
+        ${row('Validade Avaliação Psicológica', cliente.ValidadeAvaliPsi ? fmtDate(normISO(cliente.ValidadeAvaliPsi)) : '')}
+        ${testesTiro.length
+          ? testesTiro.map(t => row(`Validade Teste de Tiro${t.tipo ? ' — ' + esc(t.tipo) : ''}`, t.data ? fmtDate(t.data) : '')).join('')
+          : row('Validade Teste de Tiro', '')}
       </div></div>
     </div>
     <div class="toolbar">
@@ -11728,16 +11751,30 @@ function waFmtNumero(jid, phone) {
 }
 function waEhGrupo(c) { return String((c && c.jid) || '').endsWith('@g.us'); }
 
-async function waIdToken() {
-  const r = await App.msal.acquireTokenSilent({ scopes: ['openid', 'profile'], account: App.account });
+// Segundos até o id_token expirar (lê o campo "exp" do token). NaN se não der para ler.
+function _waSegundosRestantes(token) {
+  try {
+    const b64 = String(token).split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    return JSON.parse(atob(b64)).exp - Date.now() / 1000;
+  } catch (e) { return NaN; }
+}
+// O MSAL devolve o id_token do cache mesmo vencido (ele só confere a validade do
+// access token). Se faltar menos de 5 min — ou se já venceu — pede um novo.
+async function waIdToken(forcar = false) {
+  const req = { scopes: ['openid', 'profile'], account: App.account };
+  let r = await App.msal.acquireTokenSilent(forcar ? { ...req, forceRefresh: true } : req);
+  if (!forcar && !(_waSegundosRestantes(r.idToken) > 300)) {
+    r = await App.msal.acquireTokenSilent({ ...req, forceRefresh: true });
+  }
   return r.idToken;
 }
-async function waApi(path, opts = {}) {
-  const token = await waIdToken();
+async function waApi(path, opts = {}, _tentativa = 0) {
+  const token = await waIdToken(_tentativa > 0);
   const res = await fetch(CONFIG.waGatewayUrl + path, {
     ...opts,
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token, ...(opts.headers || {}) },
   });
+  if (res.status === 401 && _tentativa === 0) return waApi(path, opts, 1); // token recusado: renova e tenta de novo
   if (!res.ok) { let m; try { m = (await res.json()).error; } catch (e) {} throw new Error(m || ('HTTP ' + res.status)); }
   return res.json();
 }
