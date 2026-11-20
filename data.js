@@ -156,7 +156,8 @@ const CHECKLISTS = {
     'Caça':                       ['Declaração de Filiação','CTF + SIMAF'],
     'Caça-Treinamento Tiro':      ['Documento de Identificação'],
     'Tiro Esportivo':             ['Documento de Identificação'],
-    'Mudança de Local de Acervo': ['Documento de Identificação']
+    'Mudança de Local de Acervo': ['Documento de Identificação'],
+    'Manutenção':                 ['Documento de Identificação', 'Credenciamento do Armeiro']
   },
   'Alteração de Endereço':  ['Comprovante de Residência', 'Declaração de Residência'],
   'Inclusão de Atividade':  CHECKLIST_CR_INCLUSAO_RENOVCRAF,

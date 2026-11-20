@@ -405,7 +405,7 @@ function extraProcesso(p, orcamentos, demandas, responsavel) {
   // Ajuste manual salvo (via botão de olho na página de Extras) tem prioridade
   const aj = window._extrasAjustes && window._extrasAjustes[_ajusteExtraKey(p.id, responsavel)];
   if (aj && Number.isFinite(Number(aj.extra))) return Number(aj.extra);
-  const taxa = TAXAS_PROCESSO[p.TipoProcesso] || 0;
+  const taxa = taxaDoProcesso(p);
   const frac = fracaoExtraProcesso(p.TipoProcesso, responsavel);
   if (_extraFormulaNova(p)) {
     // Set/2026+: (valor do processo com desconto 5%/proporcional − taxa cheia) × %
@@ -571,7 +571,7 @@ async function renderPage() {
       case 'whatsapp':             await renderWhatsApp(); break;
       case 'processos/novo':       await renderProcessoForm(params.clienteId, params); break;
       case 'processos/editar':     await renderProcessoEditar(params.id); break;
-      case 'processos/detalhe':    await renderProcessoDetalhe(params.id); break;
+      case 'processos/detalhe':    await renderProcessoDetalhe(params.id); avisarGruAtrasada(window._processoDetalhe); break;
       case 'validades':            await renderValidades(); break;
       case 'importar-documentos':  await renderImportarDocumentos(); break;
       case 'renovacao-crafs':      await renderRenovacaoCRAFs(); break;
@@ -728,7 +728,7 @@ async function renderDashboard() {
                   <div style="font-size:13px;font-weight:600">${esc(p.TipoProcesso)}</div>
                   <div style="font-size:11px;color:var(--text-muted)">${esc(p.ClienteNome)}${ultReg ? ' · últ. mov.: ' + ultReg : ''}</div>
                 </div>
-                <span class="badge ${b.cls}" style="flex-shrink:0">${b.txt}</span>
+                <span class="badge ${b.cls}" style="flex-shrink:0">${b.txt}</span>${badgeAtencaoGru(p)}
               </div>`;
             }).join('');
           })()}
@@ -991,17 +991,68 @@ const TIPOS_SEM_GRU = ['SIMAF Adicional', 'Defesa de Notificação', 'Mudança d
 // ao deferir, atualizam as datas do CRAF existente (sem duplicar).
 const TIPOS_RENOVACAO_CRAF = ['Renovação de CRAF', 'Renovação de CRAF Sinarm'];
 function ehRenovacaoCRAF(tipo) { return TIPOS_RENOVACAO_CRAF.includes(tipo); }
+// GRU paga há mais de 15 dias e o processo continua em "Aguardando Pagamento GRU".
+const DIAS_ALERTA_GRU = 15;
+function alertaGruAtrasada(p) {
+  if (!p || p.Status !== 'Aguardando Pagamento GRU' || !p.GruPaga || !p.DataPagamentoGRU) return false;
+  const dias = daysBetween(normISO(p.DataPagamentoGRU));
+  return dias !== null && -dias > DIAS_ALERTA_GRU;
+}
+const MSG_ALERTA_GRU = 'Esse processo ficou mais de 15 dias aguardando o pagamento da GRU, confirmar o pagamento da taxa nos extratos e se tiver sido paga entrar em contato com a PF para averiguar o problema.';
+function badgeAtencaoGru(p) {
+  return alertaGruAtrasada(p)
+    ? ` <span class="badge" style="background:#dc2626;color:#fff;font-size:10px;margin-left:4px" title="${MSG_ALERTA_GRU}"><i class="bi bi-exclamation-triangle-fill me-1"></i>Atenção</span>`
+    : '';
+}
+function avisarGruAtrasada(p) {
+  if (!alertaGruAtrasada(p)) return;
+  document.getElementById('modal-alerta-gru')?.remove();
+  const ov = document.createElement('div');
+  ov.id = 'modal-alerta-gru';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px';
+  const dias = -daysBetween(normISO(p.DataPagamentoGRU));
+  ov.innerHTML = `<div style="background:#fff;border-radius:10px;padding:22px;max-width:440px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,.25);border-top:5px solid #dc2626">
+    <h3 style="margin:0 0 10px;font-size:16px;color:#dc2626"><i class="bi bi-exclamation-triangle-fill me-2"></i>Atenção</h3>
+    <p style="font-size:14px;color:#374151;margin:0 0 8px;line-height:1.5">${MSG_ALERTA_GRU}</p>
+    <p style="font-size:12px;color:var(--text-muted);margin:0 0 16px">GRU paga em ${fmtDate(normISO(p.DataPagamentoGRU))} (há ${dias} dias).</p>
+    <div style="text-align:right"><button class="btn btn-primary btn-sm" onclick="document.getElementById('modal-alerta-gru').remove()">Entendi</button></div>
+  </div>`;
+  document.body.appendChild(ov);
+}
+// Armas de um processo de renovação: "armaIds" (processo agrupado por acervo) ou a "armaId" única.
+function armasDoProcesso(p, dados) {
+  dados = dados || _dadosEspProc(p);
+  const lista = Array.isArray(dados.armaIds) && dados.armaIds.length ? dados.armaIds : [dados.armaId];
+  return lista.map(v => String(v || '').split('|')[0]).filter(Boolean);
+}
+// Quantos itens da demanda o processo cobre (renovação agrupada = 1 por arma).
+function qtdItensProcesso(p) { return ehRenovacaoCRAF(p && p.TipoProcesso) ? Math.max(1, armasDoProcesso(p).length) : 1; }
+// Taxa (GRU) do processo: na renovação agrupada, a taxa é por arma (ex.: R$ 88 x 3).
+function taxaDoProcesso(p) { return taxaProcessoTipo(p && p.TipoProcesso) * qtdItensProcesso(p); }
+// Checklist da renovação conforme o acervo das armas: Caçador tem "CTF + SIMAF" (e não "Habitualidade"); Atirador, o contrário.
+function checklistRenovacaoCRAF(tipo, acervos) {
+  const itens = getChecklist(tipo).filter(n => !/^ctf\s*\+\s*simaf$/i.test(n.trim()) && !/habitualidade/i.test(n));
+  if ((acervos || []).includes('Caçador')) itens.push('CTF + SIMAF');
+  if ((acervos || []).includes('Atirador')) itens.push('Habitualidade');
+  return itens.map(nome => ({ nome, concluido: false, observacao: '' }));
+}
+function _itensChecklistForm(tipo, subTipo) {
+  if (!ehRenovacaoCRAF(tipo)) return buildChecklistItems(tipo, subTipo);
+  const acervo = (document.querySelector('[name="proc_armaId"]')?.value || '').split('|')[1] || '';
+  return acervo ? checklistRenovacaoCRAF(tipo, [acervo]) : buildChecklistItems(tipo, subTipo);
+}
 function _dadosEspProc(p) { try { return JSON.parse((p && p.DadosEspecificosJSON) || '{}') || {}; } catch (e) { return {}; } }
 function armaIdDoProcesso(p, dados) { return String(((dados || _dadosEspProc(p)).armaId || '').split('|')[0] || ''); }
 // Processo de renovação de CRAF ainda em andamento (não deferido, indeferido nem desistência).
 function processoRenovCRAFAberto(p) { return !!p && ehRenovacaoCRAF(p.TipoProcesso) && !STATUS_FECHADOS.includes(p.Status); }
 // CRAF (documento) ligado a um processo de renovação: o gravado no processo ou,
 // se não houver, o CRAF da mesma arma (o que está em uso e com a validade mais longa).
-function crafDoProcessoRenovacao(p, dados, docs) {
+function crafDoProcessoRenovacao(p, dados, docs, armaIdEsp) {
   dados = dados || _dadosEspProc(p);
   const doCliente = (docs || []).filter(d => d.TipoDocumento === 'CRAF' && String(d.ClienteId) === String(p.ClienteId));
-  if (dados.docCrafId) { const d = doCliente.find(x => String(x.id) === String(dados.docCrafId)); if (d) return d; }
-  const armaId = armaIdDoProcesso(p, dados);
+  const docId = armaIdEsp ? ((dados.docCrafIds || {})[armaIdEsp] || (armaIdEsp === armaIdDoProcesso(p, dados) ? dados.docCrafId : null)) : dados.docCrafId;
+  if (docId) { const d = doCliente.find(x => String(x.id) === String(docId)); if (d) return d; }
+  const armaId = armaIdEsp || armaIdDoProcesso(p, dados);
   if (!armaId) return null;
   const cands = doCliente.filter(d => String(d.ArmaVinculadaId || '') === armaId);
   if (!cands.length) return null;
@@ -1014,8 +1065,7 @@ function crafsEmRenovacao(processos, docs) {
   const mapa = {};
   (processos || []).forEach(p => {
     if (!processoRenovCRAFAberto(p) || !String(p.NumeroProtocolo || '').trim()) return;
-    const d = crafDoProcessoRenovacao(p, null, docs);
-    if (d) mapa[String(d.id)] = p;
+    armasDoProcesso(p).forEach(a => { const d = crafDoProcessoRenovacao(p, null, docs, a); if (d) mapa[String(d.id)] = p; });
   });
   return mapa;
 }
@@ -2213,7 +2263,7 @@ async function renderClientePerfil(id, tab = 'dados') {
   if (tab === 'dados')           tabContent = renderPerfilDados(cliente);
   else if (tab === 'armas')      tabContent = renderPerfilArmas(armas, id, cliente);
   else if (tab === 'ibama')      tabContent = renderPerfilIBAMA(cliente);
-  else if (tab === 'documentos') tabContent = renderPerfilDocumentos(documentos, id, cliente, processos);
+  else if (tab === 'documentos') tabContent = renderPerfilDocumentos(documentos, id, cliente, processos, armas);
   else if (tab === 'emissao')    tabContent = renderPerfilEmissaoDocs(cliente, id);
   else if (tab === 'processos')  tabContent = renderPerfilProcessos(processos, id);
   else if (tab === 'pagamentos') { const _od = await _carregarOrcamentosDemandas(); const _cred = await _carregarCreditos(); tabContent = renderPerfilPagamentos(processos, id, _od.orcamentos, _od.demandas, _cred); }
@@ -2943,7 +2993,7 @@ async function executarTransferenciaArma(armaId, origemId, destId, acervo) {
 
 // Texto puro de Arma/Local de um documento (para o filtro)
 function _docArmaLocalTxt(d) {
-  if (d.TipoDocumento === 'CRAF') return d.ArmaVinculadaDesc || '';
+  if (d.TipoDocumento === 'CRAF') return [((window._docsPerfil?.armasMap || {})[String(d.ArmaVinculadaId)] || {}).Especie, d.ArmaVinculadaDesc].filter(Boolean).join(' ');
   if (d.TipoDocumento === 'Guia de Tráfego') {
     const loc = d.CidadeGuia ? (d.CidadeGuia + (d.UFGuia ? '/' + d.UFGuia : '')) : (d.NomeClubeTiro || '');
     return [d.ArmaVinculadaDesc || '', d.TipoGuia || '', loc, d.NumeroGT ? 'N° GT: ' + d.NumeroGT : ''].filter(Boolean).join(' ');
@@ -2971,7 +3021,10 @@ function _docsRowsHtml(docs, clienteId) {
     const desconsiderada = d.Desconsiderada === 'sim';
     let armaLocal = '—';
     if (d.TipoDocumento === 'CRAF') {
-      armaLocal = d.ArmaVinculadaDesc ? esc(d.ArmaVinculadaDesc) : '—';
+      const especie = (window._docsPerfil?.armasMap?.[String(d.ArmaVinculadaId)] || {}).Especie || '';
+      const desc = d.ArmaVinculadaDesc || '';
+      const comTipo = especie && !_armaUp(desc).includes(_armaUp(especie)) ? `${especie} · ${desc}` : desc;
+      armaLocal = comTipo ? esc(comTipo) : (especie ? esc(especie) : '—');
     } else if (ehGuia) {
       const tgia = d.TipoGuia ? `<span class="badge badge-blue" style="font-size:10px">${esc(d.TipoGuia)}</span>` : '';
       const arma = d.ArmaVinculadaDesc ? esc(d.ArmaVinculadaDesc) : '';
@@ -3068,8 +3121,10 @@ function filtrarDocsPerfil() {
   if (tb) tb.innerHTML = _docsRowsHtml(_ordenarDocsPerfil(lista), ctx.clienteId);
 }
 
-function renderPerfilDocumentos(docs, clienteId, cliente, processos = []) {
-  window._docsPerfil = { docs, clienteId, cliente, emRenov: crafsEmRenovacao(processos, docs) };
+function renderPerfilDocumentos(docs, clienteId, cliente, processos = [], armas = []) {
+  const armasMap = {};
+  (armas || []).forEach(a => { armasMap[String(a.id)] = a; });
+  window._docsPerfil = { docs, clienteId, cliente, emRenov: crafsEmRenovacao(processos, docs), armasMap };
   if (window._docsPerfilSort && String(window._docsPerfilSort.clienteId) !== String(clienteId)) window._docsPerfilSort = null;
   const tipos = [...new Set(docs.map(d => d.TipoDocumento).filter(Boolean))].sort();
   const selSty = 'border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:12px';
@@ -3098,7 +3153,7 @@ function renderPerfilDocumentos(docs, clienteId, cliente, processos = []) {
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-outline" onclick="verHistoricoDocumentos('${clienteId}')"><i class="bi bi-clock-history"></i> Histórico</button>
         <button class="btn btn-outline" onclick="abrirInformarVencimento('${clienteId}')"><i class="bi bi-chat-left-text"></i> Informar Vencimento</button>
-        ${(CONFIG.waGatewayUrl && isExtrasUser() && !isClienteInativo(cliente)) ? `<button class="btn btn-outline" onclick="importarDocsPastaCliente('${clienteId}')" title="Lê os PDFs da pasta DOCUMENTOS PORTAL do cliente (CRAF, Guia de Tráfego, SIMAF e CTF)"><i class="bi bi-folder-symlink"></i> Importar da pasta</button>` : ''}
+        ${(CONFIG.waGatewayUrl && isExtrasUser() && !isClienteInativo(cliente)) ? `<button class="btn btn-outline" onclick="importarDocsPastaCliente('${clienteId}')" title="Lê os PDFs da pasta DOCUMENTOS PORTAL do cliente (CRAF, Guia de Tráfego, SIMAF, CTF, Avaliação Psicológica e Teste de Tiro)"><i class="bi bi-folder-symlink"></i> Importar da pasta</button>` : ''}
         ${!isClienteInativo(cliente) ? `<button class="btn btn-primary" onclick="navigate('documentos/novo',{clienteId:'${clienteId}'})"><i class="bi bi-plus-lg"></i> Adicionar Documento</button>` : ''}
       </div>
     </div>
@@ -3203,7 +3258,7 @@ function _descricaoDocVenc(d, armaMap) {
     const tg = d.TipoGuia || '';
     let local = '';
     if (tg === 'Tiro Esportivo' || tg === 'Caça-Treinamento Tiro') local = d.NomeClubeTiro || '';
-    else if (tg === 'Caça') local = [d.CidadeGuia, d.UFGuia].filter(Boolean).join('/');
+    else if (TIPOS_GUIA_CIDADE.includes(tg)) local = [d.CidadeGuia, d.UFGuia].filter(Boolean).join('/');
     const endOrigem = d.EnderecoGuia || '';
     const partes = ['GT', tg, marcaModelo, local, endOrigem ? `End. Origem ${endOrigem}` : ''].filter(Boolean);
     return partes.join(' - ') + (venc ? ` (vence em ${venc})` : '');
@@ -3416,7 +3471,7 @@ function renderPerfilProcessos(processos, clienteId) {
                   <td>${fmtDate(p.DataProtocoloSistema ? p.DataProtocoloSistema.split('T')[0] : '')}</td>
                   <td>${fmtDate(p.DataAbertura ? p.DataAbertura.split('T')[0] : '')}</td>
                   <td><span style="font-weight:600">${tempoDecorridoProcesso(p)}</span></td>
-                  <td><span class="badge ${b.cls}">${b.txt}</span></td>
+                  <td><span class="badge ${b.cls}">${b.txt}</span>${badgeAtencaoGru(p)}</td>
                   <td><div class="btn-group">
                     <button class="btn btn-outline btn-sm" onclick="event.stopPropagation();navigate('processos/detalhe',{id:'${p.id}'})"><i class="bi bi-eye"></i></button>
                     <button class="btn btn-outline btn-sm" onclick="event.stopPropagation();navigate('processos/editar',{id:'${p.id}'})"><i class="bi bi-pencil"></i></button>
@@ -3965,14 +4020,16 @@ async function renderDocumentoForm(clienteId, id = null) {
                 <option value="Caça"                   ${d.TipoGuia==='Caça'?'selected':''}>Caça</option>
                 <option value="Caça-Treinamento Tiro"  ${d.TipoGuia==='Caça-Treinamento Tiro'?'selected':''}>Caça-Treinamento Tiro</option>
                 <option value="Tiro Esportivo"          ${d.TipoGuia==='Tiro Esportivo'?'selected':''}>Tiro Esportivo</option>
+                <option value="Mudança de Local de Acervo" ${d.TipoGuia==='Mudança de Local de Acervo'?'selected':''}>Mudança de Local de Acervo</option>
+                <option value="Manutenção"              ${d.TipoGuia==='Manutenção'?'selected':''}>Manutenção</option>
               </select>
             </div>
             <div><label>N° GT</label><input name="NumeroGT" value="${esc(d.NumeroGT||'')}" /></div>
           </div>
           <div id="guia-caca" style="display:none;margin-top:8px">
             <div class="form-grid">
-              <div><label>Cidade (Caça)</label><input name="CidadeGuia" value="${esc(d.CidadeGuia||'')}" /></div>
-              <div><label>UF (Caça)</label><input name="UFGuia" value="${esc(d.UFGuia||'')}" maxlength="2" style="text-transform:uppercase" /></div>
+              <div><label>Cidade (destino)</label><input name="CidadeGuia" value="${esc(d.CidadeGuia||'')}" /></div>
+              <div><label>UF (destino)</label><input name="UFGuia" value="${esc(d.UFGuia||'')}" maxlength="2" style="text-transform:uppercase" /></div>
             </div>
           </div>
           <div id="guia-clube" style="display:none;margin-top:8px">
@@ -4011,8 +4068,10 @@ function onEmissaoChange(val) {
   const tipo = document.querySelector('[name="TipoDocumento"]')?.value;
   if (tipo === 'CTF' && val) document.getElementById('doc-validade').value = addDays(val, 90);
 }
+// Guias que levam só a cidade/UF de destino (não têm clube)
+const TIPOS_GUIA_CIDADE = ['Caça', 'Mudança de Local de Acervo', 'Manutenção'];
 function onTipoGuiaChange(tipo) {
-  document.getElementById('guia-caca').style.display  = tipo === 'Caça' ? '' : 'none';
+  document.getElementById('guia-caca').style.display  = TIPOS_GUIA_CIDADE.includes(tipo) ? '' : 'none';
   document.getElementById('guia-clube').style.display = (tipo === 'Caça-Treinamento Tiro' || tipo === 'Tiro Esportivo') ? '' : 'none';
 }
 function preencherClubeGuia(clubeId, prefix) {
@@ -4073,7 +4132,7 @@ async function salvarDocumento(e, clienteId, id) {
     fields.TipoGuia     = fd.get('TipoGuia');
     fields.NumeroGT     = fd.get('NumeroGT') || '';
     const tguia = fd.get('TipoGuia');
-    if (tguia === 'Caça') {
+    if (TIPOS_GUIA_CIDADE.includes(tguia)) {
       fields.CidadeGuia = fd.get('CidadeGuia');
       fields.UFGuia     = fd.get('UFGuia');
     } else {
@@ -4259,7 +4318,7 @@ function renderProcessosRows(lista) {
       <td>${fmtDate(p.DataPrazo?p.DataPrazo.split('T')[0]:'')}</td>
       <td style="font-size:12px;color:var(--text-muted)">${ultimoReg || '—'}</td>
       <td>
-        <span class="badge ${b.cls}">${b.txt}</span>
+        <span class="badge ${b.cls}">${b.txt}</span>${badgeAtencaoGru(p)}
         ${p.Restituido ? '<span class="badge" style="background:#9333ea;color:#fff;margin-left:4px;font-size:11px"><i class="bi bi-arrow-return-left"></i> Restituído</span>' : ''}
       </td>
       <td><div class="btn-group">
@@ -4451,7 +4510,7 @@ async function renderConsultaProcessos() {
                 <td style="font-size:12px">${p.NumeroProtocolo ? esc(p.NumeroProtocolo) : '<span style="color:var(--text-muted)">—</span>'}</td>
                 <td>${p.Responsavel ? `<span class="badge badge-blue">${esc(p.Responsavel)}</span>` : '<span style="color:var(--text-muted)">—</span>'}</td>
                 <td style="font-size:12px;color:${ultReg ? 'var(--danger)' : 'var(--text-muted)'}"><strong>${ultReg || '—'}</strong></td>
-                <td><span class="badge ${b.cls}">${b.txt}</span></td>
+                <td><span class="badge ${b.cls}">${b.txt}</span>${badgeAtencaoGru(p)}</td>
                 <td>${tem2fa ? '<span class="badge badge-blue" title="Verificação em 2 etapas ativa"><i class="bi bi-shield-lock-fill"></i> 2FA</span>' : '<span style="color:var(--text-muted);font-size:12px">—</span>'}</td>
                 <td onclick="event.stopPropagation()">
                   <button class="btn btn-outline btn-sm" onclick="navigate('processos/detalhe',{id:'${p.id}'})"><i class="bi bi-eye"></i></button>
@@ -4597,10 +4656,10 @@ async function renderMeusProcessos(tab = 'aprotocolar') {
           <div style="display:flex;align-items:center;gap:8px">
             ${total > 0 ? `<span style="font-size:12px;color:var(--text-muted)">${total - pendentes.length}/${total} itens</span>` : ''}
             ${p.Status === 'Deferido'
-              ? `<span class="badge ${b.cls}">${b.txt}</span>`
+              ? `<span class="badge ${b.cls}">${b.txt}</span>${badgeAtencaoGru(p)}`
               : `<select onclick="event.stopPropagation()" onchange="alterarStatusNaLista('${p.id}', this.value)" title="Alterar status" style="font-size:11px;padding:3px 6px;border:1px solid var(--border);border-radius:6px;max-width:200px">
                   ${STATUS_PROCESSO.filter(s => s !== 'Deferido').map(s => `<option value="${esc(s)}" ${p.Status === s ? 'selected' : ''}>${esc(s)}</option>`).join('')}
-                </select>`}
+                </select>`}${badgeAtencaoGru(p)}
           </div>
         </div>
         ${pendentes.length > 0 ? (mostrarPrioridade ? `
@@ -5120,7 +5179,7 @@ function buildCamposGuia(armasOpts, clienteId) {
       <div><label>Tipo de Guia</label>
         <select name="proc_tipoGuia" onchange="onTipoGuiaProcesso(this.value)">
           <option value="">Selecione...</option>
-          <option>Caça</option><option>Caça-Treinamento Tiro</option><option>Tiro Esportivo</option><option>Mudança de Local de Acervo</option>
+          <option>Caça</option><option>Caça-Treinamento Tiro</option><option>Tiro Esportivo</option><option>Mudança de Local de Acervo</option><option>Manutenção</option>
         </select>
       </div>
     </div>
@@ -5190,7 +5249,7 @@ function onEndMudancaSel(qual, val) {
 
 function onTipoGuiaProcesso(tipo) {
   const isMudanca = tipo === 'Mudança de Local de Acervo';
-  document.getElementById('proc-guia-caca').style.display  = tipo === 'Caça' ? '' : 'none';
+  document.getElementById('proc-guia-caca').style.display  = (tipo === 'Caça' || tipo === 'Manutenção') ? '' : 'none';
   document.getElementById('proc-guia-clube').style.display = (tipo === 'Caça-Treinamento Tiro' || tipo === 'Tiro Esportivo') ? '' : 'none';
   const mud = document.getElementById('proc-guia-mudanca');
   if (mud) mud.style.display = isMudanca ? '' : 'none';
@@ -5229,9 +5288,9 @@ function onArmaGuiaChange(val) {
   const sel = document.querySelector('[name="proc_tipoGuia"]');
   if (!sel) return;
   let opts;
-  if (atividade === 'Caçador')      opts = ['Caça', 'Caça-Treinamento Tiro', 'Mudança de Local de Acervo'];
-  else if (atividade === 'Atirador') opts = ['Tiro Esportivo', 'Mudança de Local de Acervo'];
-  else                               opts = ['Caça', 'Caça-Treinamento Tiro', 'Tiro Esportivo', 'Mudança de Local de Acervo'];
+  if (atividade === 'Caçador')      opts = ['Caça', 'Caça-Treinamento Tiro', 'Mudança de Local de Acervo', 'Manutenção'];
+  else if (atividade === 'Atirador') opts = ['Tiro Esportivo', 'Mudança de Local de Acervo', 'Manutenção'];
+  else                               opts = ['Caça', 'Caça-Treinamento Tiro', 'Tiro Esportivo', 'Mudança de Local de Acervo', 'Manutenção'];
   const atual = sel.value;
   sel.innerHTML = '<option value="">Selecione...</option>' + opts.map(o => `<option ${o === atual ? 'selected' : ''}>${o}</option>`).join('');
   if (!opts.includes(atual)) { sel.value = ''; onTipoGuiaProcesso(''); }
@@ -5300,6 +5359,10 @@ function onArmaAcervoChange(val) {
   const atividade = parts[1] || '';
   const input = document.querySelector('[name="proc_acervoAtual"]');
   if (input) input.value = atividade;
+  // Renovação de CRAF: o checklist muda conforme o acervo da arma (Caçador x Atirador)
+  const tipo = document.querySelector('[name="TipoProcesso"]')?.value;
+  const el = document.getElementById('checklist-preview');
+  if (ehRenovacaoCRAF(tipo) && el) el.innerHTML = renderChecklistForm(_itensChecklistForm(tipo));
 }
 
 function buildCamposMudancaAcervo(categoriasCliente = []) {
@@ -5665,7 +5728,7 @@ function toggleChecklistFormItem(i) {
 }
 
 function coletarChecklist(tipo, subTipo = null) {
-  const items = buildChecklistItems(tipo, subTipo);
+  const items = _itensChecklistForm(tipo, subTipo);
   return items.map((item, i) => {
     const check = document.getElementById(`clcheck-${i}`);
     const obs   = document.getElementById(`clobs-${i}`);
@@ -5768,7 +5831,7 @@ async function verificarConclusaoDemanda(demandaId) {
     if (demanda.status === 'Concluída') return;
     const vinculados = todosProcessos.filter(p => p.demandaId && String(p.demandaId) === String(demandaId));
     const concluida = (demanda.itens || []).every(item => {
-      const criados = vinculados.filter(p => p.TipoProcesso === item.tipo).length;
+      const criados = vinculados.filter(p => p.TipoProcesso === item.tipo).reduce((n, p) => n + qtdItensProcesso(p), 0);
       return criados >= item.qtd;
     });
     if (concluida) {
@@ -5795,7 +5858,7 @@ async function verificarReaberturaDemanda(demandaId) {
     const demanda = arr[idx];
     if (demanda.status !== 'Concluída') return;
     const vinculados = todosProcessos.filter(p => p.demandaId && String(p.demandaId) === String(demandaId));
-    const incompleta = (demanda.itens || []).some(item => vinculados.filter(p => p.TipoProcesso === item.tipo).length < item.qtd);
+    const incompleta = (demanda.itens || []).some(item => vinculados.filter(p => p.TipoProcesso === item.tipo).reduce((n, p) => n + qtdItensProcesso(p), 0) < item.qtd);
     if (incompleta) {
       arr[idx] = { ...demanda, status: 'Aberta' };
       await App.graph._writeFile('demandas', arr);
@@ -6791,7 +6854,9 @@ const _CHECKLIST_COMPROVANTE_RESIDENCIA = {
 
 // Card de aviso quando o cliente não é titular de um endereço e o processo pede comprovante de residência
 // Quadro do processo de renovação: qual CRAF ele vai renovar e a situação.
-function _crafVinculadoProcessoHtml(p, doc) {
+function _crafVinculadoProcessoHtml(p, docs) {
+  if (Array.isArray(docs)) return docs.length ? docs.map(d => _crafVinculadoProcessoHtml(p, d)).join('') : _crafVinculadoProcessoHtml(p, null);
+  const doc = docs;
   if (!doc) {
     return `<div style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:13px;color:var(--text-muted)">
       <i class="bi bi-file-earmark-text me-1"></i>Nenhum CRAF desta arma está registrado na aba Documentos do cliente — ao deferir, o sistema cria um.</div>`;
@@ -6851,7 +6916,10 @@ async function renderProcessoDetalhe(id) {
   // Renovação de CRAF: CRAF (documento) ao qual o processo está ligado
   let _crafVinculado = null;
   if (ehRenovacaoCRAF(processo.TipoProcesso)) {
-    try { _crafVinculado = crafDoProcessoRenovacao(processo, dadosEspRaw, await App.getDocumentos()); } catch (e) {}
+    try {
+      const _docsC = await App.getDocumentos();
+      _crafVinculado = armasDoProcesso(processo, dadosEspRaw).map(a => crafDoProcessoRenovacao(processo, dadosEspRaw, _docsC, a));
+    } catch (e) {}
   }
 
   // Modelo novo (por orçamento): processos vindos de uma demanda mostram o orçamento
@@ -6894,6 +6962,12 @@ async function renderProcessoDetalhe(id) {
         }
         continue;
       }
+      if (k === 'docCrafId' || k === 'docCrafIds') continue;   // vínculo interno com o CRAF
+      if (k === 'armaIds') {
+        if (Array.isArray(v) && v.length > 1) dadosEsp[k] = (await Promise.all(v.map(_resolveArma))).join(' · ');
+        continue;
+      }
+      if (k === 'armaId' && Array.isArray(dadosEspRaw.armaIds) && dadosEspRaw.armaIds.length > 1) continue;
       if (k === 'armaId' || k === 'armaIdVendedor' || k === 'armaIdMesmoTitular') {
         dadosEsp[k] = await _resolveArma(v);
         continue;
@@ -6977,7 +7051,7 @@ async function renderProcessoDetalhe(id) {
                 const _clubeKeys = { nomeClube: 'Nome do Clube', crClube: 'CR do Clube', enderecoClube: 'Endereço do Clube' };
                 return Object.entries(dadosEsp).filter(([,v]) => v).map(([k,v]) => {
                 const LABELS_DADOS = {
-                  armaId: 'Arma', armaIdVendedor: 'Arma do Vendedor', armaIdMesmoTitular: 'Arma',
+                  armaId: 'Arma', armaIds: 'Armas', acervo: 'Acervo', armaIdVendedor: 'Arma do Vendedor', armaIdMesmoTitular: 'Arma',
                   nomeComprador: 'Nome do Comprador', nomeVendedor: 'Nome do Vendedor',
                   compradorSistema: 'Comprador no Sistema', vendedorSistema: 'Vendedor no Sistema',
                   nomeClube: 'Nome do Clube', crClube: 'CR do Clube', enderecoClube: 'Endereço do Clube', tipoGuia: 'Tipo de Guia',
@@ -7093,7 +7167,7 @@ async function renderProcessoDetalhe(id) {
             <select id="sel-status" onchange="atualizarStatus('${id}',this.value)" style="margin-bottom:8px">
               ${statusOpts}
             </select>
-            <span id="status-badge-detalhe" class="badge ${b.cls}" style="font-size:13px">${b.txt}</span>`}
+            <span id="status-badge-detalhe" class="badge ${b.cls}" style="font-size:13px">${b.txt}</span>`}${badgeAtencaoGru(processo)}
             ${processo.Status === 'Processo Futuro' && processo.ProcessoFuturoId ? `
             <div id="container-processo-futuro" style="margin-top:8px;padding:10px;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:8px">
               <div style="font-size:12px;color:#7c3aed"><i class="bi bi-hourglass me-1"></i>Aguardando: <strong>${esc(processo.ProcessoFuturoNome||'—')}</strong></div>
@@ -7119,14 +7193,7 @@ async function renderProcessoDetalhe(id) {
               </div>
               `}
             </div>
-            ${processo.Restituido ? `<div style="margin-top:12px;padding:12px;background:#fdf4ff;border:1px solid #d8b4fe;border-radius:8px">
-              <div style="font-size:12px;font-weight:700;color:#9333ea;margin-bottom:8px"><i class="bi bi-arrow-return-left me-1"></i>Processo Restituído</div>
-              <form onsubmit="salvarMotivoRestituicao(event,'${id}')">
-                <label style="font-size:12px">Motivo</label>
-                <textarea name="MotivoRestituicao" rows="2" style="margin-top:4px;border-color:#d8b4fe;font-size:13px" placeholder="Motivo da restituição...">${esc(processo.MotivoRestituicao||'')}</textarea>
-                <button type="submit" class="btn btn-sm" style="margin-top:6px;border:1px solid #9333ea;color:#9333ea;background:transparent;border-radius:6px;padding:4px 12px;cursor:pointer;font-size:12px"><i class="bi bi-floppy"></i> Salvar Motivo</button>
-              </form>
-            </div>` : ''}
+            ${processo.Restituido ? _restituicoesHtml(processo, id) : ''}
             <div style="margin-top:${processo.Restituido?'8':'16'}px">
               ${STATUS_BLOQUEIO_WHATSAPP.includes(processo.Status)
                 ? `<button class="btn btn-whatsapp" style="width:100%;opacity:.45;cursor:not-allowed" disabled title="Não disponível para este status"><i class="bi bi-whatsapp"></i> Avisar Cliente via WhatsApp</button>`
@@ -7228,7 +7295,7 @@ function _cadeiaLinhaHtml(p, nivel, currentId) {
   const auto = _dadosEsp(p).geradoAutomatico ? ' <span style="font-size:10px;color:var(--text-muted)">· automático</span>' : '';
   return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;margin-left:${indent}px;font-size:12px;${atual ? 'background:#f0f9ff;border-radius:6px;padding-left:6px' : ''}">
     <span style="flex:1;min-width:0">${seta}${nomeHtml}${auto}</span>
-    <span class="badge ${b.cls}" style="font-size:10px;flex-shrink:0">${b.txt}</span>
+    <span class="badge ${b.cls}" style="font-size:10px;flex-shrink:0">${b.txt}</span>${badgeAtencaoGru(p)}
   </div>`;
 }
 
@@ -7375,7 +7442,7 @@ async function atualizarStatus(id, novoStatus) {
       usuario: App.account?.name || App.account?.username || 'Desconhecido'
     });
     const updates = { Status: novoStatus, HistoricoStatus: JSON.stringify(historico) };
-    if (novoStatus === 'Restituído') updates.Restituido = true;
+    if (novoStatus === 'Restituído') { updates.Restituido = true; updates.Restituicoes = JSON.stringify(_novaRestituicao(proc)); }
     if (window._processoDetalhe?.ProcessoFuturoId) {
       updates.ProcessoFuturoId   = null;
       updates.ProcessoFuturoNome = null;
@@ -7395,8 +7462,9 @@ async function atualizarStatus(id, novoStatus) {
     toast('Status atualizado!', 'success');
     if (window._processoDetalhe) {
       window._processoDetalhe.Status = novoStatus;
-      if (novoStatus === 'Restituído') window._processoDetalhe.Restituido = true;
+      if (novoStatus === 'Restituído') { window._processoDetalhe.Restituido = true; window._processoDetalhe.Restituicoes = updates.Restituicoes; }
     }
+    if (novoStatus === 'Restituído') { await renderProcessoDetalhe(id); return; }
     const container = document.getElementById('container-processo-futuro');
     if (container) container.remove();
     if (novoStatus === 'Deferido') liberarProcessosFuturos(id);
@@ -7723,33 +7791,36 @@ async function deferirProcesso(id) {
       } else if (ehRenovacaoCRAF(tipo)) {
         // Já existe CRAF dessa arma no perfil? Só atualiza as datas. Senão, cria um novo.
         try {
-          const armaId = (dados.armaId || '').split('|')[0];
-          let armaDesc = '';
-          if (armaId) {
+          const docsAtuais = await App.getDocumentos();
+          let nAtual = 0, nNovo = 0;
+          _rev.docsAntes = [];
+          for (const armaId of armasDoProcesso(p, dados)) {
+            let armaDesc = '';
             try { const arma = await App.graph.getItem(CONFIG.listas.armas, armaId); armaDesc = `${arma.Especie||''} ${arma.Calibre||''} ${arma.Marca||''}`.trim(); } catch(e3) {}
+            const docExistente = crafDoProcessoRenovacao(p, dados, docsAtuais, armaId);
+            if (docExistente) {
+              _rev.docsAntes.push({ id: String(docExistente.id), fields: { DataEmissao: docExistente.DataEmissao || null, DataValidade: docExistente.DataValidade || null } });
+              await App.graph.updateItem(CONFIG.listas.documentos, docExistente.id, {
+                DataEmissao:  _dataEmissaoCRAF || docExistente.DataEmissao || null,
+                DataValidade: _dataValidadeCRAF || docExistente.DataValidade || null,
+              });
+              await registrarHistDoc(p.ClienteId, docExistente, 'Editado');
+              nAtual++;
+            } else {
+              const novoDoc = await App.graph.createItem(CONFIG.listas.documentos, {
+                ClienteId:    p.ClienteId,
+                ClienteNome:  p.ClienteNome || '',
+                TipoDocumento: 'CRAF',
+                ArmaVinculadaId:   armaId || null,
+                ArmaVinculadaDesc: armaDesc,
+                DataEmissao:  _dataEmissaoCRAF || null,
+                DataValidade: _dataValidadeCRAF || null,
+              });
+              await registrarHistDoc(p.ClienteId, novoDoc, 'Cadastrado');
+              nNovo++;
+            }
           }
-          const docExistente = crafDoProcessoRenovacao(p, dados, await App.getDocumentos());
-          if (docExistente) {
-            _rev.docsAntes = [{ id: String(docExistente.id), fields: { DataEmissao: docExistente.DataEmissao || null, DataValidade: docExistente.DataValidade || null } }];
-            await App.graph.updateItem(CONFIG.listas.documentos, docExistente.id, {
-              DataEmissao:  _dataEmissaoCRAF || docExistente.DataEmissao || null,
-              DataValidade: _dataValidadeCRAF || docExistente.DataValidade || null,
-            });
-            await registrarHistDoc(p.ClienteId, docExistente, 'Editado');
-            toast('Processo deferido! Datas do CRAF atualizadas nos documentos do cliente.', 'success');
-          } else {
-            const novoDoc = await App.graph.createItem(CONFIG.listas.documentos, {
-              ClienteId:    p.ClienteId,
-              ClienteNome:  p.ClienteNome || '',
-              TipoDocumento: 'CRAF',
-              ArmaVinculadaId:   armaId || null,
-              ArmaVinculadaDesc: armaDesc,
-              DataEmissao:  _dataEmissaoCRAF || null,
-              DataValidade: _dataValidadeCRAF || null,
-            });
-            await registrarHistDoc(p.ClienteId, novoDoc, 'Cadastrado');
-            toast('Processo deferido! CRAF adicionado aos documentos do cliente.', 'success');
-          }
+          toast(`Processo deferido! ${[nAtual ? `${nAtual} CRAF(s) com as datas atualizadas` : '', nNovo ? `${nNovo} CRAF(s) novo(s) nos documentos` : ''].filter(Boolean).join(' e ')}.`, 'success');
           App.invalidateCache('documentos');
         } catch(e2) { toast('Deferido, mas não foi possível registrar o CRAF: ' + e2.message, 'warning'); }
       } else if (TIPOS_TRANSFERENCIA.includes(tipo)) {
@@ -8678,6 +8749,55 @@ function solicitarDeclaracao(tipo) {
   window.open(`https://wa.me/55${celular}?text=${encodeURIComponent(msg)}`, '_blank');
 }
 
+// Lista das restituições do processo: [{ n, data, usuario, motivo, motivoPor, motivoEm }].
+// Processos antigos (antes da lista) têm só Restituido + MotivoRestituicao: viram a 1ª.
+function restituicoesDoProcesso(p) {
+  let arr = [];
+  try { arr = JSON.parse((p && p.Restituicoes) || '[]'); } catch (e) {}
+  if (!Array.isArray(arr)) arr = [];
+  if (!arr.length && p && p.Restituido) {
+    let data = '';
+    try { const h = JSON.parse(p.HistoricoStatus || '[]').find(x => x.status === 'Restituído'); if (h) data = h.data || ''; } catch (e) {}
+    arr = [{ n: 1, data, usuario: '', motivo: p.MotivoRestituicao || '' }];
+  }
+  return arr;
+}
+// Acrescenta uma nova restituição (2ª, 3ª...). Não repete se a última ainda está sem motivo e o status já era Restituído.
+function _novaRestituicao(proc) {
+  const arr = restituicoesDoProcesso(proc);
+  const ultima = arr[arr.length - 1];
+  if (ultima && proc.Status === 'Restituído' && !ultima.motivo) return arr;
+  arr.push({ n: arr.length + 1, data: new Date().toLocaleDateString('pt-BR'), usuario: getCurrentUserName(), motivo: '' });
+  return arr;
+}
+
+function _restituicoesHtml(processo, id) {
+  const arr = restituicoesDoProcesso(processo);
+  if (!arr.length) return '';
+  const admin = isAdminUser();
+  const editando = window._restEditando && window._restEditando.id === String(id) ? window._restEditando.idx : -1;
+  return `<div style="margin-top:12px;padding:12px;background:#fdf4ff;border:1px solid #d8b4fe;border-radius:8px">
+    <div style="font-size:12px;font-weight:700;color:#9333ea;margin-bottom:8px"><i class="bi bi-arrow-return-left me-1"></i>Processo Restituído${arr.length > 1 ? ` (${arr.length} vezes)` : ''}</div>
+    ${arr.map((r, i) => {
+      const titulo = `<div style="font-size:12px;font-weight:600;color:#6b21a8">${r.n || i + 1}ª restituição${r.data ? ' — ' + esc(r.data) : ''}${r.usuario ? ' · ' + esc(r.usuario) : ''}</div>`;
+      const aberto = !r.motivo || i === editando;
+      if (aberto) {
+        return `<div style="margin-bottom:10px">${titulo}
+          <form onsubmit="salvarMotivoRestituicao(event,'${id}',${i})">
+            <textarea name="MotivoRestituicao" rows="2" style="margin-top:4px;border-color:#d8b4fe;font-size:13px" placeholder="Motivo da ${r.n || i + 1}ª restituição...">${esc(r.motivo || '')}</textarea>
+            <button type="submit" class="btn btn-sm" style="margin-top:6px;border:1px solid #9333ea;color:#9333ea;background:transparent;border-radius:6px;padding:4px 12px;cursor:pointer;font-size:12px"><i class="bi bi-floppy"></i> Salvar Motivo</button>
+            ${i === editando ? `<button type="button" class="btn btn-ghost btn-sm" style="margin-top:6px" onclick="window._restEditando=null;renderProcessoDetalhe('${id}')">Cancelar</button>` : ''}
+          </form></div>`;
+      }
+      return `<div style="margin-bottom:10px">${titulo}
+        <div style="font-size:13px;color:#374151;background:#fff;border:1px solid #e9d5ff;border-radius:6px;padding:6px 8px;margin-top:4px;white-space:pre-wrap">${esc(r.motivo)}</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px;display:flex;align-items:center;gap:6px"><i class="bi bi-lock-fill"></i>${r.motivoPor ? `Registrado por ${esc(r.motivoPor)}${r.motivoEm ? ' em ' + esc(r.motivoEm) : ''}` : 'Registrado'}
+          ${admin ? `<a style="cursor:pointer;color:#9333ea;margin-left:auto" onclick="window._restEditando={id:'${id}',idx:${i}};renderProcessoDetalhe('${id}')"><i class="bi bi-pencil"></i> Editar</a>` : ''}</div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
 async function restituirProcesso(id) {
   if (!confirm('Confirmar que este processo foi restituído?')) return;
   showLoading();
@@ -8691,10 +8811,12 @@ async function restituirProcesso(id) {
       status:  'Restituído',
       usuario: App.account?.name || App.account?.username || 'Desconhecido'
     });
+    const restituicoes = _novaRestituicao(proc);
     await App.graph.updateItem(CONFIG.listas.processos, id, {
       Restituido:      true,
       Status:          'Restituído',
       HistoricoStatus: JSON.stringify(historico),
+      Restituicoes:    JSON.stringify(restituicoes),
     });
     App.invalidateCache('processos');
     if (window._processoDetalhe) {
@@ -8707,30 +8829,39 @@ async function restituirProcesso(id) {
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
-async function salvarMotivoRestituicao(e, id) {
+async function salvarMotivoRestituicao(e, id, idx) {
   e.preventDefault();
   const fd = new FormData(e.target);
-  const motivo = fd.get('MotivoRestituicao') || '';
+  const motivo = (fd.get('MotivoRestituicao') || '').trim();
+  if (!motivo) { toast('Escreva o motivo da restituição.', 'warning'); return; }
   showLoading();
   try {
     const proc = await App.graph.getItem(CONFIG.listas.processos, id);
+    const restituicoes = restituicoesDoProcesso(proc);
+    const i = (idx == null || !restituicoes[idx]) ? restituicoes.length - 1 : idx;
+    if (i < 0) throw new Error('Este processo não tem restituição registrada.');
+    if (restituicoes[i].motivo && !isAdminUser()) throw new Error('Motivo já registrado — só um administrador pode editar.');
+    const agoraR = new Date();
+    restituicoes[i] = { ...restituicoes[i], motivo, motivoPor: getCurrentUserName(),
+      motivoEm: agoraR.toLocaleDateString('pt-BR') + ' ' + agoraR.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) };
     const historico = JSON.parse(proc.HistoricoStatus || '[]');
     const agora = new Date();
     historico.push({
       data:    agora.toLocaleDateString('pt-BR'),
       hora:    agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-      status:  'Restituído',
+      status:  `Motivo da ${restituicoes[i].n || i + 1}ª restituição`,
       usuario: App.account?.name || App.account?.username || 'Desconhecido',
       motivo
     });
     await App.graph.updateItem(CONFIG.listas.processos, id, {
       MotivoRestituicao: motivo,
+      Restituicoes:      JSON.stringify(restituicoes),
       HistoricoStatus:   JSON.stringify(historico)
     });
     App.invalidateCache('processos');
-    const body = document.getElementById('historico-status-body');
-    if (body) body.innerHTML = renderHistoricoStatus(historico, id);
+    window._restEditando = null;
     toast('Motivo salvo!', 'success');
+    await renderProcessoDetalhe(id);
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
 }
 
@@ -9664,7 +9795,7 @@ async function renderPagamentosGRU() {
   const gruGrupos = Object.values(porClienteGru).sort((a,b) => (a.nome||'').localeCompare(b.nome||''));
 
   // Soma o valor de todas as taxas pendentes (usa a tabela TAXAS_PROCESSO por tipo de processo)
-  const taxaProcesso = p => TAXAS_PROCESSO[p.TipoProcesso] || 0;
+  const taxaProcesso = p => taxaDoProcesso(p);
   const taxaTotal = gruPendentes.reduce((s, p) => s + taxaProcesso(p), 0);
 
   el.innerHTML = `
@@ -9919,13 +10050,13 @@ function imprimirExtras(responsavel) {
   const meusAvulsos = avulsos.filter(a => a.responsavel === responsavel && (a.data||'').startsWith(filtroMes));
 
   const totalExtra = meusDeferidos.reduce((s, p) => {
-    const taxa = TAXAS_PROCESSO[p.TipoProcesso] || 0;
+    const taxa = taxaDoProcesso(p);
     return s + extraProcesso(p, _orcExtras, _demExtras, responsavel);
   }, 0) + meusAvulsos.reduce((s, a) => s + (Number(a.valor)||0), 0);
 
   const itensHtml = meusDeferidos.map(p => {
     const valor = Number(p.ValorProcesso) || 0;
-    const taxa = TAXAS_PROCESSO[p.TipoProcesso] || 0;
+    const taxa = taxaDoProcesso(p);
     const extra = extraProcesso(p, _orcExtras, _demExtras, responsavel);
     const desc = getProcessoDescExtra(p);
     return `<tr>
@@ -10011,7 +10142,7 @@ async function renderPagamentosExtras() {
     }
 
     const totalProcessos = meusDeferidos.reduce((s, p) => {
-      const taxa = TAXAS_PROCESSO[p.TipoProcesso] || 0;
+      const taxa = taxaDoProcesso(p);
       return s + extraProcesso(p, _orcExtras, _demExtras, responsavel);
     }, 0);
     const totalAvulsos = meusAvulsos.reduce((s, a) => s + (Number(a.valor)||0), 0);
@@ -10020,7 +10151,7 @@ async function renderPagamentosExtras() {
     return `<div class="card-body" style="padding:0">
       ${meusDeferidos.map(p => {
         const valor = Number(p.ValorProcesso) || 0;
-        const taxa = TAXAS_PROCESSO[p.TipoProcesso] || 0;
+        const taxa = taxaDoProcesso(p);
         const valorExtraBase = valorProcessoParaExtras(p, _orcExtras, _demExtras);
         const temDescExtra = Math.abs(valorExtraBase - valor) > 0.005;
         const extra = extraProcesso(p, _orcExtras, _demExtras, responsavel);
@@ -10148,7 +10279,7 @@ function verCalculoExtra(id, responsavel) {
   const eNovo  = _extraFormulaNova(p);
   const cheio  = valorCheioProcessoExtras(p, orc, dem);
   const valorComDesc = valorProcessoParaExtras(p, orc, dem);
-  const taxa   = TAXAS_PROCESSO[p.TipoProcesso] || 0;
+  const taxa   = taxaDoProcesso(p);
   const ratio  = ratioExtraProcesso(p, orc, dem, _extraMantemDesconto5(p));
   const fracao = fracaoExtraProcesso(p.TipoProcesso, responsavel);
   // Na fórmula nova (Set/2026+) o desconto já está no valor e a taxa é cheia,
@@ -11883,6 +12014,7 @@ async function waIdToken(forcar = false) {
   if (!forcar && !(_waSegundosRestantes(r.idToken) > 300)) {
     r = await App.msal.acquireTokenSilent({ ...req, forceRefresh: true });
   }
+  window._waUltimoToken = r.idToken;
   return r.idToken;
 }
 async function waApi(path, opts = {}, _tentativa = 0) {
@@ -12054,6 +12186,10 @@ async function renderWhatsApp() {
       .wa-sync .bar > i{display:block;height:100%;background:#25d366;width:0;border-radius:3px;transition:width .3s}
       .wa-sync .bar.indef > i{width:40%;animation:wa-indef 1.1s ease-in-out infinite}
       @keyframes wa-indef{0%{margin-left:-40%}100%{margin-left:100%}}
+      @keyframes wa-destaque{0%,40%{box-shadow:0 0 0 4px #facc15}100%{box-shadow:0 0 0 0 rgba(250,204,21,0)}}
+      .wa-msg.destaque .wa-bubble{animation:wa-destaque 2.6s ease-out}
+      .wa-soltar{position:absolute;inset:0;z-index:20;background:rgba(37,211,102,.12);border:3px dashed #25d366;border-radius:8px;display:none;align-items:center;justify-content:center;font-size:18px;font-weight:600;color:#128c7e;pointer-events:none}
+      .wa-digitando{color:#25d366 !important;font-weight:600}
       .wa-desconectar{background:none;border:1px solid var(--danger);color:var(--danger);border-radius:6px;font-size:11px;padding:3px 8px;cursor:pointer;flex-shrink:0;white-space:nowrap}
       .wa-desconectar:hover{background:var(--danger);color:#fff}
       .wa-tabs{display:flex;gap:6px;padding:8px 8px 0;position:relative}
@@ -12272,6 +12408,7 @@ function waConectar() {
     });
     socket.on('reaction', d => waOnReaction(d));
     socket.on('message-update', d => waOnMessageUpdate(d));
+    socket.on('presence', d => waOnPresenca(d));
     // Conversa marcada como resolvida por algum atendente (só registra; não muda a lista de chats).
     socket.on('resolved', () => {});
     socket.on('connect_error', err => { const el = document.getElementById('wa-status'); if (el) el.innerHTML = `<span style="color:var(--danger)"><i class="bi bi-x-circle me-1"></i>Erro de conexão: ${esc(err.message)}</span>`; });
@@ -12629,7 +12766,7 @@ function waMensagensBuscaHtml(termoRaw) {
     const nome = waNomeChat(chat);
     const trecho = String(r.body || '').slice(0, 70);
     const principal = waJidPrincipal(r.jid);
-    return `<div class="wa-item" onclick="waAbrir('${escJs(principal)}')">
+    return `<div class="wa-item" onclick="waAbrirNaMensagem('${escJs(principal)}','${escJs(String(r.id || ''))}')">
       ${waAvatarHtml(nome, principal, 44)}
       <div style="flex:1;min-width:0"><div class="nome">${esc(nome)}</div><div class="prev">${esc(trecho)}</div></div>
     </div>`;
@@ -12660,7 +12797,7 @@ function waRenderHeader() {
       ${waAvatarHtml(nome, jid, 40)}
       <div style="flex:1;min-width:0">
         <div style="font-weight:600;font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(nome)}</div>
-        <div style="font-size:12px;color:#667781">${esc((cli || chat.name) ? numero : '')}</div>
+        <div id="wa-header-sub" style="font-size:12px;color:#667781" data-padrao="${esc((cli || chat.name) ? numero : '')}">${esc((cli || chat.name) ? numero : '')}</div>
       </div>
     </div>
     <button class="btn btn-ghost btn-sm" title="Marcar como não lida" onclick="waMarcarNaoLida()"><i class="bi bi-envelope"></i></button>
@@ -12794,7 +12931,7 @@ async function waAbrirPerfil() {
         </div>
         <div style="padding:18px 20px">
           ${cli
-            ? `<div style="margin-bottom:16px"><button class="btn btn-primary btn-sm" style="width:100%;margin-bottom:8px" onclick="document.getElementById('wa-modal-perfil').remove();navigate('clientes/perfil',{id:'${escJs(String(cli.id))}'})"><i class="bi bi-person-lines-fill me-1"></i>Abrir cadastro de ${esc(cli.Title)}</button><button class="btn btn-outline btn-sm" style="width:100%" onclick="waAbrirVincular('cliente')"><i class="bi bi-pencil me-1"></i>Alterar cadastro vinculado</button></div>`
+            ? `<div style="margin-bottom:16px"><button class="btn btn-primary btn-sm" style="width:100%;margin-bottom:8px" onclick="document.getElementById('wa-modal-perfil').remove();navigate('clientes/perfil',{id:'${escJs(String(cli.id))}'})"><i class="bi bi-person-lines-fill me-1"></i>Abrir cadastro de ${esc(cli.Title)}</button><button class="btn btn-outline btn-sm" style="width:100%" onclick="waAbrirVincular('cliente')"><i class="bi bi-pencil me-1"></i>Alterar cadastro vinculado</button><button class="btn btn-outline btn-sm" style="width:100%;margin-top:8px" onclick="waConsultarAcervo('${escJs(String(cli.id))}')"><i class="bi bi-shield-fill me-1"></i>Consultar acervo</button><button class="btn btn-outline btn-sm" style="width:100%;margin-top:8px" onclick="waConsultarValidades('${escJs(String(cli.id))}')"><i class="bi bi-calendar-check me-1"></i>Consultar Validades</button></div>`
             : clube
               ? `<div style="margin-bottom:16px"><button class="btn btn-primary btn-sm" style="width:100%;margin-bottom:8px" onclick="document.getElementById('wa-modal-perfil').remove();navigate('clubes/editar',{id:'${escJs(String(clube.id))}'})"><i class="bi bi-building me-1"></i>Abrir clube ${esc(clube.Title)}</button><button class="btn btn-outline btn-sm" style="width:100%" onclick="waAbrirVincular('clube')"><i class="bi bi-pencil me-1"></i>Alterar clube vinculado</button></div>`
               : `<div style="font-size:12px;color:#667781;margin-bottom:10px"><i class="bi bi-info-circle me-1"></i>Este número não está vinculado a nenhum cliente ou clube.</div><div style="display:flex;gap:8px;margin-bottom:16px"><button class="btn btn-outline btn-sm" style="flex:1" onclick="waAbrirVincular('cliente')"><i class="bi bi-person-plus me-1"></i>Cliente</button><button class="btn btn-outline btn-sm" style="flex:1" onclick="waAbrirVincular('clube')"><i class="bi bi-building-add me-1"></i>Clube</button></div>`}
@@ -12830,7 +12967,7 @@ async function waAbrirPerfil() {
               const b = statusBadge(p.Status);
               return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #f0f0f0;cursor:pointer" onclick="document.getElementById('wa-modal-perfil').remove();navigate('processos/detalhe',{id:'${p.id}'})">
                 <span style="color:#111">${esc(p.TipoProcesso || '—')}</span>
-                <span class="badge ${b.cls}" style="flex-shrink:0">${b.txt}</span>
+                <span class="badge ${b.cls}" style="flex-shrink:0">${b.txt}</span>${badgeAtencaoGru(p)}
               </div>`;
             }).join('')
           : '<div style="color:#667781">Nenhum processo em aberto.</div>';
@@ -12881,6 +13018,9 @@ async function waAbrirPerfil() {
 
 async function waAbrir(jid) {
   const jidAnterior = window._wa.jidAtivo;
+  window._wa.presenca = null;
+  waApi('/presence/subscribe', { method: 'POST', body: JSON.stringify({ jids: waJidsDoGrupo(jid) }) }).catch(() => {});
+  setTimeout(waAtivarArrastar, 0);
   // Reabrindo a MESMA conversa (mesmo grupo de jids)? Então preservamos o que já
   // está na tela para que NADA suma — mesmo que o servidor ainda não tenha devolvido
   // uma mensagem recém-enviada (ex.: eco ainda não persistido, ou jid @lid x @s.whatsapp.net).
@@ -12967,7 +13107,9 @@ function waBolha(m) {
   const ehGrupo = String(m.jid || '').endsWith('@g.us');
   const remetente = (!me && ehGrupo && m.author) ? `<div style="font-size:12px;font-weight:600;color:#1f7aec;margin-bottom:2px">${esc(m.author)}</div>` : '';
   const rodape = `<div class="hora">${me && m.author && m.author !== 'sistema' ? esc(m.author) + ' · ' : ''}${m.edited && !m.deleted ? 'Editada · ' : ''}${hora}${m.savedPath ? ' <i class="bi bi-cloud-check" title="salvo na pasta do cliente"></i>' : ''}</div>`;
-  const citada = m.replyBody ? `<div class="wa-citada">${waFmtTexto(String(m.replyBody).slice(0, 140))}</div>` : '';
+  const citada = m.replyBody
+    ? `<div class="wa-citada"${m.replyId ? ` style="cursor:pointer" title="Ir para a mensagem respondida" onclick="waIrParaMensagem('${escJs(String(m.replyId))}')"` : ''}>${waFmtTexto(String(m.replyBody).slice(0, 140))}</div>`
+    : '';
   const reacao = m.reaction ? `<div class="wa-reacao">${esc(m.reaction)}</div>` : '';
   // Botão de download para qualquer arquivo (foto, vídeo, áudio, documento)
   const btnBaixar = m.mediaUrl
@@ -12980,7 +13122,7 @@ function waBolha(m) {
       <button class="fwd" title="Apagar" onclick="waApagarMsg('${escJs(String(m.id))}')"><i class="bi bi-trash3"></i></button>` : ''}
       ${btnBaixar}
     </div>` : '';
-  return `<div class="wa-msg ${me ? 'me' : 'them'}"><div class="wa-bubble ${me ? 'me' : 'them'}">${remetente}${citada}${corpo}${rodape}${reacao}</div>${acoesFull}</div>`;
+  return `<div class="wa-msg ${me ? 'me' : 'them'}" data-msgid="${esc(String(m.id || ''))}"><div class="wa-bubble ${me ? 'me' : 'them'}">${remetente}${citada}${corpo}${rodape}${reacao}</div>${acoesFull}</div>`;
 }
 
 // Rótulo de data estilo WhatsApp (Hoje / Ontem / dia da semana / dd/mm/aaaa)
@@ -13193,6 +13335,221 @@ async function waConfirmarApagar(id, paraTodos) {
   } catch (e) {
     toast('Não foi possível apagar: ' + e.message, 'error');
     document.querySelectorAll('#wa-modal-msg button').forEach(b => { b.disabled = false; });
+  }
+}
+
+// ---- Ir até uma mensagem na conversa (busca e resposta) ----
+function waIrParaMensagem(id) {
+  if (!id) return;
+  const t = document.getElementById('wa-thread');
+  const el = t && [...t.querySelectorAll('.wa-msg[data-msgid]')].find(x => x.getAttribute('data-msgid') === String(id));
+  if (!el) { toast('Essa mensagem é antiga e não está entre as carregadas nesta conversa.', 'info'); return; }
+  el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  el.classList.remove('destaque'); void el.offsetWidth; el.classList.add('destaque');
+  setTimeout(() => el.classList.remove('destaque'), 2700);
+}
+async function waAbrirNaMensagem(jid, id) {
+  await waAbrir(jid);
+  if (id) setTimeout(() => waIrParaMensagem(id), 80);
+}
+
+// ---- Contato digitando / gravando áudio ----
+function waOnPresenca(d) {
+  if (!d || !d.jid || !window._wa.jidAtivo) return;
+  const jids = waJidsDoGrupo(window._wa.jidAtivo);
+  const tel = String(d.jid).split('@')[0];
+  if (!jids.includes(d.jid) && !jids.some(j => String(j).split('@')[0] === tel)) return;
+  const ativo = d.estado === 'composing' || d.estado === 'recording';
+  window._wa.presenca = ativo ? { estado: d.estado, ate: Date.now() + 15000 } : null;
+  waAtualizarPresenca();
+  if (ativo) setTimeout(waAtualizarPresenca, 15100); // se o "parou" não chegar, some sozinho
+}
+function waAtualizarPresenca() {
+  const sub = document.getElementById('wa-header-sub'); if (!sub) return;
+  const pr = window._wa.presenca;
+  if (pr && pr.ate > Date.now()) {
+    sub.textContent = pr.estado === 'recording' ? 'gravando áudio…' : 'digitando…';
+    sub.classList.add('wa-digitando');
+  } else {
+    window._wa.presenca = null;
+    sub.textContent = sub.getAttribute('data-padrao') || '';
+    sub.classList.remove('wa-digitando');
+  }
+}
+
+// ---- Arrastar arquivos para a conversa ----
+function waAtivarArrastar() {
+  const main = document.getElementById('wa-thread')?.parentElement;
+  if (!main || main.dataset.arrastar === '1') return;
+  main.dataset.arrastar = '1';
+  const aviso = document.createElement('div');
+  aviso.className = 'wa-soltar';
+  aviso.innerHTML = '<div><i class="bi bi-cloud-arrow-up me-2"></i>Solte aqui para enviar</div>';
+  main.appendChild(aviso);
+  let cont = 0;
+  const temArquivo = (e) => [...((e.dataTransfer && e.dataTransfer.types) || [])].includes('Files');
+  main.addEventListener('dragenter', e => { if (!temArquivo(e) || !window._wa.jidAtivo) return; e.preventDefault(); cont++; aviso.style.display = 'flex'; });
+  main.addEventListener('dragover', e => { if (!temArquivo(e) || !window._wa.jidAtivo) return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+  main.addEventListener('dragleave', () => { cont = Math.max(0, cont - 1); if (!cont) aviso.style.display = 'none'; });
+  main.addEventListener('drop', async e => {
+    if (!temArquivo(e)) return;
+    e.preventDefault(); cont = 0; aviso.style.display = 'none';
+    if (!window._wa.jidAtivo) { toast('Abra uma conversa antes de soltar o arquivo.', 'warning'); return; }
+    const arquivos = [...(e.dataTransfer.files || [])];
+    if (!arquivos.length) return;
+    if (arquivos.length === 1) { waPrepararAnexo(arquivos[0]); return; }   // 1 arquivo: prévia + legenda
+    for (const f of arquivos) await waEnviarArquivoDireto(f);              // vários: envia um por um
+  });
+}
+
+// ---- Painel do contato: acervo e validades do cliente ----
+function _waPopup(id, titulo, corpo) {
+  document.getElementById(id)?.remove();
+  const ov = document.createElement('div');
+  ov.id = id;
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10001;display:flex;align-items:center;justify-content:center;padding:16px';
+  ov.innerHTML = `<div style="background:#fff;border-radius:12px;width:100%;max-width:760px;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.25)">
+    <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px">
+      <h3 style="margin:0;font-size:16px;flex:1">${titulo}</h3>
+      <button class="btn btn-ghost btn-sm" onclick="document.getElementById('${id}').remove()"><i class="bi bi-x-lg"></i></button>
+    </div>
+    <div style="overflow-y:auto;padding:14px 18px">${corpo}</div>
+  </div>`;
+  ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
+  document.body.appendChild(ov);
+}
+
+const _WA_ACERVO_CAMPOS = [
+  ['Especie', 'Espécie'], ['Marca', 'Marca'], ['Modelo', 'Modelo'], ['Calibre', 'Calibre'], ['GrupoCalibre', 'Grupo do calibre'],
+  ['NumeroSerie', 'Nº de série'], ['NumeroSIGMA', 'Nº SIGMA'], ['NumeroSINARM', 'Nº SINARM'], ['NumeroRegistro', 'Nº registro'],
+  ['AtividadeCadastrada', 'Acervo'], ['OrgaoCadastro', 'Órgão'], ['StatusArma', 'Status'], ['DataAquisicao', 'Data de aquisição'],
+  ['PaisFabricacao', 'País de fabricação'], ['CapacidadeTiro', 'Capacidade'], ['NumeroCanos', 'Nº de canos'], ['ComprimentoCano', 'Comprimento do cano'],
+  ['AlmaCano', 'Alma do cano'], ['NumeroRaias', 'Nº de raias'], ['SentidoRaias', 'Sentido das raias'], ['Acabamento', 'Acabamento'],
+  ['Funcionamento', 'Funcionamento'], ['Observacoes', 'Observações'],
+];
+
+async function waConsultarAcervo(clienteId) {
+  showLoading();
+  try {
+    const [cliente, armas, docs] = await Promise.all([
+      App.graph.getItem(CONFIG.listas.clientes, clienteId), App.getArmas(), App.getDocumentos()]);
+    const lista = armas.filter(a => String(a.ClienteId) === String(clienteId))
+      .sort((a, b) => (armaForaDeUso(a) - armaForaDeUso(b)) || (a.Especie || '').localeCompare(b.Especie || '', 'pt-BR'));
+    const crafs = docs.filter(d => d.TipoDocumento === 'CRAF' && String(d.ClienteId) === String(clienteId) && d.Desconsiderada !== 'sim');
+    const corpo = !lista.length ? '<div class="empty-state"><i class="bi bi-shield"></i><p>Nenhuma arma cadastrada.</p></div>' : lista.map(a => {
+      const craf = crafs.filter(d => String(d.ArmaVinculadaId) === String(a.id)).sort((x, y) => normISO(y.DataValidade || '').localeCompare(normISO(x.DataValidade || '')))[0];
+      const vcraf = craf && craf.DataValidade ? normISO(craf.DataValidade) : '';
+      const st = validadeStatus(vcraf || null);
+      const campos = _WA_ACERVO_CAMPOS.filter(([k]) => a[k]).map(([k, lbl]) =>
+        `<div><div style="font-size:11px;color:var(--text-muted)">${lbl}</div><div style="font-size:13px;font-weight:500">${esc(/^Data/.test(k) ? fmtDate(normISO(a[k])) : String(a[k]))}</div></div>`).join('');
+      return `<div style="border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:10px${armaForaDeUso(a) ? ';opacity:.6' : ''}">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+          <strong style="font-size:14px">${esc([a.Especie, a.Marca, a.Modelo].filter(Boolean).join(' ') || 'Arma')}</strong>
+          ${a.AtividadeCadastrada ? `<span class="badge badge-blue">${esc(a.AtividadeCadastrada)}</span>` : ''}
+          ${armaForaDeUso(a) ? `<span class="badge badge-red">${esc(a.StatusArma)}</span>` : ''}
+          <span style="margin-left:auto;font-size:12px">CRAF: ${vcraf ? `<span class="badge ${st.cls}">${fmtDate(vcraf)}</span>` : '<span style="color:var(--text-muted)">sem validade cadastrada</span>'}</span>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px 14px">${campos}</div>
+      </div>`;
+    }).join('');
+    _waPopup('wa-popup-acervo', `<i class="bi bi-shield-fill me-2"></i>Acervo — ${esc(cliente.Title || '')} <span style="font-weight:400;color:var(--text-muted);font-size:13px">(${lista.length} arma(s))</span>`, corpo);
+  } catch (e) { toast('Não foi possível carregar o acervo: ' + e.message, 'error'); } finally { hideLoading(); }
+}
+
+// Documentos do cliente com validade (CR, CRAFs, CTF, SIMAF, Guias), do que vence primeiro ao último.
+function _validadesDoCliente(cliente, armas, docs, processos) {
+  const itens = [];
+  const add = (tipo, desc, data, extra) => itens.push({ tipo, desc: desc || '', data: data ? normISO(data) : '', extra: extra || '' });
+  add('CR', cliente.NumeroCR ? `Nº ${cliente.NumeroCR}` : '', cliente.DataValidadeCR);
+  const armaMap = {}; armas.forEach(a => { armaMap[String(a.id)] = a; });
+  const emRenov = crafsEmRenovacao(processos, docs);
+  docs.filter(d => String(d.ClienteId) === String(cliente.id) && d.Desconsiderada !== 'sim').forEach(d => {
+    const a = armaMap[String(d.ArmaVinculadaId)] || null;
+    const descArma = a ? [a.Especie, a.Marca, a.Modelo].filter(Boolean).join(' ') : (d.ArmaVinculadaDesc || '');
+    if (d.TipoDocumento === 'CRAF') add('CRAF', descArma, d.DataValidade, emRenov[String(d.id)] ? 'Em renovação' : '');
+    else if (d.TipoDocumento === 'Guia de Tráfego') {
+      const loc = TIPOS_GUIA_CIDADE.includes(d.TipoGuia) ? [d.CidadeGuia, d.UFGuia].filter(Boolean).join('/') : (d.NomeClubeTiro || '');
+      add('Guia de Tráfego', [d.TipoGuia, descArma, loc].filter(Boolean).join(' · '), d.DataValidade);
+    }
+  });
+  if (cliente.NaoRenovarCTF !== 'sim' && (cliente.DataValidadeCTF || (cliente.Categoria || '').includes('Caçador'))) add('CTF', '', cliente.DataValidadeCTF);
+  let simafs = [];
+  try { simafs = JSON.parse(cliente.SIMAFs || '[]'); } catch (e) {}
+  (Array.isArray(simafs) ? simafs : []).filter(x => x && x.Desconsiderada !== 'sim').forEach(x =>
+    add('SIMAF', [x.NomePropriedade, [x.CidadeSimaf, x.UFSimaf].filter(Boolean).join('/')].filter(Boolean).join(' · '), x.DataValidade));
+  return itens.sort((a, b) => (!a.data) - (!b.data) || a.data.localeCompare(b.data));
+}
+
+async function waConsultarValidades(clienteId) {
+  showLoading();
+  try {
+    const [cliente, armas, docs, processos] = await Promise.all([
+      App.graph.getItem(CONFIG.listas.clientes, clienteId), App.getArmas(), App.getDocumentos(), App.getProcessos()]);
+    const itens = _validadesDoCliente(cliente, armas.filter(a => String(a.ClienteId) === String(clienteId)), docs,
+      processos.filter(p => String(p.ClienteId) === String(clienteId)));
+    window._waValidadesTexto = `*Validades — ${cliente.Title || ''}*\n` + itens.map(i =>
+      `• ${i.tipo}${i.desc ? ' (' + i.desc + ')' : ''}: ${i.data ? fmtDate(i.data) : 'sem data'}${i.extra ? ' — ' + i.extra : ''}`).join('\n');
+    const corpo = !itens.length ? '<div class="empty-state"><i class="bi bi-calendar-x"></i><p>Nenhum documento com validade.</p></div>' : `
+      <table style="width:100%;font-size:13px;border-collapse:collapse">
+        <thead><tr style="text-align:left;color:var(--text-muted);font-size:11px;text-transform:uppercase"><th style="padding:6px 4px">Documento</th><th style="padding:6px 4px">Descrição</th><th style="padding:6px 4px">Validade</th><th style="padding:6px 4px">Situação</th></tr></thead>
+        <tbody>${itens.map(i => {
+          const st = validadeStatus(i.data || null);
+          return `<tr style="border-top:1px solid var(--border)">
+            <td style="padding:7px 4px;font-weight:600;white-space:nowrap">${esc(i.tipo)}</td>
+            <td style="padding:7px 4px">${esc(i.desc || '—')}</td>
+            <td style="padding:7px 4px;white-space:nowrap">${i.data ? fmtDate(i.data) : '<span style="color:var(--text-muted)">sem data</span>'}</td>
+            <td style="padding:7px 4px">${i.extra ? `<span class="badge badge-purple">${esc(i.extra)}</span>` : `<span class="badge ${st.cls}">${st.cls === 'badge-green' ? 'Válido' : st.txt}</span>`}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table>
+      <div style="text-align:right;margin-top:12px"><button class="btn btn-outline btn-sm" onclick="navigator.clipboard.writeText(window._waValidadesTexto||'').then(()=>toast('Lista copiada — é só colar na conversa.','success'))"><i class="bi bi-clipboard me-1"></i>Copiar lista</button></div>`;
+    _waPopup('wa-popup-validades', `<i class="bi bi-calendar-check me-2"></i>Validades — ${esc(cliente.Title || '')}`, corpo);
+  } catch (e) { toast('Não foi possível carregar as validades: ' + e.message, 'error'); } finally { hideLoading(); }
+}
+
+// ============================================================
+// OPERADORES ONLINE — cada Gestão aberto avisa o servidor a cada minuto;
+// administradores veem a lista clicando no próprio nome (painel lateral).
+// ============================================================
+function iniciarSinalOperador() {
+  if (!CONFIG.waGatewayUrl || window._sinalOperador) return;
+  const enviar = () => waApi('/operadores/ping', { method: 'POST', body: '{}' }).catch(() => {});
+  enviar();
+  window._sinalOperador = setInterval(enviar, 60000);
+  // Ao fechar a aba: avisa que saiu (com o último token, sem esperar resposta)
+  window.addEventListener('pagehide', () => {
+    try {
+      const tk = window._waUltimoToken;
+      if (tk) fetch(CONFIG.waGatewayUrl + '/operadores/sair', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tk }, body: '{}' });
+    } catch (e) {}
+  });
+}
+
+async function abrirOperadoresOnline(ev) {
+  if (ev) ev.stopPropagation();
+  const ja = document.getElementById('menu-operadores');
+  if (ja) { ja.remove(); return; }
+  const menu = document.createElement('div');
+  menu.id = 'menu-operadores';
+  menu.style.cssText = 'position:fixed;left:12px;bottom:110px;width:230px;background:#fff;color:#111;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.3);z-index:10002;padding:10px 0;font-size:13px';
+  menu.innerHTML = '<div style="padding:4px 14px 8px;font-weight:700;font-size:12px;color:var(--text-muted);text-transform:uppercase">Operadores</div><div id="menu-operadores-lista" style="padding:0 14px 4px;color:var(--text-muted)">Carregando...</div>';
+  document.body.appendChild(menu);
+  setTimeout(() => document.addEventListener('click', function fechar(e) {
+    if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('click', fechar); }
+  }), 0);
+  try {
+    const r = await waApi('/operadores');
+    const fmtUlt = (t) => t ? new Date(t).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+    const el = document.getElementById('menu-operadores-lista');
+    if (el) el.innerHTML = (r.operadores || []).map(o => `
+      <div style="display:flex;align-items:center;gap:8px;padding:6px 0" title="${o.online ? 'Logado agora' : (o.ultimo ? 'Visto por último em ' + fmtUlt(o.ultimo) : 'Não logado')}">
+        <span style="width:10px;height:10px;border-radius:50%;background:${o.online ? '#22c55e' : '#ef4444'};flex-shrink:0"></span>
+        <span style="color:#111;flex:1">${esc(o.nome)}</span>
+        <span style="font-size:11px;color:var(--text-muted)">${o.online ? 'online' : (o.ultimo ? fmtUlt(o.ultimo) : '')}</span>
+      </div>`).join('');
+  } catch (e) {
+    const el = document.getElementById('menu-operadores-lista');
+    if (el) el.innerHTML = `<span style="color:#dc2626">Não foi possível consultar: ${esc(e.message)}</span>`;
   }
 }
 
@@ -17049,7 +17406,7 @@ async function renderControleDemandas() {
 
       // Progresso: conta processos vinculados
       const progItems = (d.itens||[]).map((item, itemIdx) => {
-        const criados = processos.filter(p => p.demandaId && String(p.demandaId) === String(d.id) && p.TipoProcesso === item.tipo).length;
+        const criados = processos.filter(p => p.demandaId && String(p.demandaId) === String(d.id) && p.TipoProcesso === item.tipo).reduce((n, p) => n + qtdItensProcesso(p), 0);
         const pct = item.qtd > 0 ? Math.min(100, Math.round(criados/item.qtd*100)) : 100;
         const obsBtn = `<button class="btn btn-ghost btn-sm" style="padding:0 2px" onclick="editarObsItemDemanda('${d.id}',${itemIdx})" title="${item.obs ? 'Editar observação: ' + esc(item.obs) : 'Adicionar observação'}"><i class="bi ${item.obs ? 'bi-chat-left-text-fill' : 'bi-chat-left-text'}" style="color:${item.obs ? 'var(--accent)' : 'var(--text-muted)'}"></i></button>`;
         const valorComDesc = Math.round((Number(item.valor)||0) * ratioDesc * 100) / 100;
@@ -17134,7 +17491,7 @@ function abrirModalProcessosOperador(operador, filtro) {
                     <td style="font-weight:600">${esc(p.ClienteNome||'—')}</td>
                     <td>${esc(p.TipoProcesso||'—')}</td>
                     <td style="font-size:12px;color:var(--text-muted)">${esc(info)||'—'}</td>
-                    <td><span class="badge ${b.cls}">${b.txt}</span></td>
+                    <td><span class="badge ${b.cls}">${b.txt}</span>${badgeAtencaoGru(p)}</td>
                   </tr>`;
                 }).join('')}
               </tbody>
@@ -17300,7 +17657,7 @@ async function renderMinhasDemandas() {
 
     function buildCard(d) {
       const itensHtml = (d.itens||[]).map((item, itemIdx) => {
-        const criados = processos.filter(p => p.demandaId && String(p.demandaId) === String(d.id) && p.TipoProcesso === item.tipo).length;
+        const criados = processos.filter(p => p.demandaId && String(p.demandaId) === String(d.id) && p.TipoProcesso === item.tipo).reduce((n, p) => n + qtdItensProcesso(p), 0);
         const concluido = criados >= item.qtd;
         const restantes = item.qtd - criados;
         const eCraf = ehRenovacaoCRAF(item.tipo);
@@ -17327,7 +17684,7 @@ async function renderMinhasDemandas() {
         </div>`;
       }).join('');
       const temIncompleto = (d.itens||[]).some(item => {
-        const criados = processos.filter(p => p.demandaId && String(p.demandaId) === String(d.id) && p.TipoProcesso === item.tipo).length;
+        const criados = processos.filter(p => p.demandaId && String(p.demandaId) === String(d.id) && p.TipoProcesso === item.tipo).reduce((n, p) => n + qtdItensProcesso(p), 0);
         return criados < (item.qtd||0);
       });
       const podeReabrir = d.status !== 'Aberta' && temIncompleto;
@@ -17385,7 +17742,7 @@ async function abrirCascataDemanda(demandaId, itemIdx) {
     const item = (d.itens || [])[itemIdx];
     if (!item) throw new Error('Item da demanda não encontrado.');
     const processos = await App.getProcessos();
-    const criados = processos.filter(p => p.demandaId && String(p.demandaId) === String(d.id) && p.TipoProcesso === item.tipo).length;
+    const criados = processos.filter(p => p.demandaId && String(p.demandaId) === String(d.id) && p.TipoProcesso === item.tipo).reduce((n, p) => n + qtdItensProcesso(p), 0);
     const restantes = Math.max(0, item.qtd - criados);
     if (restantes < 1) { toast('Todos os processos deste item já foram criados.', 'info'); return; }
     const armas = (await App.getArmas()).filter(a => String(a.ClienteId) === String(d.clienteId) && !armaForaDeUso(a));
@@ -17405,7 +17762,7 @@ async function abrirCascataDemanda(demandaId, itemIdx) {
       const armaSel = `<select id="casc-arma-${r}" onchange="onCascArma(${r},this.value)" style="width:100%"><option value="">— Selecionar arma (deixe em branco para pular) —</option>${armaOpts}</select>`;
       if (!eGuia) {
         return `<div style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px">
-          <div style="font-weight:600;font-size:13px;margin-bottom:6px">Processo ${r+1}</div>
+          <div style="font-weight:600;font-size:13px;margin-bottom:6px">${ehRenovacaoCRAF(item.tipo) ? 'Arma' : 'Processo'} ${r+1}</div>
           <label style="font-size:12px">Arma</label>${armaSel}
         </div>`;
       }
@@ -17416,7 +17773,7 @@ async function abrirCascataDemanda(demandaId, itemIdx) {
           <div><label>Tipo de Guia</label>
             <select id="casc-guia-${r}" onchange="onCascGuiaTipo(${r},this.value)">
               <option value="">Selecione...</option>
-              <option>Caça</option><option>Caça-Treinamento Tiro</option><option>Tiro Esportivo</option><option>Mudança de Local de Acervo</option>
+              <option>Caça</option><option>Caça-Treinamento Tiro</option><option>Tiro Esportivo</option><option>Mudança de Local de Acervo</option><option>Manutenção</option>
             </select>
           </div>
         </div>
@@ -17451,7 +17808,7 @@ async function abrirCascataDemanda(demandaId, itemIdx) {
     modal.innerHTML = `
       <div style="background:#fff;border-radius:12px;padding:22px;max-width:700px;width:100%;max-height:88vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.25)">
         <h3 style="margin:0 0 4px;font-size:16px"><i class="bi bi-list-check me-2" style="color:var(--accent)"></i>Abrir Processos — ${esc(item.tipo)}</h3>
-        <p style="font-size:12.5px;color:var(--text-muted);margin:0 0 12px">Demanda ${esc(d.numero||'')} · ${esc(d.clienteNome||'')} · ${restantes} processo(s) a criar. Deixe a arma em branco nos que não quiser criar agora — a demanda continua aberta para eles.</p>
+        <p style="font-size:12.5px;color:var(--text-muted);margin:0 0 12px">Demanda ${esc(d.numero||'')} · ${esc(d.clienteNome||'')} · ${restantes} ${ehRenovacaoCRAF(item.tipo) ? 'arma(s) a renovar — as armas do mesmo acervo ficam juntas num processo só (taxa por arma)' : 'processo(s) a criar'}. Deixe a arma em branco nos que não quiser criar agora — a demanda continua aberta para eles.</p>
         ${item.obs ? `<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:12.5px;color:#92400e"><i class="bi bi-chat-left-text me-1"></i><strong>Observação da demanda:</strong> ${esc(item.obs)}</div>` : ''}
         ${linhas}
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
@@ -17512,11 +17869,47 @@ async function criarProcessosCascata() {
       if (!ok) return;
     }
 
+    // Renovação de CRAF: um processo por acervo, com todas as armas daquele acervo
+    // (ex.: 2 de caça + 3 de tiro = 2 processos; taxa R$ 88 por arma).
+    let grupos = paraCriar.map(l => [l]);
+    if (eCraf) {
+      const porAcervo = {};
+      paraCriar.forEach(l => { const ac = String(l.arma).split('|')[1] || 'Sem acervo'; (porAcervo[ac] = porAcervo[ac] || []).push(l); });
+      grupos = Object.values(porAcervo);
+    }
+
     showLoading();
     const cliente = await App.graph.getItem(CONFIG.listas.clientes, d.clienteId);
+    const docsCli = eCraf ? (await App.getDocumentos()).filter(x => String(x.ClienteId) === String(d.clienteId)) : [];
     const hoje = hojeISO();
     let idxGlobal = criados;   // posição para o valor do CRAF (1º = R$450, demais = R$300)
-    for (const linha of paraCriar) {
+    for (const grupo of grupos) {
+      if (eCraf) {
+        const acervo = String(grupo[0].arma).split('|')[1] || '';
+        let valorProc = 0;
+        grupo.forEach(() => { valorProc += idxGlobal === 0 ? CRAF_RENOV_BASE : CRAF_RENOV_ADICIONAL; idxGlobal++; });
+        const armaIds = grupo.map(l => l.arma);
+        const docCrafIds = {};
+        armaIds.forEach(v => { const aid = String(v).split('|')[0]; const doc = crafDoProcessoRenovacao({ ClienteId: d.clienteId }, { armaId: aid }, docsCli, aid); if (doc) docCrafIds[aid] = String(doc.id); });
+        const dadosEsp = { armaId: armaIds[0], armaIds, acervo, docCrafIds };
+        await App.graph.createItem(CONFIG.listas.processos, {
+          Title:        `${item.tipo} — ${cliente.Title || ''}`,
+          ClienteId:    d.clienteId,
+          ClienteNome:  cliente.Title || d.clienteNome || '',
+          TipoProcesso: item.tipo,
+          Responsavel:  d.operador || '',
+          DataAbertura: hoje,
+          Status:       'Parado',
+          ValorProcesso: valorProc,
+          ChecklistJSON: JSON.stringify(checklistRenovacaoCRAF(item.tipo, [acervo])),
+          DadosEspecificosJSON: JSON.stringify(dadosEsp),
+          demandaId:    String(demandaId),
+          demandaNumero: d.numero || null,
+          HistoricoStatus: JSON.stringify([{ data: new Date().toLocaleDateString('pt-BR'), hora: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }), status: 'Parado', usuario: getCurrentUserName() }]),
+        });
+        continue;
+      }
+      const linha = grupo[0];
       const valorProc = eCraf ? (idxGlobal === 0 ? CRAF_RENOV_BASE : CRAF_RENOV_ADICIONAL) : (Number(item.valor) || 0);
       const dadosEsp = linha.dadosEsp || { armaId: linha.arma };
       const checklist = buildChecklistItems(item.tipo, eGuia ? (linha.tipoGuia || null) : null);
@@ -17540,7 +17933,9 @@ async function criarProcessosCascata() {
     }
     App.invalidateCache('processos');
     document.getElementById('modal-cascata-demanda')?.remove();
-    toast(`${paraCriar.length} processo(s) criado(s).`, 'success');
+    toast(eCraf && grupos.length < paraCriar.length
+      ? `${grupos.length} processo(s) criado(s) com ${paraCriar.length} arma(s), agrupadas por acervo.`
+      : `${paraCriar.length} processo(s) criado(s).`, 'success');
     await verificarConclusaoDemanda(demandaId);
     await renderMinhasDemandas();
   } catch(e) { toast(e.message, 'error'); } finally { hideLoading(); }
@@ -17552,9 +17947,9 @@ function onCascArma(r, val) {
   if (!sel) return; // linhas de CRAF não têm tipo de guia
   const atividade = (val || '').split('|')[1] || '';
   let opts;
-  if (atividade === 'Caçador')       opts = ['Caça', 'Caça-Treinamento Tiro', 'Mudança de Local de Acervo'];
-  else if (atividade === 'Atirador') opts = ['Tiro Esportivo', 'Mudança de Local de Acervo'];
-  else                               opts = ['Caça', 'Caça-Treinamento Tiro', 'Tiro Esportivo', 'Mudança de Local de Acervo'];
+  if (atividade === 'Caçador')       opts = ['Caça', 'Caça-Treinamento Tiro', 'Mudança de Local de Acervo', 'Manutenção'];
+  else if (atividade === 'Atirador') opts = ['Tiro Esportivo', 'Mudança de Local de Acervo', 'Manutenção'];
+  else                               opts = ['Caça', 'Caça-Treinamento Tiro', 'Tiro Esportivo', 'Mudança de Local de Acervo', 'Manutenção'];
   const atual = sel.value;
   sel.innerHTML = '<option value="">Selecione...</option>' + opts.map(o => `<option ${o === atual ? 'selected' : ''}>${o}</option>`).join('');
   if (!opts.includes(atual)) { sel.value = ''; onCascGuiaTipo(r, ''); }
@@ -17562,7 +17957,7 @@ function onCascArma(r, val) {
 function onCascGuiaTipo(r, tipo) {
   const show = (id, on) => { const el = document.getElementById(id); if (el) el.style.display = on ? '' : 'none'; };
   const isMud = tipo === 'Mudança de Local de Acervo';
-  show(`casc-caca-${r}`, tipo === 'Caça');
+  show(`casc-caca-${r}`, tipo === 'Caça' || tipo === 'Manutenção');
   show(`casc-clube-${r}`, tipo === 'Caça-Treinamento Tiro' || tipo === 'Tiro Esportivo');
   show(`casc-mudanca-${r}`, isMud);
   show(`casc-origem-${r}`, !isMud);
@@ -17623,7 +18018,7 @@ async function abrirCascataGuiasCriadas(guiaIds, clienteId) {
           <div><label>Tipo de Guia</label>
             <select id="casc-guia-${r}" onchange="onCascGuiaTipo(${r},this.value)">
               <option value="">Selecione...</option>
-              <option>Caça</option><option>Caça-Treinamento Tiro</option><option>Tiro Esportivo</option><option>Mudança de Local de Acervo</option>
+              <option>Caça</option><option>Caça-Treinamento Tiro</option><option>Tiro Esportivo</option><option>Mudança de Local de Acervo</option><option>Manutenção</option>
             </select>
           </div>
         </div>
@@ -17916,6 +18311,11 @@ async function iniciarApp() {
   }
   // Central de WhatsApp: disponível para admins e atendentes (se o gateway estiver configurado)
   // Página WhatsApp: liberada para a equipe (administradores + Andrieli, Priscila, Geison)
+  iniciarSinalOperador();
+  if (isAdminUser()) {
+    const un = document.getElementById('user-name');
+    if (un) { un.style.cursor = 'pointer'; un.title = 'Ver operadores online'; un.onclick = abrirOperadoresOnline; un.parentElement.style.cursor = 'pointer'; }
+  }
   if (isExtrasUser() && CONFIG.waGatewayUrl) {
     const navWa = document.getElementById('nav-whatsapp');
     if (navWa) navWa.style.display = '';
@@ -18803,19 +19203,23 @@ function abrirImportSisgcorp(clienteId) {
 // gateway). Aqui: 1) oferece renomear os arquivos fora do padrão do renomeador,
 // 2) compara os dados lidos com o cadastro e mostra a revisão, 3) grava o marcado.
 // ============================================================
-const _IMP_TIPO_GUIA = { 'Caça': 'Caça', 'Caça-Treinamento': 'Caça-Treinamento Tiro', 'Treinamento': 'Caça-Treinamento Tiro', 'Tiro Desportivo': 'Tiro Esportivo' };
+const _IMP_TIPO_GUIA = { 'Caça': 'Caça', 'Caça-Treinamento': 'Caça-Treinamento Tiro', 'Treinamento': 'Caça-Treinamento Tiro', 'Tiro Desportivo': 'Tiro Esportivo',
+  'Mudança de Local de Acervo': 'Mudança de Local de Acervo', 'Manutenção': 'Manutenção' };
 const _IMP_LABELS = {
   DataEmissao: 'Emissão', DataValidade: 'Validade', LinkArquivo: 'Link do arquivo', NumeroGT: 'Nº GT',
   TipoGuia: 'Tipo de guia', EnderecoGuia: 'Endereço de origem', CidadeGuia: 'Cidade', UFGuia: 'UF',
   NomeClubeTiro: 'Clube', CRClubeTiro: 'CR do clube', EnderecoClubeTiro: 'Endereço do clube',
   NomePropriedade: 'Propriedade', CARPropriedade: 'CAR', NomeProprietario: 'Proprietário', CidadeSimaf: 'Cidade', UFSimaf: 'UF',
-  DataValidadeCTF: 'Validade do CTF',
+  DataValidadeCTF: 'Validade do CTF', ValidadeAvaliPsi: 'Validade da Avaliação Psicológica',
+  TipoTesteTiro: 'Tipo do teste de tiro', ValidadeTesteTiro: 'Validade do teste de tiro',
 };
 const _IMP_CAMPOS = {
   'CRAF':            ['DataEmissao', 'DataValidade', 'LinkArquivo'],
   'Guia de Tráfego': ['NumeroGT', 'TipoGuia', 'DataEmissao', 'DataValidade', 'CidadeGuia', 'UFGuia', 'NomeClubeTiro', 'CRClubeTiro', 'EnderecoClubeTiro', 'LinkArquivo'],
   'SIMAF':           ['NomePropriedade', 'CARPropriedade', 'NomeProprietario', 'CidadeSimaf', 'UFSimaf', 'DataValidade', 'LinkArquivo'],
   'CTF':             ['DataValidadeCTF'],
+  'Avaliação Psicológica': ['ValidadeAvaliPsi'],
+  'Teste de Tiro':   ['TipoTesteTiro', 'ValidadeTesteTiro'],
 };
 
 function _impSerie(s) { return _armaUp(s).replace(/[^A-Z0-9]/g, ''); }
@@ -18862,6 +19266,10 @@ function _impConferirTitular(cliente, arq) {
     const cpfs = c.cpfs_participantes || [];
     return (cpfs.length && cpfCli && !cpfs.includes(cpfCli)) ? 'O CPF do cliente não está entre os participantes deste SIMAF.' : null;
   }
+  if (arq.tipo === 'ap' || arq.tipo === 'tt') {
+    const cpfs = c.cpfs || [];
+    return (cpfs.length && cpfCli && !cpfs.includes(cpfCli)) ? 'O CPF do cliente não aparece neste documento.' : null;
+  }
   const cpfDoc = _impDig(c.cpf);
   if (cpfDoc && cpfCli && cpfDoc !== cpfCli) return `CPF do documento (${c.cpf}) diferente do CPF do cliente.`;
   if (!cpfDoc && c.nome && !_impIgual(c.nome, cliente.Title)) return `Nome no documento (${c.nome}) diferente do cliente.`;
@@ -18902,7 +19310,7 @@ function _impComparar(L, atual, proposto) {
     const novo = proposto[k];
     if (novo == null || novo === '') continue;
     const velho = atual[k];
-    const igual = /^Data/.test(k) ? _impData(velho) === _impData(novo)
+    const igual = /^(Data|Validade)/.test(k) ? _impData(velho) === _impData(novo)
       : k === 'CARPropriedade' ? _impSerie(velho) === _impSerie(novo)
       : k === 'LinkArquivo' ? String(velho || '') === String(novo)
       : _impIgual(velho, novo);
@@ -18939,7 +19347,7 @@ function _impLinhaGt(cliente, arq, p, idx, ctx, docsCli, armasCli) {
     NumeroGT: c.numero_gt || '', TipoGuia: tipoGuia, EnderecoGuia: _impEnderecoGuia(cliente, c.origem_endereco),
     DataEmissao: c.data_emissao || null, DataValidade: c.validade || null, LinkArquivo: arq.webUrl || '',
   };
-  if (tipoGuia === 'Caça') {
+  if (TIPOS_GUIA_CIDADE.includes(tipoGuia)) {
     proposto.CidadeGuia = c.destino_cidade || '';
     proposto.UFGuia = (c.destino_uf || '').toUpperCase();
   } else if (tipoGuia) {
@@ -18960,7 +19368,7 @@ function _impLinhaGt(cliente, arq, p, idx, ctx, docsCli, armasCli) {
     const doc = docsCli.find(d => d.TipoDocumento === 'Guia de Tráfego' && String(d.ArmaVinculadaId) === String(arma.id) && (
       (c.numero_gt && String(d.NumeroGT || '').trim() === c.numero_gt) ||
       (!String(d.NumeroGT || '').trim() && d.TipoGuia === tipoGuia && _impData(d.DataValidade) === L.validade
-        && (tipoGuia !== 'Caça' || _impIgual(d.CidadeGuia, proposto.CidadeGuia)))));
+        && (!TIPOS_GUIA_CIDADE.includes(tipoGuia) || _impIgual(d.CidadeGuia, proposto.CidadeGuia)))));
     if (doc) { L.alvo = doc.id; return _impComparar(L, doc, proposto); }
   } else {
     const atividade = tipoGuia === 'Caça' ? 'Caçador' : (tipoGuia ? 'Atirador' : '');
@@ -19007,6 +19415,50 @@ function _impLinhaCtf(cliente, arq) {
   return L;
 }
 
+// Avaliação psicológica: validade = data da avaliação + 1 ano -> "Validade Aval. Psicológica" do cliente.
+function _impLinhaAp(cliente, arq) {
+  const c = arq.campos || {};
+  const L = _impLinha(cliente, arq, 'Avaliação Psicológica');
+  L.validade = c.validade || '';
+  L.grupo = `AP|${cliente.id}`;
+  L.alvo = 'cliente';
+  _impComparar(L, { DataValidade: cliente.ValidadeAvaliPsi || null, ValidadeAvaliPsi: cliente.ValidadeAvaliPsi || null },
+    { DataValidade: c.validade || null, ValidadeAvaliPsi: c.validade || null });
+  if (L.acao === 'atualizar' && L.validade && L.validade < hojeISO()) { L.avisos.push('Avaliação vencida'); L.marcado = false; }
+  return L;
+}
+
+// Teste de tiro: validade = data do teste + 1 ano, no teste do mesmo tipo de arma (ou numa vaga livre, até 4).
+const _IMP_TIPO_TESTE = { 'Pistola': 'Pistola', 'Revólver': 'Revólver', 'Espingarda': 'Espingarda',
+  'Carabina': 'Carabina/Fuzil/Rifle', 'Rifle': 'Carabina/Fuzil/Rifle', 'Fuzil': 'Carabina/Fuzil/Rifle' };
+function _impSlotsTeste(cliente) {
+  return [...Array(MAX_TESTES_TIRO)].map((_, i) => {
+    const sfx = _sufixoTesteTiro(i);
+    return { i, data: cliente['ValidadeTesteTiro' + sfx] ? String(cliente['ValidadeTesteTiro' + sfx]).split('T')[0] : '', tipo: cliente['TipoTesteTiro' + sfx] || '' };
+  });
+}
+function _impLinhaTt(cliente, arq) {
+  const c = arq.campos || {};
+  const tipo = _IMP_TIPO_TESTE[c.tipo_arma] || '';
+  const L = _impLinha(cliente, arq, 'Teste de Tiro');
+  L.tipoTeste = tipo;   // fica guardado mesmo quando só a data muda (o "depois" só leva o que mudou)
+  L.validade = c.validade || '';
+  L.grupo = `TT|${cliente.id}|${tipo || arq.id}`;
+  const proposto = { TipoTesteTiro: tipo, ValidadeTesteTiro: c.validade || null };
+  const slots = _impSlotsTeste(cliente);
+  const slot = tipo ? slots.find(t => t.tipo === tipo) : null;
+  L.alvo = 'cliente';
+  if (slot) {
+    _impComparar(L, { DataValidade: slot.data || null, TipoTesteTiro: slot.tipo, ValidadeTesteTiro: slot.data || null }, { DataValidade: c.validade || null, ...proposto });
+  } else {
+    L.depois = proposto;
+    if (!slots.some(t => !t.data && !t.tipo)) { L.avisos.push(`O cliente já tem ${MAX_TESTES_TIRO} testes de tiro cadastrados — confira`); L.marcado = false; }
+  }
+  if (!tipo && (L.acao === 'criar' || L.acao === 'atualizar')) { L.avisos.push('Não identifiquei o tipo de arma do teste — escolha no editar'); L.marcado = false; }
+  if ((L.acao === 'criar' || L.acao === 'atualizar') && L.validade && L.validade < hojeISO()) { L.avisos.push('Teste vencido'); L.marcado = false; }
+  return L;
+}
+
 // Monta as linhas da revisão para um cliente.
 function _impPropostasCliente(cliente, arquivos, ctx) {
   const docsCli = ctx.docs.filter(d => String(d.ClienteId) === String(cliente.id));
@@ -19021,6 +19473,8 @@ function _impPropostasCliente(cliente, arquivos, ctx) {
     else if (arq.tipo === 'gt') novas = (c.produtos || []).map((p, i) => _impLinhaGt(cliente, arq, p, i, ctx, docsCli, armasCli));
     else if (arq.tipo === 'simaf') novas = (c.propriedades || []).map((p, i) => _impLinhaSimaf(cliente, arq, p, i, simafs));
     else if (arq.tipo === 'ctf' && c.validade) novas = [_impLinhaCtf(cliente, arq)];
+    else if (arq.tipo === 'ap' && c.validade) novas = [_impLinhaAp(cliente, arq)];
+    else if (arq.tipo === 'tt' && c.validade) novas = [_impLinhaTt(cliente, arq)];
     const titular = _impConferirTitular(cliente, arq);
     novas.forEach(L => {
       L.avisos.push(...(arq.avisos || []));
@@ -19129,7 +19583,7 @@ async function _impFluxo(resultados, contexto) {
     for (const [cid, r] of Object.entries(resultados)) {
       const cli = cls.find(c => String(c.id) === String(cid));
       if (!cli) continue;
-      semDados += (r.arquivos || []).filter(a => !['craf', 'gt', 'simaf', 'ctf'].includes(a.tipo)).length;
+      semDados += (r.arquivos || []).filter(a => !['craf', 'gt', 'simaf', 'ctf', 'ap', 'tt'].includes(a.tipo)).length;
       linhas.push(..._impPropostasCliente(cli, r.arquivos || [], ctx));
     }
     window._impDocs = { linhas, armasNovas: ctx.armasNovas, contexto, semDados, clienteId: contexto === 'cliente' ? Object.keys(resultados)[0] : null };
@@ -19153,7 +19607,7 @@ async function importarDocsPastaCliente(clienteId) {
 function _impValorHtml(k, v) {
   if (v == null || v === '') return '<span style="color:var(--text-muted)">—</span>';
   if (k === 'LinkArquivo') return '<i class="bi bi-link-45deg"></i> arquivo';
-  if (/^Data/.test(k)) return esc(fmtDate(_impData(v)));
+  if (/^(Data|Validade)/.test(k)) return esc(fmtDate(_impData(v)));
   return esc(String(v));
 }
 
@@ -19168,11 +19622,13 @@ function _impResumoHtml(L) {
     partes.push(`<strong>Arma:</strong> ${esc(an ? [an.Especie, _impArmaDesc(an)].filter(Boolean).join(' · ') : (L.armaDesc || '—'))}`);
   }
   if (L.tipo === 'Guia de Tráfego') {
-    const dest = d.TipoGuia === 'Caça' ? [d.CidadeGuia, d.UFGuia].filter(Boolean).join('/') : d.NomeClubeTiro;
+    const dest = TIPOS_GUIA_CIDADE.includes(d.TipoGuia) ? [d.CidadeGuia, d.UFGuia].filter(Boolean).join('/') : d.NomeClubeTiro;
     partes.push(`<strong>${esc(d.TipoGuia || 'Tipo ?')}</strong>${dest ? ' · ' + esc(dest) : ''}${d.NumeroGT ? ' · Nº ' + esc(d.NumeroGT) : ''} · ${esc(d.EnderecoGuia || '')}`);
   }
   if (L.tipo === 'SIMAF') partes.push(`<strong>${esc(d.NomePropriedade || '—')}</strong> · ${esc([d.CidadeSimaf, d.UFSimaf].filter(Boolean).join('/'))} · CAR ${esc(d.CARPropriedade || '—')}`);
   if (L.tipo === 'CTF') return `<div>Validade do CTF <strong>${_impValorHtml('DataValidadeCTF', d.DataValidadeCTF)}</strong></div>`;
+  if (L.tipo === 'Avaliação Psicológica') return `<div>Validade da avaliação <strong>${_impValorHtml('ValidadeAvaliPsi', d.ValidadeAvaliPsi)}</strong> <span style="color:var(--text-muted)">(1 ano após o exame)</span></div>`;
+  if (L.tipo === 'Teste de Tiro') return `<div>Teste de tiro <strong>${esc(d.TipoTesteTiro || 'tipo ?')}</strong> · validade <strong>${_impValorHtml('ValidadeTesteTiro', d.ValidadeTesteTiro)}</strong> <span style="color:var(--text-muted)">(1 ano após o teste)</span></div>`;
   partes.push(`${d.DataEmissao ? `Emissão ${_impValorHtml('DataEmissao', d.DataEmissao)} · ` : ''}Validade <strong>${_impValorHtml('DataValidade', d.DataValidade)}</strong>`);
   return partes.map(p => `<div>${p}</div>`).join('');
 }
@@ -19184,7 +19640,7 @@ function _impRevisaoHtml() {
   const antigos = est.linhas.filter(L => L.acao === 'antigo').length;
   const nSel = visiveis.filter(x => x.L.marcado).length;
   const lote = est.contexto === 'lote';
-  const tipoBadge = { 'CRAF': 'badge-blue', 'Guia de Tráfego': 'badge-purple', 'SIMAF': 'badge-green', 'CTF': 'badge-green' };
+  const tipoBadge = { 'CRAF': 'badge-blue', 'Guia de Tráfego': 'badge-purple', 'SIMAF': 'badge-green', 'CTF': 'badge-green', 'Avaliação Psicológica': 'badge-orange', 'Teste de Tiro': 'badge-orange' };
   const porCliente = {};
   visiveis.forEach(x => { (porCliente[x.L.clienteId] = porCliente[x.L.clienteId] || []).push(x); });
   const corpo = Object.entries(porCliente).map(([cid, itens]) => `
@@ -19200,7 +19656,7 @@ function _impRevisaoHtml() {
   return `
     <div style="font-size:12.5px;color:var(--text-muted);margin-bottom:10px">
       ${visiveis.length ? `${visiveis.length} item(ns) com novidade.` : 'Nenhuma novidade: o cadastro já está igual aos documentos da pasta.'}
-      ${iguais ? ` · ${iguais} já estão iguais no cadastro.` : ''}${antigos ? ` · ${antigos} arquivo(s) mais antigo(s) que o cadastro (ignorados).` : ''}${est.semDados ? ` · ${est.semDados} PDF(s) sem dados para importar (CR, teste de tiro, imagem...).` : ''}
+      ${iguais ? ` · ${iguais} já estão iguais no cadastro.` : ''}${antigos ? ` · ${antigos} arquivo(s) mais antigo(s) que o cadastro (ignorados).` : ''}${est.semDados ? ` · ${est.semDados} PDF(s) sem dados para importar (CR, comprovantes, imagens ilegíveis...).` : ''}
     </div>
     ${visiveis.length ? `<div class="card"><div class="table-wrapper"><table>
       <thead><tr><th style="text-align:center;width:40px"><input type="checkbox" ${nSel === visiveis.length ? 'checked' : ''} onchange="_impMarcarTodos(this.checked)" title="Marcar tudo"></th><th>Arquivo</th><th>Ação</th><th>Dados</th><th></th></tr></thead>
@@ -19247,10 +19703,11 @@ function _impEditar(i) {
   const est = window._impDocs; const L = est?.linhas[i]; if (!L) return;
   const inp = (grupo, k, v) => {
     const st = 'width:100%;box-sizing:border-box;padding:7px;border:1px solid var(--border);border-radius:6px';
-    const opts = k === 'TipoGuia' ? ['Caça', 'Caça-Treinamento Tiro', 'Tiro Esportivo'] : k === 'EnderecoGuia' ? ['1° Endereço', '2° Endereço']
+    const opts = k === 'TipoGuia' ? ['Caça', 'Caça-Treinamento Tiro', 'Tiro Esportivo', 'Mudança de Local de Acervo', 'Manutenção'] : k === 'TipoTesteTiro' ? TIPOS_TESTE_TIRO : k === 'EnderecoGuia' ? ['1° Endereço', '2° Endereço']
       : (grupo === 'arma' && ARMA_ENUMS[k] && k !== 'PaisFabricacao') ? ARMA_ENUMS[k] : null;
     if (opts) return `<select data-g="${grupo}" data-k="${k}" style="${st}"><option value="">Selecione...</option>${opts.map(o => `<option ${o === v ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
-    return `<input data-g="${grupo}" data-k="${k}" type="${/^Data/.test(k) ? 'date' : 'text'}" value="${esc(/^Data/.test(k) ? _impData(v) : (v || ''))}" style="${st}">`;
+    const ehData = /^(Data|Validade)/.test(k);
+    return `<input data-g="${grupo}" data-k="${k}" type="${ehData ? 'date' : 'text'}" value="${esc(ehData ? _impData(v) : (v || ''))}" style="${st}">`;
   };
   const campo = (lbl, html) => `<div style="margin-bottom:10px"><label style="font-size:12px;font-weight:600;display:block;margin-bottom:3px">${lbl}</label>${html}</div>`;
   const docKeys = Object.keys(L.depois).filter(k => k !== 'LinkArquivo');
@@ -19314,7 +19771,8 @@ async function _impGravar() {
     }
     // 2) documentos (CRAF e Guias)
     const hist = [];
-    const selDocs = sel.filter(L => L.tipo !== 'SIMAF' && L.tipo !== 'CTF');
+    const _TIPOS_NO_CLIENTE = ['SIMAF', 'CTF', 'Avaliação Psicológica', 'Teste de Tiro'];
+    const selDocs = sel.filter(L => !_TIPOS_NO_CLIENTE.includes(L.tipo));
     if (selDocs.length) {
       const docs = await App.graph._readFile(CONFIG.listas.documentos);
       for (const L of selDocs) {
@@ -19338,7 +19796,8 @@ async function _impGravar() {
       await App.graph._writeFile(CONFIG.listas.documentos, docs);
     }
     // 3) SIMAFs e validade do CTF (ficam dentro do cliente)
-    const selSimaf = sel.filter(L => L.tipo === 'SIMAF' || L.tipo === 'CTF');
+    const selSimaf = sel.filter(L => _TIPOS_NO_CLIENTE.includes(L.tipo));
+    let testesSemVaga = 0;
     const histCli = [];
     if (selSimaf.length) {
       const clientes = await App.graph._readFile(CONFIG.listas.clientes);
@@ -19349,6 +19808,23 @@ async function _impGravar() {
           const antes = clientes[ci].DataValidadeCTF || '';
           clientes[ci] = { ...clientes[ci], DataValidadeCTF: L.depois.DataValidadeCTF };
           histCli.push([L.clienteId, 'CTF atualizado pela importação', '', [{ campo: 'Validade CTF', antes: _impData(antes), depois: _impData(L.depois.DataValidadeCTF) }]]);
+          continue;
+        }
+        if (L.tipo === 'Avaliação Psicológica') {
+          const antes = clientes[ci].ValidadeAvaliPsi || '';
+          clientes[ci] = { ...clientes[ci], ValidadeAvaliPsi: L.depois.ValidadeAvaliPsi };
+          histCli.push([L.clienteId, 'Avaliação psicológica atualizada pela importação', '', [{ campo: 'Validade Avaliação Psicológica', antes: _impData(antes), depois: _impData(L.depois.ValidadeAvaliPsi) }]]);
+          continue;
+        }
+        if (L.tipo === 'Teste de Tiro') {
+          const cli = clientes[ci];
+          const tipoT = L.depois.TipoTesteTiro || L.tipoTeste || '';
+          const slots = _impSlotsTeste(cli);
+          const slot = (tipoT && slots.find(t => t.tipo === tipoT)) || slots.find(t => !t.data && !t.tipo);
+          if (!slot) { testesSemVaga++; continue; }
+          const sfx = _sufixoTesteTiro(slot.i);
+          clientes[ci] = { ...cli, ['ValidadeTesteTiro' + sfx]: L.depois.ValidadeTesteTiro, ['TipoTesteTiro' + sfx]: tipoT || cli['TipoTesteTiro' + sfx] || null };
+          histCli.push([L.clienteId, 'Teste de tiro atualizado pela importação', tipoT, [{ campo: `Validade Teste de Tiro${tipoT ? ' — ' + tipoT : ''}`, antes: slot.data, depois: _impData(L.depois.ValidadeTesteTiro) }]]);
           continue;
         }
         let lista = [];
@@ -19373,6 +19849,7 @@ async function _impGravar() {
     const nCli = new Set(sel.map(L => L.clienteId)).size;
     registrarMovimentacao('Importar Documentos da Pasta', `${sel.length} item(ns)${nArmas ? `, ${nArmas} arma(s) nova(s)` : ''} em ${nCli} cliente(s)`);
     toast(`Gravado: ${sel.length} item(ns)${nArmas ? ` e ${nArmas} arma(s) nova(s)` : ''}.`, 'success');
+    if (testesSemVaga) toast(`${testesSemVaga} teste(s) de tiro não gravado(s): o cliente já tem ${MAX_TESTES_TIRO} testes cadastrados.`, 'warning');
     const contexto = est.contexto, clienteId = est.clienteId;
     window._impDocs = null;
     if (contexto === 'cliente') {
@@ -19392,7 +19869,7 @@ async function renderImportarDocumentos() {
   document.getElementById('page-title').textContent = 'Importar Documentos da Pasta';
   document.getElementById('page-content').innerHTML = `
     <div class="card" style="margin-bottom:16px"><div class="card-body">
-      <p style="margin:0 0 10px;font-size:13.5px">Lê os PDFs da pasta <strong>DOCUMENTOS PORTAL</strong> de todos os clientes ativos (CRAF, Guia de Tráfego, SIMAF e CTF), confere os nomes dos arquivos e mostra o que está faltando ou diferente no cadastro. Nada é gravado sem a sua revisão.</p>
+      <p style="margin:0 0 10px;font-size:13.5px">Lê os PDFs da pasta <strong>DOCUMENTOS PORTAL</strong> de todos os clientes ativos (CRAF, Guia de Tráfego, SIMAF, CTF, Avaliação Psicológica e Teste de Tiro — inclusive PDFs escaneados, por OCR), confere os nomes dos arquivos e mostra o que está faltando ou diferente no cadastro. Nada é gravado sem a sua revisão.</p>
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
         <button id="imp-btn-varrer" class="btn btn-primary" onclick="_impIniciarVarredura()"><i class="bi bi-search me-1"></i>Iniciar varredura</button>
         <div id="imp-varr-status" style="flex:1;min-width:240px;font-size:13px;color:var(--text-muted)">Carregando...</div>
@@ -19506,7 +19983,7 @@ function _renovCrafLinha(cliente, armasCli, docsCli, armasEmRenov) {
 async function renderRenovacaoCRAFs() {
   document.getElementById('page-title').textContent = 'Renovação de CRAFs';
   const [clientes, armas, docs, processos] = await Promise.all([App.getClientes(), App.getArmas(), App.getDocumentos(), App.getProcessos()]);
-  const armasEmRenov = new Set((processos || []).filter(processoRenovCRAFAberto).map(p => armaIdDoProcesso(p)).filter(Boolean));
+  const armasEmRenov = new Set((processos || []).filter(processoRenovCRAFAberto).flatMap(p => armasDoProcesso(p)));
   const armasPorCli = {}, docsPorCli = {};
   (armas || []).filter(a => !armaForaDeUso(a)).forEach(a => { (armasPorCli[String(a.ClienteId)] = armasPorCli[String(a.ClienteId)] || []).push(a); });
   (docs || []).forEach(d => { (docsPorCli[String(d.ClienteId)] = docsPorCli[String(d.ClienteId)] || []).push(d); });
