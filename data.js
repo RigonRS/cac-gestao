@@ -21,6 +21,7 @@ const TIPOS_PROCESSO = [
   'Exclusão de Atividade',
   'Mudança de Acervo',
   'Renovação de CRAF',
+  'Renovação de CRAF Sinarm',
   'Segunda via de CRAF',
   'Transferência de Arma SIGMA x SINARM',
   'Transferência de Arma SINARM x SINARM',
@@ -32,6 +33,7 @@ const TIPOS_PROCESSO = [
   'Correção de dados de arma',
   'Porte de Arma PF',
   'Registrar arma de fogo',
+  'SIMAF Adicional',
 ];
 
 // Transferências que, ao deferir, geram automaticamente 2 Guias de Tráfego (valor 0)
@@ -77,6 +79,20 @@ const CHECKLIST_RENOVACAO_CRAF = [
   'Anexo C',
   'Declaração de Filiação',
   'Habitualidade'
+];
+
+const CHECKLIST_RENOVACAO_CRAF_SINARM = [
+  'Requerimento SINARM',
+  'Documento de Identificação',
+  'Certidão Justiça Federal',
+  'Certidão Justiça Estadual',
+  'Certidão Justiça Militar',
+  'Certidão Justiça Eleitoral',
+  'Comprovante de Ocupação',
+  'Comprovante de Residência',
+  'Avaliação Psicológica',
+  'Teste de Tiro',
+  'Comprovante pagamento da taxa'
 ];
 
 const CHECKLIST_TRANSFERENCIA = [
@@ -153,6 +169,8 @@ const CHECKLISTS = {
     'Declaração de Habitualidade','Requerimento','Procuração','GRU R$50,00 REF 20324 (Estado do RS)'
   ],
   'Renovação de CRAF':    CHECKLIST_RENOVACAO_CRAF,
+  'Renovação de CRAF Sinarm': CHECKLIST_RENOVACAO_CRAF_SINARM,
+  'SIMAF Adicional':      [],
   'Segunda via de CRAF':  ['Documento de Identificação'],
   'Transferência de Arma SIGMA x SINARM':  CHECKLIST_TRANSFERENCIA_SIGMA_SINARM,
   'Transferência de Arma SINARM x SINARM': CHECKLIST_TRANSFERENCIA_SINARM_SINARM,
