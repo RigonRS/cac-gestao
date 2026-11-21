@@ -15867,6 +15867,7 @@ async function renderClubeForm(id = null) {
           <div><label>CNPJ</label><input name="CNPJ" value="${val('CNPJ')}" oninput="this.value=fmtCNPJ(this.value)" maxlength="18" /></div>
           <div><label>Certificado de Registro</label><input name="CertificadoRegistro" value="${val('CertificadoRegistro')}" oninput="this.value=this.value.replace(/\\D/g,'')" /></div>
           <div style="grid-column:1/-1"><label>Endereço Completo</label><input name="Endereco" value="${val('Endereco')}" maxlength="80" /></div>
+          <div style="grid-column:1/-1"><label>Nome curto nos arquivos <span style="font-weight:400;color:var(--text-muted)">(opcional — usado pelo renomeador no nome das Guias de Tráfego, ex.: Clube ICT)</span></label><input name="NomeArquivo" value="${val('NomeArquivo')}" maxlength="40" placeholder="Em branco = nome do clube" /></div>
           <div><label>WhatsApp</label><input name="Whatsapp" value="${val('Whatsapp')}" oninput="this.value=fmtCelular(this.value)" maxlength="15" /></div>
         </div>
       </div>
@@ -15887,6 +15888,7 @@ async function salvarClube(e, id) {
     CertificadoRegistro:  fd.get('CertificadoRegistro'),
     Endereco:             toTitleCase(fd.get('Endereco')),
     Whatsapp:             fmtCelular(fd.get('Whatsapp')),
+    NomeArquivo:          (fd.get('NomeArquivo') || '').trim(),
   };
   showLoading();
   try {
