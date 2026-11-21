@@ -2477,6 +2477,7 @@ function renderPerfilIBAMA(c) {
                     <td>${esc(s.CidadeSimaf||'')}${s.UFSimaf?' - '+esc(s.UFSimaf):''}</td>
                     <td>${s.Desconsiderada === 'sim' ? '<span class="badge badge-gray" title="Fora do controle de validades">Desconsiderada</span>' : `<span class="badge ${vs.cls}">${vs.txt}</span>`}</td>
                     <td style="white-space:nowrap">
+                      ${s.LinkArquivo ? `<a class="btn btn-ghost btn-sm" href="${esc(s.LinkArquivo)}" target="_blank" rel="noopener" title="Abrir o arquivo do SIMAF"><i class="bi bi-box-arrow-up-right" style="color:var(--accent)"></i></a>` : ''}
                       <button class="btn btn-ghost btn-sm" onclick="gerarAutorizacaoCaca('${c.id}',${i})" title="Gerar Autorização de Caça"><i class="bi bi-file-earmark-pdf" style="color:#dc2626"></i></button>
                       <button class="btn btn-ghost btn-sm" onclick="renovarSIMAF('${c.id}',${i})" title="Renovar Validade"><i class="bi bi-arrow-clockwise" style="color:#16a34a"></i></button>
                       <button class="btn btn-ghost btn-sm" onclick="editarSIMAF('${c.id}',${i})" title="Editar"><i class="bi bi-pencil" style="color:var(--accent)"></i></button>
@@ -3988,6 +3989,12 @@ async function renderDocumentoForm(clienteId, id = null) {
           </div>
           <div><label>Data de Emissão</label><input type="date" name="DataEmissao" id="doc-emissao" value="${d.DataEmissao?d.DataEmissao.split('T')[0]:''}" onchange="onEmissaoChange(this.value)" /></div>
           <div><label>Data de Validade</label><input type="date" name="DataValidade" id="doc-validade" value="${d.DataValidade?d.DataValidade.split('T')[0]:''}" /></div>
+          <div style="grid-column:1/-1"><label>Link do arquivo <span style="font-weight:400;color:var(--text-muted)">(opcional)</span></label>
+            <div style="display:flex;gap:6px;align-items:center">
+              <input name="LinkArquivo" value="${esc(d.LinkArquivo||'')}" placeholder="https://... (endereço do PDF no SharePoint/OneDrive)" style="flex:1" />
+              ${d.LinkArquivo ? `<a href="${esc(d.LinkArquivo)}" target="_blank" rel="noopener" class="btn btn-outline btn-sm" title="Abrir o arquivo"><i class="bi bi-box-arrow-up-right"></i></a>` : ''}
+            </div>
+          </div>
         </div>
 
         <div id="campos-craf" style="display:none">
@@ -15221,6 +15228,7 @@ async function editarSIMAF(clienteId, index) {
           <div><label>Telefone do Proprietário</label><input name="TelefoneProprietario" value="${esc(s.TelefoneProprietario||'')}" oninput="this.value=fmtCelular(this.value)" maxlength="15" /></div>
           <div><label>Cidade</label><input name="CidadeSimaf" value="${esc(s.CidadeSimaf||'')}" /></div>
           <div><label>UF</label><input name="UFSimaf" value="${esc(s.UFSimaf||'')}" maxlength="2" style="text-transform:uppercase" /></div>
+          <div style="grid-column:1/-1"><label>Link do arquivo <span style="font-weight:400;color:var(--text-muted)">(opcional)</span></label><input name="LinkArquivo" value="${esc(s.LinkArquivo||'')}" placeholder="https://..." /></div>
         </div>
         <div class="btn-group" style="margin-top:12px;margin-bottom:16px">
           <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-check-lg"></i> Salvar Alterações</button>
@@ -15248,6 +15256,7 @@ async function salvarEdicaoSIMAF(e, clienteId, index) {
       TelefoneProprietario: fd.get('TelefoneProprietario') || '',
       CidadeSimaf:          fd.get('CidadeSimaf') || '',
       UFSimaf:              (fd.get('UFSimaf') || '').toUpperCase(),
+      LinkArquivo:          (fd.get('LinkArquivo') || '').trim(),
     };
     await App.graph.updateItem(CONFIG.listas.clientes, clienteId, { SIMAFs: JSON.stringify(simafList) });
     await registrarHistCliente(clienteId, 'SIMAF editado', simafList[index].NomePropriedade || '', _diffCliente(simafAntes, {
@@ -16950,6 +16959,10 @@ async function renderOrcamentos() {
     }
 
     function cardEmAberto(lista) {
+      // Soma do título: total dos orçamentos e quanto ainda falta receber (mesma conta da impressão)
+      const somaTotal = lista.reduce((n, o) => n + (Number(o.total) || 0), 0);
+      const somaAberto = lista.reduce((n, o) => n + ((o.pagamento && o.pagamento.modalidade === 'parcelado')
+        ? (Number(parcelasPendentesOrcamento(o).total) || 0) : (Number(o.total) || 0)), 0);
       const rows = lista.map(o => {
         const st = statusPagamentoOrcamento(o);
         const lbl = st === 'devedor'      ? { c:'badge-red',    t:'Devedor' }
@@ -16971,6 +16984,8 @@ async function renderOrcamentos() {
         <div class="card-header" style="display:flex;align-items:center;gap:10px">
           <h3 style="margin:0"><i class="bi bi-cash-stack me-2"></i>Orçamentos com valores em aberto</h3>
           <span class="badge" style="background:#fee2e2;color:#991b1b;font-size:12px">${lista.length}</span>
+          ${lista.length ? `<span style="font-size:14px;font-weight:700;color:#b45309" title="Soma dos orçamentos desta lista">Total: ${fmtMoeda(somaTotal)}</span>
+            ${Math.abs(somaAberto - somaTotal) > 0.009 ? `<span style="font-size:13px;color:#991b1b" title="Valor que ainda falta receber (descontando parcelas já pagas)">· em aberto: <strong>${fmtMoeda(somaAberto)}</strong></span>` : ''}` : ''}
           ${lista.length ? `<button class="btn btn-outline btn-sm" style="margin-left:auto" onclick="imprimirOrcamentosEmAberto()" title="Imprimir a lista de orçamentos com valores em aberto"><i class="bi bi-printer me-1"></i>Imprimir</button>` : ''}
         </div>
         <div class="card-body" style="padding:0">${body}</div>
@@ -19353,7 +19368,8 @@ function _impLinhaGt(cliente, arq, p, idx, ctx, docsCli, armasCli) {
   } else if (tipoGuia) {
     // "XXX" = campo em branco na guia; um logradouro no lugar do nome também não serve como nome do clube
     const valido = (v) => v && !/^X+$/i.test(String(v).trim()) && !/^(RUA|AV\.?|AVENIDA|ESTRADA|RODOVIA|TRAVESSA|ALAMEDA|PRA[CÇ]A)\b/i.test(String(v).trim());
-    const nomeDestino = valido(c.destino_nome) ? c.destino_nome : (valido(c.destino) ? c.destino : '');
+    // Clube cadastrado achado pelo endereço da guia (renomeador) tem prioridade
+    const nomeDestino = c.clube_cadastrado || (valido(c.destino_nome) ? c.destino_nome : (valido(c.destino) ? c.destino : ''));
     const clube = _impAcharClube(ctx.clubes, nomeDestino);
     proposto.NomeClubeTiro = clube ? clube.Title : nomeDestino;
     proposto.CRClubeTiro = clube ? (clube.CertificadoRegistro || '') : '';
