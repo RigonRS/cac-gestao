@@ -239,12 +239,12 @@ function _catTipo(especie, alma) {
 
 // Regra do Decreto 11.615/2023 (arts. 11 e 12, com o Decreto 12.345/2024):
 // - curtas: permitido até 407 J (.22, .25, .32, .380, .38 SPL); acima disso (9mm, .40, .45, .357...) restrito;
-// - longas raiadas de repetição: permitido até 1.620 J; semiautomáticas só até o .22 LR;
+// - longas raiadas de repetição: permitido até 1.620 J (o .44 Magnum é restrito também na arma longa); semiautomáticas só até o .22 LR;
 // - longas de alma lisa: permitido calibre 12 ou menor, desde que não seja semiautomática.
 const _CAT_CURTA_PERM = new Set(['22SHORT', '22LR', '22WMR', '17HMR', '25ACP', '32ACP', '32SW', '380', '38SPL']);
 const _CAT_CURTA_REST = new Set(['9MM', '40', '10MM', '45ACP', '45COLT', '357', '44SPL', '44MAG', '454', '44-40', '38-40', '45-70']);
-const _CAT_LONGA_PERM = new Set(['22SHORT', '22LR', '22WMR', '17HMR', '22HORNET', '25ACP', '32ACP', '32SW', '380', '38SPL', '357', '9MM', '40', '45ACP', '45COLT', '44SPL', '44-40', '38-40', '44MAG']);
-const _CAT_LONGA_REST = new Set(['454', '45-70', '308', '3006', '76239', '223', '243', '270', '65CM', '300WM', '22-250', '10MM']);
+const _CAT_LONGA_PERM = new Set(['22SHORT', '22LR', '22WMR', '17HMR', '22HORNET', '25ACP', '32ACP', '32SW', '380', '38SPL', '357', '9MM', '40', '45ACP', '45COLT', '44SPL', '44-40', '38-40']);
+const _CAT_LONGA_REST = new Set(['44MAG', '454', '45-70', '308', '3006', '76239', '223', '243', '270', '65CM', '300WM', '22-250', '10MM']);
 function grupoPelaRegra(especie, calibre, funcionamento, alma) {
   const tipo = _catTipo(especie, alma);
   const semi = /SEMI|AUTOMAT/.test(_catUp(funcionamento));
