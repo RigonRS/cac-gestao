@@ -64,7 +64,7 @@ class GraphService {
     try {
       const token = await this.getToken();
       const url = `${this._driveBase()}/${CONFIG.dataFolderPath}/${nome}.json:/content`;
-      const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
+      const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` }, cache: 'no-store' }); // sempre a versão mais nova (outros operadores)
       if (res.status === 404) {
         // Se já conhecíamos este arquivo com registros nesta sessão, um 404 agora
         // é falha transitória (não "arquivo novo"): não devolver [] para não
@@ -102,6 +102,8 @@ class GraphService {
   async _writeFile(nome, dados, tentativa = 1, opcoes = {}) {
     // Trava de segurança: roda antes de gravar (só na 1ª tentativa).
     if (tentativa === 1) this._checarReducaoPerigosa(nome, dados, opcoes.forcar);
+    // Anota a gravação feita por este operador (a atualização automática não precisa recarregar por ela)
+    (window._gravacoesLocais = window._gravacoesLocais || {})[nome] = Date.now();
     try {
       const token = await this.getToken();
       const url = `${this._driveBase()}/${CONFIG.dataFolderPath}/${nome}.json:/content`;

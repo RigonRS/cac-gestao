@@ -12,11 +12,21 @@ const App = {
   _cache: { clientes: null, armas: null, documentos: null, processos: null, clubes: null },
   invalidateCache(tipo) { if (tipo) this._cache[tipo] = null; else this._cache = { clientes: null, armas: null, documentos: null, processos: null, clubes: null }; },
 
-  async getClientes()   { if (!this._cache.clientes)   this._cache.clientes   = await this.graph.getItems(CONFIG.listas.clientes);   return this._cache.clientes; },
-  async getArmas()      { if (!this._cache.armas)      this._cache.armas      = await this.graph.getItems(CONFIG.listas.armas);      return this._cache.armas; },
-  async getDocumentos() { if (!this._cache.documentos) this._cache.documentos = await this.graph.getItems(CONFIG.listas.documentos); return this._cache.documentos; },
-  async getProcessos()  { if (!this._cache.processos)  this._cache.processos  = await this.graph.getItems(CONFIG.listas.processos);  return this._cache.processos; },
-  async getClubes()     { if (!this._cache.clubes)     this._cache.clubes     = await this.graph.getItems(CONFIG.listas.clubes);     return this._cache.clubes; },
+  // Dados guardados na memória por no máximo 2 minutos (outros operadores também alteram);
+  // a atualização automática apaga antes, assim que percebe a mudança no arquivo.
+  _cacheEm: {},
+  async _doCache(tipo) {
+    if (!this._cache[tipo] || Date.now() - (this._cacheEm[tipo] || 0) > 120000) {
+      this._cache[tipo] = await this.graph.getItems(CONFIG.listas[tipo]);
+      this._cacheEm[tipo] = Date.now();
+    }
+    return this._cache[tipo];
+  },
+  async getClientes()   { return this._doCache('clientes'); },
+  async getArmas()      { return this._doCache('armas'); },
+  async getDocumentos() { return this._doCache('documentos'); },
+  async getProcessos()  { return this._doCache('processos'); },
+  async getClubes()     { return this._doCache('clubes'); },
 };
 
 // ---- UTILITÁRIOS ----
@@ -542,7 +552,7 @@ async function renderPage() {
   const { page, params } = getRoute();
   setActiveNav(page.split('/')[0]);
   atualizarBadgesSidebar();   // atualiza as bolinhas de notificação do menu (não bloqueia)
-  document.getElementById('page-content').innerHTML = '';
+  if (!window._renderSilencioso) document.getElementById('page-content').innerHTML = '';
   const btnBack = document.getElementById('btn-back-nav');
   if (btnBack) btnBack.style.display = (window._navStack && window._navStack.length > 0) ? '' : 'none';
 
@@ -1029,6 +1039,14 @@ function armasDoProcesso(p, dados) {
 function qtdItensProcesso(p) { return ehRenovacaoCRAF(p && p.TipoProcesso) ? Math.max(1, armasDoProcesso(p).length) : 1; }
 // Taxa (GRU) do processo: na renovação agrupada, a taxa é por arma (ex.: R$ 88 x 3).
 function taxaDoProcesso(p) { return taxaProcessoTipo(p && p.TipoProcesso) * qtdItensProcesso(p); }
+// Valor REAL da GRU (página Pagamentos de GRU). A taxa da página "Valores" das transferências
+// (R$ 128 = R$ 88 + 2 guias de R$ 20) serve só para o cálculo dos extras: a GRU da
+// transferência é R$ 88 e cada guia vinculada a ela, R$ 20.
+const TAXA_GRU_REAL = { 'Guia de Tráfego': 20, ...Object.fromEntries(TIPOS_TRANSFERENCIA.map(t => [t, 88])) };
+function taxaGRUProcesso(p) {
+  const t = p && p.TipoProcesso;
+  return (t in TAXA_GRU_REAL) ? TAXA_GRU_REAL[t] * qtdItensProcesso(p) : taxaDoProcesso(p);
+}
 // Checklist da renovação conforme o acervo das armas: Caçador tem "CTF + SIMAF" (e não "Habitualidade"); Atirador, o contrário.
 function checklistRenovacaoCRAF(tipo, acervos) {
   const itens = getChecklist(tipo).filter(n => !/^ctf\s*\+\s*simaf$/i.test(n.trim()) && !/habitualidade/i.test(n));
@@ -2661,6 +2679,28 @@ function verDetalhesArma(armaId) {
   document.body.appendChild(modal);
 }
 
+// Grupos de armas do acervo de Atirador (regras de quantidade por grupo)
+const GRUPOS_ARMAS_ATIRADOR = [
+  { key: 'curta-permitido',  label: 'Armas curtas (revólver ou pistola) de calibre permitido',          restrito: false },
+  { key: 'curta-restrito',   label: 'Armas curtas (revólver ou pistola) de calibre restrito',           restrito: true  },
+  { key: 'raiada-permitido', label: 'Arma longa de alma raiada (carabina/fuzil) de calibre permitido',  restrito: false },
+  { key: 'raiada-restrito',  label: 'Arma longa de alma raiada (carabina/fuzil) de calibre restrito',   restrito: true  },
+  { key: 'lisa-permitido',   label: 'Arma longa de alma lisa (espingarda) de calibre permitido',        restrito: false },
+  { key: 'lisa-restrito',    label: 'Arma longa de alma lisa (espingarda) de calibre restrito',         restrito: true  },
+];
+function grupoArmaAtirador(a) {
+  const esp = _armaUp(a.Especie || '');
+  const alma = _armaUp(a.AlmaCano || '');
+  let tipo = '';
+  if (/REVOLVER|PISTOLA/.test(esp)) tipo = 'curta';
+  else if (/ESPINGARDA/.test(esp)) tipo = 'lisa';
+  else if (/CARABINA|FUZIL|RIFLE/.test(esp)) tipo = 'raiada';
+  else if (/LISA/.test(alma)) tipo = 'lisa';
+  else if (/RAIADA/.test(alma)) tipo = 'raiada';
+  const grupo = a.GrupoCalibre === 'Restrito' ? 'restrito' : (a.GrupoCalibre === 'Permitido' ? 'permitido' : '');
+  return tipo && grupo ? `${tipo}-${grupo}` : '';
+}
+
 function renderPerfilArmas(armas, clienteId, cliente) {
   const categorias   = (cliente?.Categoria || '').split(',').map(c => c.trim()).filter(Boolean);
   const temCacador   = categorias.includes('Caçador');
@@ -2757,6 +2797,72 @@ function renderPerfilArmas(armas, clienteId, cliente) {
 
   window._armasCacheDetalhe = Object.fromEntries(armas.map(a => [a.id, a]));
 
+  // Linha de uma arma (igual em todos os cards)
+  const linhaArma = (a) => {
+    const cad = checarCadastroArma(a);
+    const dotColor = cad.completo ? '#22c55e' : '#ef4444';
+    const dotTitle = cad.completo ? 'Dados completos' : `Faltando: ${cad.faltando.join(', ')}`;
+    const _sa = a.StatusArma || 'Ativa';
+    const _saBadge = _sa === 'Furtada' ? '<span class="badge badge-red">Furtada</span>' : _sa === 'Extraviada' ? '<span class="badge badge-orange">Extraviada</span>' : '<span class="badge badge-green">Ativa</span>';
+    return `<tr>
+      <td style="white-space:nowrap">${a.DataAquisicao ? fmtDate(a.DataAquisicao) : '—'}</td>
+      <td>${_saBadge}</td>
+      <td>${esc(a.NumeroSerie||'—')}</td>
+      <td>${esc(a.NumeroSIGMA||'—')}</td>
+      <td><span class="badge badge-blue">${esc(a.AtividadeCadastrada||'—')}</span></td>
+      <td>${esc(a.Marca||'')} ${esc(a.Modelo||'')}</td>
+      <td>${esc(a.Calibre||'—')}</td>
+      <td>${esc(a.Especie||'—')}</td>
+      <td><span class="badge ${a.GrupoCalibre==='Restrito'?'badge-red':'badge-green'}">${esc(a.GrupoCalibre||'—')}</span></td>
+      <td style="text-align:center">
+        <span title="${esc(dotTitle)}" style="display:inline-block;width:14px;height:14px;border-radius:50%;background:${dotColor};cursor:default" aria-label="${esc(dotTitle)}"></span>
+      </td>
+      <td><div class="btn-group">
+        <button class="btn btn-outline btn-sm" onclick="verDetalhesArma('${a.id}')" title="Ver detalhes"><i class="bi bi-eye"></i></button>
+        <button class="btn btn-outline btn-sm" onclick="navigate('armas/editar',{clienteId:'${clienteId}',id:'${a.id}'})"><i class="bi bi-pencil"></i></button>
+        ${!isClienteInativo(cliente) ? `<button class="btn btn-outline btn-sm" onclick="abrirTransferirArma('${a.id}','${clienteId}')" title="Transferir para outro cliente"><i class="bi bi-arrow-left-right"></i></button>` : ''}
+        <button class="btn btn-ghost btn-sm" onclick="deletarArma('${a.id}','${clienteId}')"><i class="bi bi-trash" style="color:var(--danger)"></i></button>
+      </div></td>
+    </tr>`;
+  };
+  const cardGrupo = (titulo, icone, cor, lista, obs) => `<div class="card" style="margin-bottom:14px">
+    <div class="card-header" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <h3 style="margin:0;font-size:14px"><i class="bi ${icone} me-1" style="color:${cor}"></i>${titulo}</h3>
+      <span class="badge" style="background:${cor}1a;color:${cor};font-size:12px">${lista.length} arma(s)</span>
+      ${obs ? `<span style="font-size:11px;color:var(--text-muted)">${obs}</span>` : ''}
+    </div>
+    <div class="table-wrapper">
+      <table>
+        <thead><tr><th>Data Aquisição</th><th>Status</th><th>N° Série</th><th>N° SIGMA</th><th>Atividade</th><th>Marca/Modelo</th><th>Calibre</th><th>Espécie</th><th>Grupo</th><th style="text-align:center">Dados</th><th>Ações</th></tr></thead>
+        <tbody>${lista.map(linhaArma).join('')}</tbody>
+      </table>
+    </div>
+  </div>`;
+  let gruposHtml = '';
+  if (!armas.length) {
+    gruposHtml = `<div class="card"><div class="empty-state"><i class="bi bi-shield"></i><p>Nenhuma arma cadastrada.</p></div></div>`;
+  } else {
+    // Acervo de Caça: um card só
+    if (armCac.length) gruposHtml += cardGrupo('Acervo de Caça', 'bi-tree-fill', '#16a34a', armCac);
+    // Acervo de Atirador: um card por grupo (curta / longa raiada / longa lisa x permitido / restrito)
+    if (armAti.length) {
+      const usadas = new Set();
+      GRUPOS_ARMAS_ATIRADOR.forEach(g => {
+        const lista = armAti.filter(a => grupoArmaAtirador(a) === g.key);
+        lista.forEach(a => usadas.add(a.id));
+        if (lista.length) gruposHtml += cardGrupo(`Atirador — ${g.label}`, 'bi-bullseye', g.restrito ? '#dc2626' : '#2563eb', lista);
+      });
+      const semGrupo = armAti.filter(a => !usadas.has(a.id));
+      if (semGrupo.length) gruposHtml += cardGrupo('Atirador — sem grupo definido', 'bi-question-circle', '#6b7280', semGrupo, 'Preencha a espécie e o grupo do calibre (permitido/restrito) para classificar.');
+    }
+    // Demais acervos (Colecionador, Defesa Pessoal...), um card por acervo
+    const outros = {};
+    armas.filter(a => a.AtividadeCadastrada !== 'Caçador' && a.AtividadeCadastrada !== 'Atirador')
+      .forEach(a => { const k = a.AtividadeCadastrada || 'Sem acervo definido'; (outros[k] = outros[k] || []).push(a); });
+    Object.keys(outros).sort((x, y) => x.localeCompare(y, 'pt-BR')).forEach(k =>
+      gruposHtml += cardGrupo(k === 'Sem acervo definido' ? k : `Acervo ${k}`, 'bi-shield-fill', '#7c3aed', outros[k]));
+  }
+
   return `
     <div class="toolbar">
       <span style="font-size:13px;color:var(--text-muted)">${armas.length} arma(s) cadastrada(s)</span>
@@ -2771,43 +2877,7 @@ function renderPerfilArmas(armas, clienteId, cliente) {
     <div id="painel-sinarm-armas" style="display:none;margin-bottom:14px"></div>
     <div id="painel-sisgcorp-armas" style="display:none;margin-bottom:14px"></div>
     ${resumoBlock}
-    <div class="card">
-      <div class="table-wrapper">
-        <table>
-          <thead><tr><th>Data Aquisição</th><th>Status</th><th>N° Série</th><th>N° SIGMA</th><th>Atividade</th><th>Marca/Modelo</th><th>Calibre</th><th>Espécie</th><th>Grupo</th><th style="text-align:center">Dados</th><th>Ações</th></tr></thead>
-          <tbody>${armas.length === 0
-            ? `<tr><td colspan="11"><div class="empty-state"><i class="bi bi-shield"></i><p>Nenhuma arma cadastrada.</p></div></td></tr>`
-            : armas.map(a => {
-                const cad = checarCadastroArma(a);
-                const dotColor = cad.completo ? '#22c55e' : '#ef4444';
-                const dotTitle = cad.completo ? 'Dados completos' : `Faltando: ${cad.faltando.join(', ')}`;
-                const _sa = a.StatusArma || 'Ativa';
-                const _saBadge = _sa === 'Furtada' ? '<span class="badge badge-red">Furtada</span>' : _sa === 'Extraviada' ? '<span class="badge badge-orange">Extraviada</span>' : '<span class="badge badge-green">Ativa</span>';
-                return `<tr>
-                  <td style="white-space:nowrap">${a.DataAquisicao ? fmtDate(a.DataAquisicao) : '—'}</td>
-                  <td>${_saBadge}</td>
-                  <td>${esc(a.NumeroSerie||'—')}</td>
-                  <td>${esc(a.NumeroSIGMA||'—')}</td>
-                  <td><span class="badge badge-blue">${esc(a.AtividadeCadastrada||'—')}</span></td>
-                  <td>${esc(a.Marca||'')} ${esc(a.Modelo||'')}</td>
-                  <td>${esc(a.Calibre||'—')}</td>
-                  <td>${esc(a.Especie||'—')}</td>
-                  <td><span class="badge ${a.GrupoCalibre==='Restrito'?'badge-red':'badge-green'}">${esc(a.GrupoCalibre||'—')}</span></td>
-                  <td style="text-align:center">
-                    <span title="${esc(dotTitle)}" style="display:inline-block;width:14px;height:14px;border-radius:50%;background:${dotColor};cursor:default" aria-label="${esc(dotTitle)}"></span>
-                  </td>
-                  <td><div class="btn-group">
-                    <button class="btn btn-outline btn-sm" onclick="verDetalhesArma('${a.id}')" title="Ver detalhes"><i class="bi bi-eye"></i></button>
-                    <button class="btn btn-outline btn-sm" onclick="navigate('armas/editar',{clienteId:'${clienteId}',id:'${a.id}'})"><i class="bi bi-pencil"></i></button>
-                    ${!isClienteInativo(cliente) ? `<button class="btn btn-outline btn-sm" onclick="abrirTransferirArma('${a.id}','${clienteId}')" title="Transferir para outro cliente"><i class="bi bi-arrow-left-right"></i></button>` : ''}
-                    <button class="btn btn-ghost btn-sm" onclick="deletarArma('${a.id}','${clienteId}')"><i class="bi bi-trash" style="color:var(--danger)"></i></button>
-                  </div></td>
-                </tr>`;
-              }).join('')
-          }</tbody>
-        </table>
-      </div>
-    </div>`;
+    ${gruposHtml}`;
 }
 
 async function deletarArma(id, clienteId) {
@@ -9801,8 +9871,8 @@ async function renderPagamentosGRU() {
   });
   const gruGrupos = Object.values(porClienteGru).sort((a,b) => (a.nome||'').localeCompare(b.nome||''));
 
-  // Soma o valor de todas as taxas pendentes (usa a tabela TAXAS_PROCESSO por tipo de processo)
-  const taxaProcesso = p => taxaDoProcesso(p);
+  // Soma o valor real das GRUs pendentes (transferência R$ 88, guia R$ 20 — ver taxaGRUProcesso)
+  const taxaProcesso = p => taxaGRUProcesso(p);
   const taxaTotal = gruPendentes.reduce((s, p) => s + taxaProcesso(p), 0);
 
   el.innerHTML = `
@@ -16687,19 +16757,19 @@ async function renderPerfilOrcamentos(clienteId) {
               let acoes = isAprovado
                 ? `<button class="btn btn-ghost btn-sm" onclick="verInfoOrcamento('${o.id}')" title="Ver informações (observações e pagamento)"><i class="bi bi-eye" style="color:var(--accent)"></i></button>`
                 : '';
-              if (admin && isPendente) {
+              if (isPendente) {
                 acoes += `
                 <button class="btn btn-ghost btn-sm" onclick="editarOrcamento('${o.id}','${clienteId}')" title="Editar"><i class="bi bi-pencil" style="color:var(--accent)"></i></button>
-                <button class="btn btn-ghost btn-sm" onclick="aprovarOrcamento('${o.id}','${clienteId}')" title="Aprovar"><i class="bi bi-check-circle" style="color:var(--success)"></i></button>
+                ${admin ? `<button class="btn btn-ghost btn-sm" onclick="aprovarOrcamento('${o.id}','${clienteId}')" title="Aprovar"><i class="bi bi-check-circle" style="color:var(--success)"></i></button>
                 <button class="btn btn-ghost btn-sm" onclick="rejeitarOrcamento('${o.id}','${clienteId}')" title="Rejeitar"><i class="bi bi-x-circle" style="color:var(--danger)"></i></button>
-                <button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${clienteId}')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>`;
+                <button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${clienteId}')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>` : ''}`;
               } else if (admin && isRejeitado) {
                 acoes += `<button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${clienteId}')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>`;
-              } else if (admin && isAprovado && !temDemanda) {
+              } else if (isAprovado && !temDemanda) {
                 acoes += `
                 <button class="btn btn-ghost btn-sm" onclick="editarOrcamento('${o.id}','${clienteId}')" title="Editar (volta para Pendente)"><i class="bi bi-pencil" style="color:var(--accent)"></i></button>
-                <button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${clienteId}')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>`;
-              } else if (admin && isAprovado && temDemanda) {
+                ${admin ? `<button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${clienteId}')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>` : ''}`;
+              } else if (isAprovado && temDemanda) {
                 acoes += ` <span style="font-size:11px;color:var(--text-muted)" title="Exclua a demanda vinculada em Controle de Demandas para poder excluir este orçamento">Demanda ativa</span>`;
               }
               return `<tr>
@@ -16819,7 +16889,6 @@ async function excluirOrcamento(orcId, clienteId, source) {
 }
 
 function editarOrcamento(orcId, clienteId) {
-  if (!isAdminUser()) { toast('Apenas administradores podem editar orçamentos.', 'error'); return; }
   navigate('orcamento/editar', { orcId, clienteId });
 }
 
@@ -16886,10 +16955,7 @@ async function rejeitarOrcamento(orcId, clienteId, source) {
 // PÁGINA GLOBAL DE ORÇAMENTOS (admin)
 // ============================================================
 async function renderOrcamentos() {
-  if (!isAdminUser()) {
-    document.getElementById('page-content').innerHTML = `<div class="empty-state"><i class="bi bi-lock"></i><p>Acesso restrito a administradores.</p></div>`;
-    return;
-  }
+  const admin = isAdminUser();
   document.getElementById('page-title').textContent = 'Orçamentos';
   showLoading();
   try {
@@ -16923,16 +16989,16 @@ async function renderOrcamentos() {
       if (modo === 'pendente') {
         acoesBtns += `
           <button class="btn btn-ghost btn-sm" onclick="editarOrcamento('${o.id}','${escJs(String(o.clienteId))}')" title="Editar"><i class="bi bi-pencil" style="color:var(--accent)"></i></button>
-          <button class="btn btn-ghost btn-sm" onclick="aprovarOrcamento('${o.id}','${escJs(String(o.clienteId))}','global')" title="Aprovar"><i class="bi bi-check-circle" style="color:var(--success)"></i></button>
+          ${admin ? `<button class="btn btn-ghost btn-sm" onclick="aprovarOrcamento('${o.id}','${escJs(String(o.clienteId))}','global')" title="Aprovar"><i class="bi bi-check-circle" style="color:var(--success)"></i></button>
           <button class="btn btn-ghost btn-sm" onclick="rejeitarOrcamento('${o.id}','${escJs(String(o.clienteId))}','global')" title="Rejeitar"><i class="bi bi-x-circle" style="color:var(--danger)"></i></button>
-          <button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${escJs(String(o.clienteId))}','global')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>`;
+          <button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${escJs(String(o.clienteId))}','global')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>` : ''}`;
       } else if (modo === 'rejeitado') {
-        acoesBtns = `<button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${escJs(String(o.clienteId))}','global')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>`;
+        acoesBtns = admin ? `<button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${escJs(String(o.clienteId))}','global')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>` : '';
       } else if (modo === 'aprovado') {
         acoesBtns += orcamentosComDemanda.has(String(o.id))
           ? ` <span style="font-size:11px;color:var(--text-muted)" title="Exclua a demanda vinculada em Controle de Demandas para poder excluir este orçamento">Demanda ativa</span>`
           : ` <button class="btn btn-ghost btn-sm" onclick="editarOrcamento('${o.id}','${escJs(String(o.clienteId))}')" title="Editar (volta para Pendente)"><i class="bi bi-pencil" style="color:var(--accent)"></i></button>
-             <button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${escJs(String(o.clienteId))}','global')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>`;
+             ${admin ? `<button class="btn btn-ghost btn-sm" onclick="excluirOrcamento('${o.id}','${escJs(String(o.clienteId))}','global')" title="Excluir"><i class="bi bi-trash" style="color:var(--danger)"></i></button>` : ''}`;
       }
       return `<tr>
         <td style="white-space:nowrap;font-weight:600">${esc(o.numero||'—')}</td>
@@ -17767,7 +17833,8 @@ async function abrirCascataDemanda(demandaId, itemIdx) {
     const cliente = await App.graph.getItem(CONFIG.listas.clientes, d.clienteId).catch(() => null);
     _processoClienteObj = cliente || null;
     window._clubesCadastrados = await App.getClubes().catch(() => []);
-    window._cascataDemanda = { demandaId, itemIdx, criados };
+    // Renovação / 2ª via de CRAF: cada arma só pode ser escolhida uma vez
+    window._cascataDemanda = { demandaId, itemIdx, criados, armaUnica: ehRenovacaoCRAF(item.tipo) || item.tipo === 'Segunda via de CRAF' };
     const eGuia = item.tipo === 'Guia de Tráfego';
     const armaOpts = armas.map(a => `<option value="${a.id}|${esc(a.AtividadeCadastrada||'')}|${esc(a.Marca||'')}|${esc(a.Modelo||'')}">${a.Especie ? esc(a.Especie)+' · ' : ''}${esc(a.Marca||'')} ${esc(a.Modelo||'')}${a.NumeroSerie ? ' ('+esc(a.NumeroSerie)+')' : ''} — ${esc(a.AtividadeCadastrada||'')}</option>`).join('');
     const clubeOpts = (window._clubesCadastrados || []).slice().sort((a,b)=>(a.Title||'').localeCompare(b.Title||'','pt-BR')).map(cl => `<option value="${cl.id}">${esc(cl.Title)}</option>`).join('');
@@ -17877,6 +17944,9 @@ async function criarProcessosCascata() {
       paraCriar.push({ arma, tipoGuia, dadosEsp });
     }
     if (!paraCriar.length) { toast('Selecione a arma de ao menos um processo.', 'warning'); return; }
+    if (ctx.armaUnica && new Set(paraCriar.map(l => String(l.arma).split('|')[0])).size < paraCriar.length) {
+      toast('A mesma arma foi escolhida mais de uma vez. Corrija antes de criar.', 'warning'); return;
+    }
     if (emBranco > 0) {
       const ok = await confirmarModal({
         titulo: 'Processos em branco',
@@ -17959,7 +18029,19 @@ async function criarProcessosCascata() {
 }
 
 // Handlers das linhas de Guia na cascata (versão por-linha do formulário de processo)
+// Esconde, em cada campo, as armas já escolhidas nos outros campos.
+function _cascEsconderArmasUsadas() {
+  const sels = [...document.querySelectorAll('select[id^="casc-arma-"]')];
+  const escolhidas = sels.map(s => s.value).filter(Boolean);
+  sels.forEach(s => {
+    [...s.options].forEach(o => {
+      const usadaEmOutro = o.value && o.value !== s.value && escolhidas.includes(o.value);
+      o.hidden = usadaEmOutro; o.disabled = usadaEmOutro;
+    });
+  });
+}
 function onCascArma(r, val) {
+  if (window._cascataDemanda && window._cascataDemanda.armaUnica) _cascEsconderArmasUsadas();
   const sel = document.getElementById(`casc-guia-${r}`);
   if (!sel) return; // linhas de CRAF não têm tipo de guia
   const atividade = (val || '').split('|')[1] || '';
@@ -18329,6 +18411,7 @@ async function iniciarApp() {
   // Central de WhatsApp: disponível para admins e atendentes (se o gateway estiver configurado)
   // Página WhatsApp: liberada para a equipe (administradores + Andrieli, Priscila, Geison)
   iniciarSinalOperador();
+  iniciarAtualizacaoAutomatica();   // recebe as alterações dos outros operadores sem Ctrl+F5
   if (isAdminUser()) {
     const un = document.getElementById('user-name');
     if (un) { un.style.cursor = 'pointer'; un.title = 'Ver operadores online'; un.onclick = abrirOperadoresOnline; un.parentElement.style.cursor = 'pointer'; }
@@ -20111,4 +20194,144 @@ async function moverRenovacaoCRAF(clienteId, destino) {
     toast(`${L.cliente.Title} movido para ${destino === 'verificar' ? 'Verificar' : 'Não Renovar'}.`, 'success');
     _renovCrafRender();
   } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}
+
+// ============================================================
+// ATUALIZAÇÃO AUTOMÁTICA — 6 operadores mexem nos mesmos dados.
+// A cada 45 s o sistema confere (numa única consulta) se algum arquivo de dados
+// mudou. Mudou por outro operador: descarta a cópia da memória e redesenha a
+// página aberta — só se a pessoa não estiver digitando/editando nem com uma
+// janela aberta; nesse caso aparece uma faixa "Atualizar" para ela clicar.
+// A cada 5 min confere também se saiu versão nova do sistema (sem Ctrl+F5).
+// ============================================================
+const ATUALIZACAO_INTERVALO_MS = 45 * 1000;
+const VERSAO_INTERVALO_MS = 5 * 60 * 1000;
+// Páginas que não são redesenhadas sozinhas (formulários, WhatsApp — que já é em tempo real — etc.)
+const PAGINAS_SEM_ATUALIZACAO = /(^|\/)(novo|editar|importar)$|^whatsapp$|^orcamento\/|^importar-documentos$|^configuracoes$|^anotacoes$/;
+window._paginaEditada = false;
+
+function _versaoAtualTela() {
+  const m = document.body.innerHTML.match(/>V(\d+\.\d+)</);
+  return m ? m[1] : null;
+}
+function _algumaJanelaAberta() {
+  return [...document.body.children].some(el => {
+    if (['loading-overlay', 'toast-container', 'faixa-atualizacao', 'app-shell', 'login-screen', 'setup-screen'].includes(el.id)) return false;
+    if (el.tagName === 'SCRIPT' || el.tagName === 'STYLE') return false;
+    const st = getComputedStyle(el);
+    if (st.position !== 'fixed' || st.display === 'none' || st.visibility === 'hidden') return false;
+    // janela/popup cobre boa parte da tela; botões flutuantes pequenos não contam
+    const r = el.getBoundingClientRect();
+    return r.width >= window.innerWidth * 0.5 && r.height >= window.innerHeight * 0.5;
+  });
+}
+function _usuarioOcupado() {
+  const ativo = document.activeElement;
+  const digitando = ativo && /^(INPUT|TEXTAREA|SELECT)$/.test(ativo.tagName) && document.getElementById('page-content')?.contains(ativo);
+  const carregando = document.getElementById('loading-overlay')?.style.display === 'flex';
+  return window._paginaEditada || digitando || carregando || _algumaJanelaAberta();
+}
+
+function _mostrarFaixaAtualizacao(texto, acao) {
+  let f = document.getElementById('faixa-atualizacao');
+  if (!f) {
+    f = document.createElement('div');
+    f.id = 'faixa-atualizacao';
+    f.style.cssText = 'position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:10003;background:#1e3a8a;color:#fff;border-radius:999px;padding:8px 10px 8px 18px;font-size:13px;box-shadow:0 8px 24px rgba(0,0,0,.25);display:flex;align-items:center;gap:10px';
+    document.body.appendChild(f);
+  }
+  f.innerHTML = `<i class="bi bi-arrow-repeat"></i><span>${texto}</span>
+    <button style="background:#fff;color:#1e3a8a;border:none;border-radius:999px;padding:4px 12px;font-weight:700;cursor:pointer;font-size:12px">Atualizar</button>
+    <button title="Fechar" style="background:none;border:none;color:#c7d2fe;cursor:pointer;font-size:16px;line-height:1">×</button>`;
+  const [btnOk, btnX] = f.querySelectorAll('button');
+  btnOk.onclick = () => { f.remove(); acao(); };
+  btnX.onclick = () => f.remove();
+}
+
+// Redesenha a página aberta sem a tela de "carregando" e sem perder rolagem e buscas digitadas.
+async function _redesenharPaginaSilencioso() {
+  const conteudo = document.getElementById('page-content');
+  if (!conteudo) return;
+  const rolagem = window.scrollY;
+  const rolagemMain = conteudo.parentElement ? conteudo.parentElement.scrollTop : 0;
+  const textos = {};
+  conteudo.querySelectorAll('input[id]').forEach(i => {
+    if (/^(text|search|)$/.test(i.type || '') && i.value) textos[i.id] = i.value;
+  });
+  const showOrig = window.showLoading;
+  window.showLoading = () => {};
+  window._renderSilencioso = true;
+  try { await renderPage(); }
+  catch (e) { console.warn('atualização automática:', e); }
+  finally { window.showLoading = showOrig; window._renderSilencioso = false; hideLoading(); }
+  Object.entries(textos).forEach(([id, v]) => {
+    const el = document.getElementById(id);
+    if (el && !el.value) { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); }
+  });
+  window.scrollTo(0, rolagem);
+  if (conteudo.parentElement) conteudo.parentElement.scrollTop = rolagemMain;
+}
+
+let _estadoArquivos = null; // nome -> eTag da última conferência
+async function _conferirMudancasDados() {
+  if (document.visibilityState === 'hidden') return;       // aba em segundo plano: confere quando voltar
+  let itens;
+  try {
+    const token = await App.graph.getToken();
+    const url = `${App.graph._driveBase()}/${CONFIG.dataFolderPath}:/children?$select=name,eTag,lastModifiedDateTime&$top=999`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' });
+    if (!res.ok) return;
+    itens = (await res.json()).value || [];
+  } catch (e) { return; }
+  const agora = {};
+  itens.filter(i => /\.json$/i.test(i.name)).forEach(i => { agora[i.name.replace(/\.json$/i, '')] = i.eTag || i.lastModifiedDateTime; });
+  if (!_estadoArquivos) { _estadoArquivos = agora; return; }
+  const mudados = Object.keys(agora).filter(n => _estadoArquivos[n] !== agora[n]);
+  _estadoArquivos = agora;
+  if (!mudados.length) return;
+  // Mudança feita por este próprio operador (gravou há pouco)? Não precisa redesenhar por ela.
+  const locais = window._gravacoesLocais || {};
+  const deOutros = mudados.filter(n => !(locais[n] && Date.now() - locais[n] < ATUALIZACAO_INTERVALO_MS + 15000));
+  mudados.forEach(n => { if (n in App._cache) App.invalidateCache(n); });
+  if (!deOutros.length) return;
+  atualizarBadgesSidebar();
+  const { page } = getRoute();
+  if (PAGINAS_SEM_ATUALIZACAO.test(page)) return;
+  if (_usuarioOcupado()) {
+    _mostrarFaixaAtualizacao('Outro operador alterou dados.', () => { window._paginaEditada = false; _redesenharPaginaSilencioso(); });
+    return;
+  }
+  document.getElementById('faixa-atualizacao')?.remove();
+  await _redesenharPaginaSilencioso();
+}
+
+async function _conferirVersaoNova() {
+  try {
+    const html = await (await fetch(`index.html?nc=${Date.now()}`, { cache: 'no-store' })).text();
+    const m = html.match(/>V(\d+\.\d+)</);
+    const atual = _versaoAtualTela();
+    if (!m || !atual || m[1] === atual) return;
+    const { page } = getRoute();
+    if (!_usuarioOcupado() && !PAGINAS_SEM_ATUALIZACAO.test(page)) { location.reload(); return; }
+    _mostrarFaixaAtualizacao(`Nova versão do sistema (V${m[1]}).`, () => location.reload());
+  } catch (e) {}
+}
+
+function iniciarAtualizacaoAutomatica() {
+  if (window._atualizacaoIniciada) return;
+  window._atualizacaoIniciada = true;
+  // Algo digitado na página = "editando": não redesenhar por cima até trocar de página.
+  document.addEventListener('input', e => {
+    if (document.getElementById('page-content')?.contains(e.target)) {
+      const t = e.target;
+      // buscas/filtros não contam como edição
+      if (t.matches && (t.matches('[id*="busca"]') || t.matches('[oninput*="filtrar"]') || t.matches('[oninput*="Filtr"]'))) return;
+      window._paginaEditada = true;
+    }
+  }, true);
+  window.addEventListener('hashchange', () => { window._paginaEditada = false; document.getElementById('faixa-atualizacao')?.remove(); });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') _conferirMudancasDados(); });
+  _conferirMudancasDados();
+  setInterval(_conferirMudancasDados, ATUALIZACAO_INTERVALO_MS);
+  setInterval(_conferirVersaoNova, VERSAO_INTERVALO_MS);
 }
