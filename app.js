@@ -2679,6 +2679,11 @@ function verDetalhesArma(armaId) {
   document.body.appendChild(modal);
 }
 
+// Limites de quantidade dos acervos (Decreto 11.615/2023) — usados no perfil e no Catálogo de Armas
+const LIMITES_ATIRADOR = { I: { permitido: 4, restrito: null }, II: { permitido: 8, restrito: null }, III: { permitido: 12, restrito: 4 } };
+const LIMITES_CACADOR = { total: 6, restrito: 2 };
+const LIMITES_DEFESA_PESSOAL = { total: 2, restrito: 0 };
+
 // Grupos de armas do acervo de Atirador (regras de quantidade por grupo)
 const GRUPOS_ARMAS_ATIRADOR = [
   { key: 'curta-permitido',  label: 'Armas curtas (revólver ou pistola) de calibre permitido',          restrito: false },
@@ -2755,10 +2760,9 @@ function renderPerfilArmas(armas, clienteId, cliente) {
       </div>`;
 
   const nivelAtirador = cliente?.NivelAtirador || 'I';
-  const LIMITES_ATIRADOR = { I: { permitido: 4, restrito: null }, II: { permitido: 8, restrito: null }, III: { permitido: 12, restrito: 4 } };
   const limAti = LIMITES_ATIRADOR[nivelAtirador] || LIMITES_ATIRADOR.I;
   const barrasAtirador = nivelAtirador === 'III'
-    ? mkBar('Calibre Permitido', permAti.length, limAti.permitido) + mkBar('Calibre Restrito', resAti.length, limAti.restrito)
+    ? mkBar('Total de armas (Nível III)', armAti.length, limAti.permitido + limAti.restrito) + mkBar('Calibre Restrito', resAti.length, limAti.restrito)
     : mkBar(`Total de armas (Nível ${nivelAtirador})`, armAti.length, limAti.permitido);
 
   const boxAtirador = temAtirador
