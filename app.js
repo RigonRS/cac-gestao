@@ -22,7 +22,7 @@ const App = {
     }
     return this._cache[tipo];
   },
-  async getClientes()   { return this._doCache('clientes'); },
+  async getClientes()   { const l = await this._doCache('clientes'); atualizarClientesVIP(l); return l; },
   async getArmas()      { return this._doCache('armas'); },
   async getDocumentos() { return this._doCache('documentos'); },
   async getProcessos()  { return this._doCache('processos'); },
@@ -494,9 +494,13 @@ window._navStack = [];
 
 function navigate(page, params = {}) {
   const current = window.location.hash.replace('#', '') || 'dashboard';
-  window._navStack.push(current);
   const qs = Object.entries(params).map(([k,v]) => `${k}=${encodeURIComponent(v)}`).join('&');
-  window.location.hash = qs ? `${page}?${qs}` : page;
+  const destino = qs ? `${page}?${qs}` : page;
+  // Mesma página (ex.: excluir um documento e voltar para a mesma aba): o navegador não
+  // dispara a troca de endereço, então redesenha direto.
+  if (destino === current) { renderPage(); return; }
+  window._navStack.push(current);
+  window.location.hash = destino;
 }
 
 function voltarPaginaAnterior() {
@@ -553,6 +557,7 @@ async function renderPage() {
   setActiveNav(page.split('/')[0]);
   atualizarBadgesSidebar();   // atualiza as bolinhas de notificação do menu (não bloqueia)
   if (!window._renderSilencioso) document.getElementById('page-content').innerHTML = '';
+  document.getElementById('page-content').classList.remove('perfil-vip');
   const btnBack = document.getElementById('btn-back-nav');
   if (btnBack) btnBack.style.display = (window._navStack && window._navStack.length > 0) ? '' : 'none';
 
@@ -663,9 +668,23 @@ async function renderDashboard() {
   vencimentos.sort((a, b) => a.dias - b.dias);
 
   const v60 = [];
-  documentos.forEach(d => { if (semAnaliseVenc.has(String(d.ClienteId))) return; if (d.Desconsiderada === 'sim') return; if (d.DataValidade) { const iso = normISO(d.DataValidade); const dias = iso ? daysBetween(iso) : null; if (dias !== null && dias >= 0 && dias <= 60) v60.push({ tipo: d.TipoDocumento, cliente: d.ClienteNome, data: iso, dias }); } });
-  clientes.forEach(c => { if (naoAnalisaVencimentos(c)) return; if (c.DataValidadeCR) { const iso = normISO(c.DataValidadeCR); const dias = iso ? daysBetween(iso) : null; if (dias !== null && dias >= 0 && dias <= 60) v60.push({ tipo: 'CR', cliente: c.Title, data: iso, dias }); } });
+  documentos.forEach(d => { if (semAnaliseVenc.has(String(d.ClienteId))) return; if (d.Desconsiderada === 'sim') return; if (d.DataValidade) { const iso = normISO(d.DataValidade); const dias = iso ? daysBetween(iso) : null; if (dias !== null && dias >= 0 && dias <= 60) v60.push({ tipo: d.TipoDocumento, cliente: d.ClienteNome, data: iso, dias, clienteId: d.ClienteId }); } });
+  clientes.forEach(c => { if (naoAnalisaVencimentos(c)) return; if (c.DataValidadeCR) { const iso = normISO(c.DataValidadeCR); const dias = iso ? daysBetween(iso) : null; if (dias !== null && dias >= 0 && dias <= 60) v60.push({ tipo: 'CR', cliente: c.Title, data: iso, dias, clienteId: c.id }); } });
   v60.sort((a, b) => a.dias - b.dias);
+  const idsVIP = new Set(clientes.filter(clienteVIP).map(c => String(c.id)));
+  const v60VIP = v60.filter(v => idsVIP.has(String(v.clienteId)));
+  const listaV60 = (lista, vazio) => lista.length === 0
+    ? `<div class="empty-state" style="padding:24px"><i class="bi bi-check-circle" style="font-size:32px"></i><p>${vazio}</p></div>`
+    : lista.slice(0, 8).map(v => {
+        const s = validadeStatus(v.data);
+        return `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--border);cursor:pointer" onclick="navigate('clientes/perfil',{id:'${escJs(String(v.clienteId || ''))}'})">
+          <div>
+            <div style="font-size:13px;font-weight:600">${esc(v.tipo)} — <span>${esc(v.cliente)}</span></div>
+            <div style="font-size:11px;color:var(--text-muted)">${fmtDate(v.data)}</div>
+          </div>
+          <span class="badge ${s.cls}">${v.dias === 0 ? 'Hoje' : v.dias + 'd'}</span>
+        </div>`;
+      }).join('');
 
   const urgentes = vencimentos.filter(v => v.dias < 0).length;
 
@@ -694,27 +713,21 @@ async function renderDashboard() {
       </div>
     </div>
 
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;flex-wrap:wrap">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:20px">
       <div class="card">
         <div class="card-header">
           <h3><i class="bi bi-calendar-x me-2"></i>Documentos Vencendo em 60D</h3>
           <a class="btn btn-outline btn-sm" onclick="navigate('validades')">Ver todos</a>
         </div>
-        <div class="card-body" style="padding:0">
-          ${(() => { return v60.length === 0
-            ? '<div class="empty-state" style="padding:24px"><i class="bi bi-check-circle" style="font-size:32px"></i><p>Nenhum documento a vencer em 60 dias</p></div>'
-            : v60.slice(0,8).map(v => {
-                const s = validadeStatus(v.data);
-                return `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--border)">
-                  <div>
-                    <div style="font-size:13px;font-weight:600">${esc(v.tipo)} — ${esc(v.cliente)}</div>
-                    <div style="font-size:11px;color:var(--text-muted)">${fmtDate(v.data)}</div>
-                  </div>
-                  <span class="badge ${s.cls}">${v.dias === 0 ? 'Hoje' : v.dias + 'd'}</span>
-                </div>`;
-              }).join(''); })()
-          }
+        <div class="card-body" style="padding:0">${listaV60(v60, 'Nenhum documento a vencer em 60 dias')}</div>
+      </div>
+
+      <div class="card card-vip">
+        <div class="card-header">
+          <h3><i class="bi bi-award-fill me-2" style="color:var(--vip)"></i>Documentos Vencendo em 60D (VIP)</h3>
+          <a class="btn btn-outline btn-sm" onclick="window._clientesTab='vip';navigate('clientes')">Clientes VIP</a>
         </div>
+        <div class="card-body" style="padding:0">${listaV60(v60VIP, idsVIP.size ? 'Nenhum documento de cliente VIP a vencer em 60 dias' : 'Nenhum cliente marcado como VIP')}</div>
       </div>
 
       <div class="card">
@@ -1470,6 +1483,7 @@ const CLIENTES_TABS = [
   { key: 'ativos',   label: 'Ativos',   filtro: c => !isClienteInativo(c) },
   { key: 'inativos', label: 'Inativos', filtro: c => isClienteInativo(c) },
   { key: 'todos',    label: 'Todos',    filtro: () => true },
+  { key: 'vip',      label: 'VIP',      filtro: c => clienteVIP(c) },
 ];
 function mudarTabClientes(key) {
   window._clientesTab = key;
@@ -1902,6 +1916,12 @@ async function renderClienteForm(id = null, importParams = {}) {
       <div class="form-body">
         <div class="form-grid">
           <div style="grid-column:1/-1"><label>Nome Completo *</label><input name="NomeCompleto" value="${val('Title')}" required /></div>
+          <div style="grid-column:1/-1">
+            <label class="checkbox-item" style="display:inline-flex;align-items:center;gap:6px;font-weight:600;color:var(--vip)">
+              <input type="checkbox" name="VIP" ${clienteVIP(c) ? 'checked' : ''} /> <i class="bi bi-award-fill"></i> VIP?
+            </label>
+            <span style="font-size:12px;color:var(--text-muted);margin-left:6px">Cliente VIP ganha a medalha e o nome em dourado em todo o sistema.</span>
+          </div>
           <div>
             <label>CPF</label>
             <input name="CPF" value="${val('CPF')}" oninput="this.value=fmtCPF(this.value);verificarCPFDuplicado(this.value,'${id||''}')" maxlength="14" />
@@ -2181,6 +2201,7 @@ async function salvarCliente(e, id) {
     CPF:              fd.get('CPF'),
     SenhaGOV:         fd.get('SenhaGOV'),
     VerificacaoEtapas: fd.get('VerificacaoEtapas') ? 'Sim' : 'Não',
+    VIP:              fd.get('VIP') ? 'sim' : null,
     NumeroCR:         fd.get('NumeroCR'),
     DataValidadeCR:   fd.get('DataValidadeCR'),
     RG:               fd.get('RG'),
@@ -2260,6 +2281,7 @@ async function renderClientePerfil(id, tab = 'dados') {
   const armas      = todasArmas.filter(a => String(a.ClienteId) === String(id));
   const documentos = todosDocumentos.filter(d => String(d.ClienteId) === String(id));
   const processos  = todosProcessos.filter(p => String(p.ClienteId) === String(id));
+  document.getElementById('page-content').classList.toggle('perfil-vip', clienteVIP(cliente));
 
   const isCacador = (cliente.Categoria || '').includes('Caçador');
   let numOrcamentos = 0;
@@ -2296,7 +2318,7 @@ async function renderClientePerfil(id, tab = 'dados') {
     <div class="profile-header">
       <div class="profile-avatar">${getInitials(cliente.Title)}</div>
       <div class="profile-info">
-        <h2>${esc(cliente.Title)}${inativo ? ' <span class="badge badge-red" style="vertical-align:middle">Inativo</span>' : ''}</h2>
+        <h2><span class="${clienteVIP(cliente) ? 'nome-vip' : ''}">${esc(cliente.Title)}</span>${clienteVIP(cliente) ? ' <span class="badge badge-vip" style="vertical-align:middle"><i class="bi bi-award-fill"></i> VIP</span>' : ''}${inativo ? ' <span class="badge badge-red" style="vertical-align:middle">Inativo</span>' : ''}</h2>
         <p>CPF: ${esc(cliente.CPF || '—')} &nbsp;·&nbsp; CR: ${esc(cliente.NumeroCR || '—')} &nbsp;·&nbsp; ${cats || '<span class="badge badge-gray">Sem categoria</span>'}</p>
         <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted);cursor:pointer;margin-top:2px">
           <input type="checkbox" ${cliente.NaoAnalisarVencimentos === 'sim' ? 'checked' : ''} onchange="toggleNaoAnalisarVencimentos('${id}',this.checked)" />
@@ -4529,6 +4551,7 @@ async function renderConsultaProcessos() {
       else if (col === 'tipo') { va = a.TipoProcesso||''; vb = b.TipoProcesso||''; }
       else if (col === 'resp') { va = a.Responsavel||''; vb = b.Responsavel||''; }
       else if (col === 'protocolo') { va = a.NumeroProtocolo||''; vb = b.NumeroProtocolo||''; }
+      else if (col === 'dataProt') { va = normISO(a.DataProtocoloSistema || '') || '0000-00-00'; vb = normISO(b.DataProtocoloSistema || '') || '0000-00-00'; }
       else if (col === 'ultReg') { va = _getUltimoRegistroISO(a)||'0000-00-00'; vb = _getUltimoRegistroISO(b)||'0000-00-00'; }
       else if (col === 'status') { va = a.Status||''; vb = b.Status||''; }
       else if (col === '2fa') {
@@ -4571,6 +4594,7 @@ async function renderConsultaProcessos() {
             ${thSort('tipo','Tipo de Processo')}
             <th>Identificação</th>
             ${thSort('protocolo','Protocolo')}
+            ${thSort('dataProt','Data de Protocolo')}
             ${thSort('resp','Responsável')}
             ${thSort('ultReg','Último Registro')}
             ${thSort('status','Status')}
@@ -4589,6 +4613,7 @@ async function renderConsultaProcessos() {
                 <td>${esc(p.TipoProcesso||'—')}${p.Restituido ? ' <span class="badge" style="background:#9333ea;color:#fff;font-size:11px"><i class="bi bi-arrow-return-left"></i> Restituído</span>' : ''}</td>
                 <td style="font-size:12px;color:var(--text-muted)">${_info ? esc(_info) : '<span style="color:var(--text-muted)">—</span>'}</td>
                 <td style="font-size:12px">${p.NumeroProtocolo ? esc(p.NumeroProtocolo) : '<span style="color:var(--text-muted)">—</span>'}</td>
+                <td style="font-size:12px;white-space:nowrap">${p.DataProtocoloSistema ? fmtDate(normISO(p.DataProtocoloSistema)) : '<span style="color:var(--text-muted)">—</span>'}</td>
                 <td>${p.Responsavel ? `<span class="badge badge-blue">${esc(p.Responsavel)}</span>` : '<span style="color:var(--text-muted)">—</span>'}</td>
                 <td style="font-size:12px;color:${ultReg ? 'var(--danger)' : 'var(--text-muted)'}"><strong>${ultReg || '—'}</strong></td>
                 <td><span class="badge ${b.cls}">${b.txt}</span>${badgeAtencaoGru(p)}</td>
@@ -4623,6 +4648,7 @@ function imprimirConsultaProcessos() {
     <td>${esc(p.TipoProcesso||'—')}${p.Restituido ? ' (Restituído)' : ''}</td>
     <td>${esc(infoArmaLocalProcesso(p) || '—')}</td>
     <td>${esc(p.NumeroProtocolo||'—')}</td>
+    <td>${p.DataProtocoloSistema ? fmtDate(normISO(p.DataProtocoloSistema)) : '—'}</td>
     <td>${esc(p.Responsavel||'—')}</td>
     <td>${esc(_getUltimoRegistro(p) || '—')}</td>
     <td>${esc(p.Status||'—')}</td>
@@ -4631,7 +4657,7 @@ function imprimirConsultaProcessos() {
     <h2>Consulta de Processos — Pendentes de Registro</h2>
     <p style="text-align:center;color:#555;margin-top:-10px;font-size:11pt">${lista.length} processo(s) · Emitido em ${hoje}</p>
     <table>
-      <thead><tr><th>Cliente</th><th>Tipo</th><th>Identificação</th><th>Protocolo</th><th>Responsável</th><th>Último Registro</th><th>Status</th></tr></thead>
+      <thead><tr><th>Cliente</th><th>Tipo</th><th>Identificação</th><th>Protocolo</th><th>Data de Protocolo</th><th>Responsável</th><th>Último Registro</th><th>Status</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
   imprimirDocumento(html, 'Consulta de Processos');
@@ -5761,6 +5787,12 @@ async function onCompradorSistemaChange(value) {
   const man = document.getElementById('proc-comprador-manual');
   if (cad) cad.style.display = value === 'sim' ? '' : 'none';
   if (man) man.style.display = value === 'nao' ? '' : 'none';
+  const tipoAtual = document.querySelector('[name="TipoProcesso"]')?.value || window._processoEditTipo || '';
+  let av = document.getElementById('aviso-comprador-cadastro');
+  if (value === 'nao' && TIPOS_TRANSF_GERA_GUIAS.includes(tipoAtual)) {
+    if (!av && cad) { av = document.createElement('div'); av.id = 'aviso-comprador-cadastro'; cad.parentNode.insertBefore(av, cad); }
+    if (av) av.innerHTML = `<div style="background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:6px;padding:8px 10px;font-size:12.5px;margin-bottom:12px"><i class="bi bi-exclamation-triangle-fill me-1"></i>Nesta transferência o comprador precisa estar cadastrado no sistema: depois do deferimento as Guias de Tráfego são abertas no nome dele. Cadastre o comprador e escolha <strong>Sim</strong>.</div>`;
+  } else if (av) av.remove();
   if (value === 'sim') await carregarClientesSelector('sel-comprador-cliente');
 }
 
@@ -5836,6 +5868,8 @@ async function salvarProcesso(e) {
 
   const checklist  = coletarChecklist(tipoProc, tipoGuia);
   const dadosEsp   = coletarDadosEspecificos(tipoProc);
+  const _erroComp  = erroCompradorTransferencia(tipoProc, dadosEsp);
+  if (_erroComp) { toast(_erroComp, 'error'); return; }
   // Renovação de CRAF: guarda o CRAF (documento) da arma escolhida, para ligar o processo a ele.
   if (ehRenovacaoCRAF(tipoProc) && dadosEsp.armaId) {
     try {
@@ -6497,10 +6531,28 @@ async function _gerarAnexoCCliente(c, usarEnd2) {
   } finally { hideLoading(); }
 }
 
-async function _gerarDSACliente(c, usarEnd2) {
+// DSA com o endereço informado no processo de Alteração de Endereço (não o do cadastro do cliente)
+async function gerarDSAEnderecoProcesso(processoId) {
+  showLoading();
+  let p, c;
+  try {
+    p = await App.graph.getItem(CONFIG.listas.processos, processoId);
+    c = await App.graph.getItem(CONFIG.listas.clientes, p.ClienteId);
+  } catch (e) { toast(e.message, 'error'); hideLoading(); return; }
+  hideLoading();
+  const dados = _dadosEspProc(p);
+  const end = {
+    end: dados.endLogradouro || '', num: dados.endNumero || '', compl: dados.endComplemento || '',
+    bairro: dados.endBairro || '', cidade: dados.endCidade || '', uf: (dados.endUF || '').toUpperCase(), cep: dados.endCEP || '',
+  };
+  if (!end.end && !end.cidade) { toast('Este processo não tem endereço preenchido.', 'warning'); return; }
+  await _gerarDSACliente(c, false, end);
+}
+
+async function _gerarDSACliente(c, usarEnd2, enderecoProcesso) {
   showLoading();
   try {
-    const d = _clienteDocData(c, usarEnd2);
+    const d = { ..._clienteDocData(c, usarEnd2), ...(enderecoProcesso || {}) };
     const categorias = (d.categoria || 'CAC').split(',').map(s => s.trim()).filter(Boolean).join(', ') || 'CAC';
     const endFmt = [d.end, d.num ? `n° ${d.num}` : '', d.compl, d.bairro, d.cidade, d.uf, d.cep ? `CEP ${d.cep}` : ''].filter(Boolean).join(', ');
     const hoje = hojeISO();
@@ -7168,6 +7220,7 @@ async function renderProcessoDetalhe(id) {
               const temFiliacao    = _nomeLower.includes('filiação') || _nomeLower.includes('filiacao');
               const temHabitualidade = _nomeLower.includes('habitualidade');
               const temDeclResidencia = item.nome === 'Declaração de Residência' && processo.TipoProcesso === 'Alteração de Endereço';
+              const temDSAEndProc  = item.nome === 'Declaração de Segurança do Acervo' && processo.TipoProcesso === 'Alteração de Endereço';
               const temCTF         = item.nome.includes('CTF');
               const temGRU88       = item.nome.includes('GRU R$88') && !['Transferência de Arma SINARM x SINARM','Transferência de Arma SIGMA x SINARM'].includes(processo.TipoProcesso);
               const temGRU50       = item.nome.includes('GRU R$50');
@@ -7188,6 +7241,7 @@ async function renderProcessoDetalhe(id) {
                   ${certCfg      ? `<button onclick="abrirCertidao('${certCfg.keyword}')" ${btnStyle} title="Abrir site e copiar dados"><i class="bi bi-box-arrow-up-right"></i> Emitir</button>` : ''}
                   ${temReqSINARM ? `<button onclick="window.open('https://servicos.dpf.gov.br/sinarm-internet/faces/publico/incluirReqRegistroArmaFogo/consultarRequerimentoRegistro.seam','_blank')" ${btnStyle} title="Abrir site do SINARM"><i class="bi bi-box-arrow-up-right"></i> Acessar</button>` : ''}
                   ${temDeclResidencia ? `<button onclick="abrirDeclaracaoResidenciaProcesso('${id}')" ${btnStyle} title="Emitir Declaração de Residência com o endereço do processo"><i class="bi bi-file-earmark-text"></i> Emitir Declaração</button>` : ''}
+                  ${temDSAEndProc ? `<button onclick="gerarDSAEnderecoProcesso('${id}')" ${btnStyle} title="Emitir a DSA com o endereço informado no processo (não o do cadastro)"><i class="bi bi-file-earmark-text"></i> Emitir DSA</button>` : ''}
                   ${temFiliacao  ? `<button onclick="solicitarDeclaracao('filiacao')" ${btnStyle} title="Solicitar via WhatsApp do Clube"><i class="bi bi-whatsapp"></i> Solicitar</button>` : ''}
                   ${temHabitualidade ? `<button onclick="solicitarDeclaracao('habitualidade')" ${btnStyle} title="Solicitar via WhatsApp do Clube"><i class="bi bi-whatsapp"></i> Solicitar</button>` : ''}
                   ${temCTF       ? `<button onclick="window.open('https://servicos.ibama.gov.br/ctf/sistema.php','_blank')" ${btnStyle} title="Abrir site do IBAMA"><i class="bi bi-box-arrow-up-right"></i> Abrir site</button>` : ''}
@@ -7667,6 +7721,7 @@ async function deferirProcesso(id) {
   const faltando = [];
   if (!p.NumeroProtocolo)         faltando.push('N° de Protocolo');
   if (!semGRUDefer && !p.GruPaga) faltando.push('GRU Paga');
+  if (erroCompradorTransferencia(p.TipoProcesso, _dadosEspProc(p))) faltando.push('Comprador cadastrado no sistema (edite o processo e selecione o comprador — as Guias de Tráfego são abertas no nome dele)');
   if (faltando.length) {
     const aviso = document.createElement('div');
     aviso.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center';
@@ -7973,9 +8028,12 @@ async function deferirProcesso(id) {
           } else { toast('Processo deferido!', 'success'); }
           if (_dataEmissaoCRAF || _dataValidadeCRAF) {
             try {
+              const _crafDoComprador = clienteVende === 'sim' && dados.compradorClienteId;
+              let _nomeDonoCraf = p.ClienteNome || '';
+              if (_crafDoComprador) { try { _nomeDonoCraf = (await App.graph.getItem(CONFIG.listas.clientes, dados.compradorClienteId)).Title || dados.nomeComprador || ''; } catch (e5) { _nomeDonoCraf = dados.nomeComprador || ''; } }
               await App.graph.createItem(CONFIG.listas.documentos, {
-                ClienteId:    p.ClienteId,
-                ClienteNome:  p.ClienteNome || '',
+                ClienteId:    _crafDoComprador ? dados.compradorClienteId : p.ClienteId,
+                ClienteNome:  _nomeDonoCraf,
                 TipoDocumento: 'CRAF',
                 DataEmissao:  _dataEmissaoCRAF || null,
                 DataValidade: _dataValidadeCRAF || null,
@@ -7987,7 +8045,14 @@ async function deferirProcesso(id) {
           // a comissão desta transferência só entra nos extras quando as 2 forem deferidas.
           if (TIPOS_TRANSF_GERA_GUIAS.includes(tipo)) {
             const armaIdTransf = (dados.armaId || dados.armaIdMesmoTitular || '').split('|')[0];
-            await criarGuiasEExtraViaGuias(p, p.id, armaIdTransf);
+            // Cliente vendendo: as guias são do COMPRADOR (cadastrado no sistema)
+            let paiGuias = p;
+            if (clienteVende === 'sim' && dados.compradorClienteId) {
+              let nomeComp = dados.nomeComprador || '';
+              try { nomeComp = (await App.graph.getItem(CONFIG.listas.clientes, dados.compradorClienteId)).Title || nomeComp; } catch (e4) {}
+              paiGuias = { ...p, ClienteId: dados.compradorClienteId, ClienteNome: nomeComp };
+            }
+            await criarGuiasEExtraViaGuias(paiGuias, p.id, armaIdTransf);
             App.invalidateCache('processos');
           }
         } catch(e2) { toast('Deferido, mas não foi possível atualizar armas: ' + e2.message, 'warning'); }
@@ -9145,7 +9210,9 @@ async function reverterPagamentoGRU(id) {
 // ============================================================
 async function renderValidades() {
   document.getElementById('page-title').textContent = 'Controle de Validades';
-  const [clientes, documentos] = await Promise.all([App.getClientes(), App.getDocumentos()]);
+  const [clientes, documentos, processosVal] = await Promise.all([App.getClientes(), App.getDocumentos(), App.getProcessos()]);
+  // CRAF com renovação protocolada ("Em renovação"): vencido não aparece aqui
+  const crafEmRenovVal = crafsEmRenovacao(processosVal, documentos);
 
   // Marcações visuais de "cliente avisado" (controle manual, salvo em arquivo compartilhado)
   let avisados = {};
@@ -9160,6 +9227,7 @@ async function renderValidades() {
     if (semAnaliseVenc.has(String(d.ClienteId))) return;
     if (d.Desconsiderada === 'sim') return;   // guia OU CRAF desconsiderada sai do controle
     const iso = d.DataValidade.split('T')[0];
+    if (d.TipoDocumento === 'CRAF' && crafEmRenovVal[String(d.id)] && (daysBetween(iso) ?? 0) < 0) return;
     const cli = clientes.find(c => String(c.id) === String(d.ClienteId));
     const item = { tipo: d.TipoDocumento, cliente: d.ClienteNome || '', data: iso, dias: daysBetween(iso), clienteId: d.ClienteId, celular: cli?.Celular || '', tab: 'documentos', docId: d.id };
     if (d.TipoDocumento === 'Guia de Tráfego') {
@@ -9469,6 +9537,17 @@ function infoArmaLocalProcesso(p) {
     if (parts.length === 3) return [parts[1], parts[2]].filter(Boolean).join(' ');
     return null;
   };
+  // Renovação de CRAF com várias armas: mostra o acervo (Caça / Atirador) e quantas armas
+  if (ehRenovacaoCRAF(p.TipoProcesso) && Array.isArray(d.armaIds) && d.armaIds.length > 1) {
+    const acervos = [...new Set(d.armaIds.map(v => String(v).split('|')[1] || '').concat(d.acervo || '').filter(Boolean))];
+    const nomeAc = acervos.map(a => a === 'Caçador' ? 'Caça' : a).join(' / ');
+    return `${nomeAc ? 'Acervo de ' + nomeAc + ' · ' : ''}${d.armaIds.length} armas`;
+  }
+  if (p.TipoProcesso === 'Alteração de Endereço') {
+    const qual = d.enderecoAlteracao || '1° Endereço';
+    const cidade = [d.endCidade, (d.endUF || '').toUpperCase()].filter(Boolean).join('/');
+    return [qual, cidade].filter(Boolean).join(' · ');
+  }
   const arma = parseArmaId(d.armaId) || parseArmaId(d.armaIdMesmoTitular) || parseArmaId(d.armaIdVendedor) || null;
   let local = '';
   if (p.TipoProcesso === 'Guia de Tráfego') {
@@ -13011,6 +13090,13 @@ async function waAbrirPerfil() {
           <div style="font-size:13px;color:#667781;margin-top:2px"><i class="bi bi-telephone me-1"></i>${esc(numero)}</div>
         </div>
         <div style="padding:18px 20px">
+          ${cli ? `<div style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:13px">
+              ${[['CPF', cli.CPF], ['Senha GOV', cli.SenhaGOV]].map(([rot, v]) => `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 0">
+                <span style="color:#667781;min-width:80px">${rot}</span>
+                <strong style="flex:1;word-break:break-all">${v ? esc(v) : '<span style="color:#94a3b8;font-weight:400">não cadastrado</span>'}</strong>
+                ${v ? `<button class="btn-copy" style="opacity:1" onclick="copiarCampo(this)" data-val="${esc(v)}" title="Copiar ${rot}"><i class="bi bi-clipboard"></i></button>` : ''}
+              </div>`).join('')}
+            </div>` : ''}
           ${cli
             ? `<div style="margin-bottom:16px"><button class="btn btn-primary btn-sm" style="width:100%;margin-bottom:8px" onclick="document.getElementById('wa-modal-perfil').remove();navigate('clientes/perfil',{id:'${escJs(String(cli.id))}'})"><i class="bi bi-person-lines-fill me-1"></i>Abrir cadastro de ${esc(cli.Title)}</button><button class="btn btn-outline btn-sm" style="width:100%" onclick="waAbrirVincular('cliente')"><i class="bi bi-pencil me-1"></i>Alterar cadastro vinculado</button><button class="btn btn-outline btn-sm" style="width:100%;margin-top:8px" onclick="waConsultarAcervo('${escJs(String(cli.id))}')"><i class="bi bi-shield-fill me-1"></i>Consultar acervo</button><button class="btn btn-outline btn-sm" style="width:100%;margin-top:8px" onclick="waConsultarValidades('${escJs(String(cli.id))}')"><i class="bi bi-calendar-check me-1"></i>Consultar Validades</button></div>`
             : clube
@@ -14488,6 +14574,8 @@ function alertaNovasNotificacoes(n) {
 async function renderProcessoEditar(id) {
   document.getElementById('page-title').textContent = 'Editar Processo';
   const processo = await App.graph.getItem(CONFIG.listas.processos, id);
+  window._processoEditTipo = processo.TipoProcesso || '';
+  window._editRenovArmas = null; window._editRenovArmasProc = null;
 
   // Load client data so tipo-specific field builders work correctly
   _processoArmasCache = (await App.getArmas()).filter(a => String(a.ClienteId) === String(processo.ClienteId) && !armaForaDeUso(a));
@@ -14585,9 +14673,63 @@ async function renderProcessoEditar(id) {
     const dados = processo.DadosEspecificosJSON ? JSON.parse(processo.DadosEspecificosJSON) : {};
     window._processoEditDadosOrig = dados; // guarda p/ preservar campos de automação/vínculo ao salvar
     popularCamposEspecificos(dados);
+    _editRenovMontar(processo, dados);
   } else {
     window._processoEditDadosOrig = processo.DadosEspecificosJSON ? JSON.parse(processo.DadosEspecificosJSON) : {};
   }
+}
+
+// Editar Renovação de CRAF agrupada (várias armas): mostra as armas do processo e deixa excluir
+// qualquer uma — mas sempre fica ao menos uma.
+function _editRenovMontar(processo, dados) {
+  if (!ehRenovacaoCRAF(processo.TipoProcesso) || !Array.isArray(dados.armaIds) || !dados.armaIds.length) return;
+  window._editRenovArmas = dados.armaIds.slice();
+  window._editRenovArmasProc = String(processo.id);
+  window._editRenovAberto = !STATUS_FECHADOS.includes(processo.Status);
+  // o seletor de arma única dá lugar à lista
+  const sel = document.querySelector('#form-processo-edit [name="proc_armaId"]');
+  const secao = sel ? sel.closest('.form-section') : null;
+  if (sel) sel.required = false;
+  if (secao) secao.style.display = 'none';
+  const box = document.createElement('div');
+  box.className = 'form-section';
+  box.id = 'edit-renov-armas';
+  (secao || document.getElementById('campos-tipo-processo')).insertAdjacentElement(secao ? 'afterend' : 'afterbegin', box);
+  _editRenovRender();
+}
+function _editRenovDesc(v) {
+  const partes = String(v || '').split('|');
+  const a = (_processoArmasCache || []).find(x => String(x.id) === partes[0]) || (window._editRenovArmasTodas || []).find(x => String(x.id) === partes[0]);
+  if (a) return `${[a.Especie, a.Marca, a.Modelo].filter(Boolean).join(' ')}${a.Calibre ? ' — ' + a.Calibre : ''}${a.NumeroSerie ? ' (' + a.NumeroSerie + ')' : ''}`;
+  return [partes[2], partes[3]].filter(Boolean).join(' ') || 'Arma';
+}
+function _editRenovRender() {
+  const box = document.getElementById('edit-renov-armas');
+  const lista = window._editRenovArmas || [];
+  if (!box) return;
+  const podeExcluir = window._editRenovAberto && lista.length > 1;
+  box.innerHTML = `<div class="form-section-title">Armas do processo (${lista.length})</div><div class="form-body">
+    ${lista.map((v, i) => `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px">
+      <span style="font-size:13px"><i class="bi bi-shield-fill me-1" style="color:var(--accent)"></i>${esc(_editRenovDesc(v))} <span class="badge badge-blue">${esc(String(v).split('|')[1] || '')}</span></span>
+      <button type="button" class="btn btn-ghost btn-sm" ${podeExcluir ? `onclick="_editRenovExcluir(${i})"` : 'disabled'} title="${podeExcluir ? 'Tirar esta arma do processo' : (window._editRenovAberto ? 'O processo precisa ter ao menos uma arma' : 'Processo encerrado')}"><i class="bi bi-trash" style="color:${podeExcluir ? 'var(--danger)' : '#cbd5e1'}"></i></button>
+    </div>`).join('')}
+    <div style="font-size:11.5px;color:var(--text-muted);margin-top:4px"><i class="bi bi-info-circle me-1"></i>A arma retirada volta a ficar disponível na demanda. A taxa (GRU) é recalculada pela quantidade de armas; confira o valor do processo.${lista.length === 1 ? ' O processo precisa ter ao menos uma arma.' : ''}</div>
+  </div>`;
+}
+function _editRenovExcluir(i) {
+  const lista = window._editRenovArmas || [];
+  if (lista.length <= 1) { toast('O processo precisa ter ao menos uma arma.', 'warning'); return; }
+  if (!confirm(`Tirar "${_editRenovDesc(lista[i])}" deste processo? (só vale depois de Salvar Alterações)`)) return;
+  lista.splice(i, 1);
+  _editRenovRender();
+}
+
+// Transferência com o cliente vendendo (SINARM/SIGMA x SIGMA): o comprador precisa estar
+// cadastrado, porque as Guias de Tráfego abertas depois do deferimento ficam no nome dele.
+function erroCompradorTransferencia(tipo, dados) {
+  if (!TIPOS_TRANSF_GERA_GUIAS.includes(tipo) || !dados || dados.clienteVende !== 'sim') return '';
+  if (dados.compradorSistema !== 'nao' && dados.compradorClienteId) return '';
+  return 'O comprador precisa estar cadastrado no sistema: depois do deferimento as Guias de Tráfego são abertas no nome dele. Cadastre o comprador e selecione-o em "O comprador está cadastrado no sistema?".';
 }
 
 async function salvarProcessoEdicao(e, id) {
@@ -14597,9 +14739,22 @@ async function salvarProcessoEdicao(e, id) {
   // Preserva campos de automação/vínculo que NÃO estão no formulário (senão o extra some).
   // Ex.: guias de tráfego automáticas guardam "extraSourceId" — sem ele a comissão nunca entra.
   const _origDados = window._processoEditDadosOrig || {};
-  ['geradoAutomatico','processoPaiId','extraSourceId','extraViaGuias','valorAtrelado','tipoAtrelado','atreladoId','cnpjFornecedor','cnpjVendedor'].forEach(k => {
+  ['geradoAutomatico','processoPaiId','extraSourceId','extraViaGuias','valorAtrelado','tipoAtrelado','atreladoId','cnpjFornecedor','cnpjVendedor','armaIds','acervo','docCrafIds','docCrafId'].forEach(k => {
     if (_origDados[k] !== undefined && dadosEsp[k] === undefined) dadosEsp[k] = _origDados[k];
   });
+  // Renovação de CRAF com várias armas: lista editada (sempre fica ao menos uma)
+  if (Array.isArray(window._editRenovArmas) && window._editRenovArmas.length && window._editRenovArmasProc === String(id)) {
+    const lista = window._editRenovArmas.slice();
+    dadosEsp.armaIds = lista;
+    dadosEsp.armaId = lista[0];
+    const ids = new Set(lista.map(v => String(v).split('|')[0]));
+    if (dadosEsp.docCrafIds && typeof dadosEsp.docCrafIds === 'object') {
+      dadosEsp.docCrafIds = Object.fromEntries(Object.entries(dadosEsp.docCrafIds).filter(([k]) => ids.has(String(k))));
+    }
+  }
+  const _tipoEd = (window._processoEditTipo || '');
+  const _erroCompEd = erroCompradorTransferencia(_tipoEd, dadosEsp);
+  if (_erroCompEd) { toast(_erroCompEd, 'error'); return; }
   showLoading();
   try {
     await App.graph.updateItem(CONFIG.listas.processos, id, {
@@ -16065,12 +16220,12 @@ async function renderOrcamentoForm(clienteId = null, orcId = null) {
                     <select id="orc-qty-${i}" style="width:65px" onchange="atualizarOrcamento()">
                       ${[...Array(20)].map((_,n) => `<option value="${n+1}">${n+1}x</option>`).join('')}
                     </select>
-                    ${ehRenovacaoCRAF(tipo)
+                    ${regraValorCRAF(tipo)
                       ? `<span style="font-size:11px;color:var(--text-muted)">1ª R$ 450,00 + R$ 300,00 por adicional</span>
                          <input type="hidden" id="orc-valor-${i}" value="${CRAF_RENOV_BASE}" />`
                       : `<span style="font-size:12px;color:var(--text-muted)">R$</span>
                          <input type="number" id="orc-valor-${i}" value="${valor}" step="0.01" min="0" title="Valor unitário (padrão: ${fmtMoeda(valor)}) — alterar aqui vale só para este orçamento" style="width:90px;font-size:12px" oninput="atualizarOrcamento()" />
-                         <span style="font-size:11px;color:var(--text-muted)">/ un.</span>`
+                         <span style="font-size:11px;color:var(--text-muted)">/ un.${TIPOS_ADICIONAL_METADE.includes(tipo) ? ' · do 2º em diante, metade' : ''}</span>`
                     }
                   </div>
                   <span id="orc-sub-${i}" style="font-weight:600;font-size:13px;min-width:90px;text-align:right;color:var(--accent)"></span>
@@ -16281,14 +16436,32 @@ async function onOrcClienteChange(value) {
   } catch(e) { panel.style.display = 'none'; }
 }
 
-// Renovação de CRAF tem regra própria: 1ª R$450 + R$300 por CRAF adicional
-// (1x=450, 2x=750, 3x=1050...). Os demais serviços seguem quantidade × valor unitário.
+// Renovação de CRAF (Exército) tem regra própria: 1ª R$450 + R$300 por CRAF adicional
+// (1x=450, 2x=750, 3x=1050...). A Renovação de CRAF Sinarm segue a tabela (quantidade × valor).
+// Transferências, Mudança de Acervo, Alteração de Endereço, Aquisição de Arma SIGMA,
+// Segunda via de CRAF e Correção de dados de arma: 1º valor inteiro, do 2º em diante metade
+// (ex.: Mudança de Acervo 1x=450, 2x=450+225, 3x=450+225+225).
 const CRAF_RENOV_BASE = 450;
 const CRAF_RENOV_ADICIONAL = 300;
+const TIPOS_ADICIONAL_METADE = [...TIPOS_TRANSFERENCIA, 'Mudança de Acervo', 'Alteração de Endereço', 'Aquisição de Arma SIGMA', 'Segunda via de CRAF', 'Correção de dados de arma'];
+function regraValorCRAF(tipo) { return tipo === 'Renovação de CRAF'; }
+// Valor da unidade "idx" (0 = primeira) de um item do orçamento/demanda
+function valorOrcPosicao(tipo, idx, valorUnit) {
+  const v = Number(valorUnit) || 0;
+  if (regraValorCRAF(tipo)) return idx === 0 ? CRAF_RENOV_BASE : CRAF_RENOV_ADICIONAL;
+  if (TIPOS_ADICIONAL_METADE.includes(tipo)) return idx === 0 ? v : Math.round(v / 2 * 100) / 100;
+  return v;
+}
 function subtotalOrcItem(tipo, qtd, valorUnit) {
   const q = Math.max(1, parseInt(qtd) || 1);
-  if (ehRenovacaoCRAF(tipo)) return CRAF_RENOV_BASE + (q - 1) * CRAF_RENOV_ADICIONAL;
-  return q * (Number(valorUnit) || 0);
+  let t = 0;
+  for (let i = 0; i < q; i++) t += valorOrcPosicao(tipo, i, valorUnit);
+  return Math.round(t * 100) / 100;
+}
+function textoRegraValorOrc(tipo, valorUnit) {
+  if (regraValorCRAF(tipo)) return '1ª R$ 450,00 + R$ 300,00 por adicional';
+  if (TIPOS_ADICIONAL_METADE.includes(tipo)) return `1º ${fmtMoeda(Number(valorUnit) || 0)} · demais ${fmtMoeda(valorOrcPosicao(tipo, 1, valorUnit))} (metade)`;
+  return `${fmtMoeda(Number(valorUnit) || 0)} cada`;
 }
 
 function atualizarOrcamento() {
@@ -17367,15 +17540,17 @@ function _cardResumoOperador(op, processos, demandas, orcamentos, opts = {}) {
     const ratio = ratioDescontoOrcamento(o, false); // extra projetado: sem o 5% (regra a partir de Ago/2026)
     return (d.itens || []).reduce((s, item) => {
       const taxa  = TAXAS_PROCESSO[item.tipo] || 0;
-      const cheio = Number(item.valor) || 0;
       const fr    = fracaoExtraProcesso(item.tipo, op);
-      return s + Math.max(0, cheio - taxa) * ratio * fr * (Number(item.qtd) || 1);
+      let soma = 0;
+      for (let i = 0; i < (Number(item.qtd) || 1); i++) soma += Math.max(0, valorOrcPosicao(item.tipo, i, item.valor) - taxa);
+      return s + soma * ratio * fr;
     }, 0);
   };
   const demandasArr     = demandas.filter(d => d.operador === op && d.status === 'Aberta');
-  const aProtocolarArr  = processos.filter(p => p.Responsavel === op && STATUS_A_PROTOCOLAR.includes(p.Status));
+  // Mesma regra da janela (olhinho): processo com número de protocolo já conta como protocolado
+  const aProtocolarArr  = processos.filter(p => p.Responsavel === op && STATUS_A_PROTOCOLAR.includes(p.Status) && !processoTemProtocolo(p));
   const futuroArr       = processos.filter(p => p.Responsavel === op && p.Status === 'Processo Futuro');
-  const protocoladosArr = processos.filter(p => p.Responsavel === op && STATUS_PROTOCOLADOS.includes(p.Status));
+  const protocoladosArr = processos.filter(p => p.Responsavel === op && (STATUS_PROTOCOLADOS.includes(p.Status) || (processoTemProtocolo(p) && STATUS_A_PROTOCOLAR.includes(p.Status))));
   const valorTotalOp = demandasArr.reduce((s, d) => s + valorDemanda(d), 0)
     + somaProc(aProtocolarArr) + somaProc(futuroArr) + somaProc(protocoladosArr);
   const extraDemandasOp = demandasArr.reduce((s, d) => s + extraDemanda(d), 0);
@@ -17752,8 +17927,8 @@ async function renderMinhasDemandas() {
         const eCascataTipo = ['Guia de Tráfego', 'Segunda via de CRAF'].includes(item.tipo) || eCraf;
         const usaCascata = eCascataTipo && restantes > 1 && d.status === 'Aberta';
         // Valor do próximo processo (CRAF: 1º = R$450, demais = R$300)
-        const valUnitProx = eCraf ? (criados === 0 ? CRAF_RENOV_BASE : CRAF_RENOV_ADICIONAL) : (item.valor||0);
-        const valorTxt = eCraf ? '1ª R$ 450,00 + R$ 300,00 por adicional' : `${fmtMoeda(item.valor||0)} cada`;
+        const valUnitProx = valorOrcPosicao(item.tipo, criados, item.valor || 0);
+        const valorTxt = textoRegraValorOrc(item.tipo, item.valor || 0);
         const obsBtn = item.obs ? `<button class="btn btn-ghost btn-sm" style="padding:0 2px" title="${esc(item.obs)}"><i class="bi bi-eye" style="color:var(--accent)"></i></button>` : '';
         return `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);gap:12px;flex-wrap:wrap">
           <div>
@@ -17978,7 +18153,7 @@ async function criarProcessosCascata() {
       if (eCraf) {
         const acervo = String(grupo[0].arma).split('|')[1] || '';
         let valorProc = 0;
-        grupo.forEach(() => { valorProc += idxGlobal === 0 ? CRAF_RENOV_BASE : CRAF_RENOV_ADICIONAL; idxGlobal++; });
+        grupo.forEach(() => { valorProc += valorOrcPosicao(item.tipo, idxGlobal, item.valor); idxGlobal++; });
         const armaIds = grupo.map(l => l.arma);
         const docCrafIds = {};
         armaIds.forEach(v => { const aid = String(v).split('|')[0]; const doc = crafDoProcessoRenovacao({ ClienteId: d.clienteId }, { armaId: aid }, docsCli, aid); if (doc) docCrafIds[aid] = String(doc.id); });
@@ -18001,7 +18176,7 @@ async function criarProcessosCascata() {
         continue;
       }
       const linha = grupo[0];
-      const valorProc = eCraf ? (idxGlobal === 0 ? CRAF_RENOV_BASE : CRAF_RENOV_ADICIONAL) : (Number(item.valor) || 0);
+      const valorProc = valorOrcPosicao(item.tipo, idxGlobal, item.valor);
       const dadosEsp = linha.dadosEsp || { armaId: linha.arma };
       const checklist = buildChecklistItems(item.tipo, eGuia ? (linha.tipoGuia || null) : null);
       const fields = {
@@ -19971,17 +20146,107 @@ async function _impGravar() {
 
 // ---- Página "Importar Documentos" (varredura de todos os clientes) ----
 async function renderImportarDocumentos() {
-  document.getElementById('page-title').textContent = 'Importar Documentos da Pasta';
+  document.getElementById('page-title').textContent = 'Documentos de Clientes';
   document.getElementById('page-content').innerHTML = `
-    <div class="card" style="margin-bottom:16px"><div class="card-body">
+    <div class="card" style="margin-bottom:16px"><div class="card-header"><h3><i class="bi bi-folder-symlink me-2"></i>Importar documentos da pasta</h3></div><div class="card-body">
       <p style="margin:0 0 10px;font-size:13.5px">Lê os PDFs da pasta <strong>DOCUMENTOS PORTAL</strong> de todos os clientes ativos (CRAF, Guia de Tráfego, SIMAF, CTF, Avaliação Psicológica e Teste de Tiro — inclusive PDFs escaneados, por OCR), confere os nomes dos arquivos e mostra o que está faltando ou diferente no cadastro. Nada é gravado sem a sua revisão.</p>
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
         <button id="imp-btn-varrer" class="btn btn-primary" onclick="_impIniciarVarredura()"><i class="bi bi-search me-1"></i>Iniciar varredura</button>
         <div id="imp-varr-status" style="flex:1;min-width:240px;font-size:13px;color:var(--text-muted)">Carregando...</div>
       </div>
     </div></div>
-    <div id="imp-revisao"></div>`;
+    <div id="imp-revisao"></div>
+    <div class="card" style="margin-top:16px">
+      <div class="card-header"><h3><i class="bi bi-calendar-x me-2"></i>Documentos vencidos na pasta Documentos Portal</h3></div>
+      <div class="card-body">
+        <p style="margin:0 0 10px;font-size:13.5px">Procura, nas pastas <strong>DOCUMENTOS PORTAL</strong>, os PDFs com a validade vencida (CRAF, Guia de Tráfego, SIMAF, CTF, Avaliação Psicológica e Teste de Tiro). Você escolhe quais mover; eles vão para a pasta <strong>Docs Vencidos</strong>, dentro da pasta principal do cliente (ex.: <em>Fulano de Tal/Docs Vencidos</em>). Usa o resultado da última varredura.</p>
+        <button class="btn btn-primary" onclick="_vencVerificar()"><i class="bi bi-search me-1"></i>Verificar documentos vencidos</button>
+        <div id="venc-lista" style="margin-top:14px"></div>
+      </div>
+    </div>`;
   _impAcompanharVarredura();
+}
+
+// ---- Documentos vencidos na pasta DOCUMENTOS PORTAL -> mover para "Docs Vencidos" ----
+const VENC_TIPOS_DOC = { craf: 'CRAF', gt: 'Guia de Tráfego', simaf: 'SIMAF', ctf: 'CTF', ap: 'Avaliação Psicológica', tt: 'Teste de Tiro' };
+function documentosVencidosDaVarredura(resultados, hoje, clientes, crafsRenov) {
+  const porId = Object.fromEntries((clientes || []).map(c => [String(c.id), c]));
+  const linhas = [];
+  Object.entries(resultados || {}).forEach(([cid, r]) => {
+    (r.arquivos || []).forEach(a => {
+      const val = a.campos && a.campos.validade;
+      if (!val || !/^\d{4}-\d{2}-\d{2}/.test(val) || val.slice(0, 10) >= hoje) return;
+      const cli = porId[String(cid)] || {};
+      // CRAF vencido com renovação protocolada ("Em renovação"): vem desmarcado
+      const emRenov = a.tipo === 'craf' && (crafsRenov || []).some(d => String(d.ClienteId) === String(cid) && d.LinkArquivo && d.LinkArquivo === a.webUrl);
+      linhas.push({ clienteId: String(cid), cliente: cli.Title || '(cliente)', id: a.id, nome: a.nome, webUrl: a.webUrl, tipo: VENC_TIPOS_DOC[a.tipo] || a.tipo || '—', validade: val.slice(0, 10), emRenov, marcado: !emRenov });
+    });
+  });
+  return linhas.sort((x, y) => x.cliente.localeCompare(y.cliente, 'pt-BR') || x.validade.localeCompare(y.validade));
+}
+
+async function _vencVerificar() {
+  const box = document.getElementById('venc-lista');
+  if (!box) return;
+  box.innerHTML = '<div class="empty-state" style="padding:16px"><div class="spinner"></div><p>Conferindo...</p></div>';
+  let s;
+  try { s = await waApi('/docs-portal/varredura'); }
+  catch (e) { box.innerHTML = `<p style="color:var(--danger)">Servidor indisponível: ${esc(e.message)}</p>`; return; }
+  if (s.rodando) { box.innerHTML = '<p style="font-size:13px;color:var(--text-muted)">A varredura ainda está rodando (veja o progresso no card acima). Clique de novo quando terminar.</p>'; return; }
+  if (!s.resultados) { box.innerHTML = '<p style="font-size:13px;color:var(--text-muted)">Nenhuma varredura feita ainda. Clique em <strong>Iniciar varredura</strong> no card acima e, quando terminar, verifique de novo.</p>'; return; }
+  const [clientes, docs, processos] = await Promise.all([App.getClientes(), App.getDocumentos(), App.getProcessos()]);
+  const emRenov = crafsEmRenovacao(processos, docs);
+  const crafsRenov = docs.filter(d => emRenov[String(d.id)]);
+  window._vencLinhas = documentosVencidosDaVarredura(s.resultados, hojeISO(), clientes, crafsRenov);
+  _vencRender();
+}
+
+function _vencRender() {
+  const box = document.getElementById('venc-lista');
+  const linhas = window._vencLinhas || [];
+  if (!box) return;
+  if (!linhas.length) { box.innerHTML = '<div class="empty-state" style="padding:16px"><i class="bi bi-check-circle" style="color:var(--success)"></i><p>Nenhum documento vencido nas pastas.</p></div>'; return; }
+  const nSel = linhas.filter(l => l.marcado).length;
+  box.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+      <strong style="font-size:13px">${linhas.length} documento(s) vencido(s)</strong>
+      <button class="btn btn-ghost btn-sm" onclick="(window._vencLinhas||[]).forEach(l=>l.marcado=true);_vencRender()">Marcar todos</button>
+      <button class="btn btn-ghost btn-sm" onclick="(window._vencLinhas||[]).forEach(l=>l.marcado=false);_vencRender()">Desmarcar todos</button>
+      <button class="btn btn-primary btn-sm" style="margin-left:auto" ${nSel ? '' : 'disabled'} onclick="_vencMover()"><i class="bi bi-folder-symlink me-1"></i>Mover ${nSel} para "Docs Vencidos"</button>
+    </div>
+    <div class="table-wrapper"><table>
+      <thead><tr><th style="width:28px"></th><th>Cliente</th><th>Documento</th><th>Tipo</th><th>Validade</th></tr></thead>
+      <tbody>${linhas.map((l, i) => `<tr>
+        <td><input type="checkbox" ${l.marcado ? 'checked' : ''} onchange="window._vencLinhas[${i}].marcado=this.checked;_vencRender()" /></td>
+        <td><a href="javascript:void 0" onclick="navigate('clientes/perfil',{id:'${escJs(l.clienteId)}',tab:'documentos'})">${esc(l.cliente)}</a></td>
+        <td>${l.webUrl ? `<a href="${esc(l.webUrl)}" target="_blank" rel="noopener">${esc(l.nome)}</a>` : esc(l.nome)}${l.emRenov ? ' <span class="badge" style="background:#ede9fe;color:#6d28d9" title="CRAF com renovação protocolada">Em renovação</span>' : ''}</td>
+        <td>${esc(l.tipo)}</td>
+        <td style="white-space:nowrap;color:var(--danger)">${fmtDate(l.validade)}</td>
+      </tr>`).join('')}</tbody>
+    </table></div>`;
+}
+
+async function _vencMover() {
+  const sel = (window._vencLinhas || []).filter(l => l.marcado);
+  if (!sel.length) return;
+  if (!confirm(`Mover ${sel.length} documento(s) para a pasta "Docs Vencidos" de cada cliente?`)) return;
+  const porCliente = {};
+  sel.forEach(l => { (porCliente[l.clienteId] = porCliente[l.clienteId] || []).push(l.id); });
+  showLoading();
+  let ok = 0; const falhas = []; const movidos = new Set();
+  try {
+    for (const [clienteId, itemIds] of Object.entries(porCliente)) {
+      try {
+        const r = await waApi('/docs-portal/mover-vencidos', { method: 'POST', body: JSON.stringify({ clienteId, itemIds }) });
+        (r.resultados || []).forEach(x => { if (x.ok) { ok++; movidos.add(String(x.itemId)); } else falhas.push(x.erro || 'erro'); });
+      } catch (e) { falhas.push(e.message); }
+    }
+  } finally { hideLoading(); }
+  if (ok) registrarMovimentacao('Mover Documentos Vencidos', `${ok} documento(s) para "Docs Vencidos"`);
+  // tira da lista os que foram movidos (o servidor também tira da última varredura)
+  window._vencLinhas = (window._vencLinhas || []).filter(l => !movidos.has(String(l.id)));
+  toast(falhas.length ? `${ok} movido(s); ${falhas.length} falha(s): ${falhas[0]}` : `${ok} documento(s) movido(s) para "Docs Vencidos".`, falhas.length ? 'warning' : 'success');
+  _vencRender();
 }
 
 async function _impIniciarVarredura() {
@@ -20339,3 +20604,57 @@ function iniciarAtualizacaoAutomatica() {
   setInterval(_conferirMudancasDados, ATUALIZACAO_INTERVALO_MS);
   setInterval(_conferirVersaoNova, VERSAO_INTERVALO_MS);
 }
+
+
+// ============================================================
+// CLIENTES VIP — medalha e nome em dourado escuro em todo o sistema.
+// A lista de nomes VIP vem do cadastro (campo VIP = 'sim'). Um observador marca
+// automaticamente qualquer elemento cujo texto seja exatamente o nome de um
+// cliente VIP (listas, tabelas, popups, WhatsApp...).
+// ============================================================
+function clienteVIP(c) { return !!c && c.VIP === 'sim'; }
+function _vipNorm(s) { return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim().toUpperCase(); }
+window._vipNomes = window._vipNomes || new Set();
+function atualizarClientesVIP(lista) {
+  const novos = new Set((lista || []).filter(clienteVIP).map(c => _vipNorm(c.Title)).filter(Boolean));
+  const igual = novos.size === window._vipNomes.size && [...novos].every(n => window._vipNomes.has(n));
+  if (igual) return;
+  window._vipNomes = novos;
+  // nomes que deixaram de ser VIP perdem a marca
+  document.querySelectorAll('.nome-vip[data-vip-auto]').forEach(el => {
+    if (!novos.has(_vipNorm(el.textContent))) { el.classList.remove('nome-vip'); el.removeAttribute('data-vip-auto'); el.querySelector(':scope > .vip-medalha')?.remove(); }
+  });
+  marcarNomesVIP(document.body);
+}
+const _VIP_SELETOR = 'td,th,strong,b,a,span,div,h1,h2,h3,h4,h5,li,label,p,small,em';
+function _vipMarcarEl(el) {
+  if (el.hasAttribute('data-vip-auto') || el.classList.contains('nome-vip')) return;
+  if (el.childElementCount > 0) return;                    // só o elemento que tem o texto
+  const t = el.textContent;
+  if (!t || t.length > 120 || !window._vipNomes.has(_vipNorm(t))) return;
+  if (el.closest('input,textarea,select,option,[contenteditable="true"],#toast-container')) return;
+  el.classList.add('nome-vip');
+  el.setAttribute('data-vip-auto', '1');
+  el.insertAdjacentHTML('afterbegin', '<i class="bi bi-award-fill vip-medalha" title="Cliente VIP"></i>');
+}
+function marcarNomesVIP(raiz) {
+  if (!raiz || !window._vipNomes.size) return;
+  if (raiz.nodeType === 1 && raiz.matches && raiz.matches(_VIP_SELETOR)) _vipMarcarEl(raiz);
+  if (raiz.querySelectorAll) raiz.querySelectorAll(_VIP_SELETOR).forEach(_vipMarcarEl);
+}
+(function iniciarObservadorVIP() {
+  if (typeof MutationObserver === 'undefined' || window._vipObserver) return;
+  let pendentes = [], agendado = false;
+  window._vipObserver = new MutationObserver(muts => {
+    if (!window._vipNomes.size) return;
+    muts.forEach(m => m.addedNodes.forEach(n => {
+      if (n.nodeType === 1) pendentes.push(n);
+      else if (n.nodeType === 3 && n.parentElement) pendentes.push(n.parentElement);
+    }));
+    if (agendado) return;
+    agendado = true;
+    setTimeout(() => { agendado = false; const lote = pendentes; pendentes = []; lote.forEach(el => { if (el.isConnected) marcarNomesVIP(el); }); }, 60);
+  });
+  const ligar = () => window._vipObserver.observe(document.body, { childList: true, subtree: true });
+  if (document.body) ligar(); else document.addEventListener('DOMContentLoaded', ligar);
+})();

@@ -159,7 +159,7 @@ const CHECKLISTS = {
     'Mudança de Local de Acervo': ['Documento de Identificação'],
     'Manutenção':                 ['Documento de Identificação', 'Credenciamento do Armeiro']
   },
-  'Alteração de Endereço':  ['Comprovante de Residência', 'Declaração de Residência'],
+  'Alteração de Endereço':  ['Comprovante de Residência', 'Declaração de Residência', 'Declaração de Segurança do Acervo'],
   'Inclusão de Atividade':  CHECKLIST_CR_INCLUSAO_RENOVCRAF,
   'Exclusão de Atividade':  ['Documento de Identificação'],
   'Mudança de Acervo': [

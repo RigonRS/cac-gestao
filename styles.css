@@ -3,6 +3,7 @@
    ============================================================ */
 
 :root {
+  --vip: #9a6b00;
   --sidebar-bg:    #1a2e44;
   --sidebar-hover: #243d5a;
   --sidebar-active:#2e5080;
@@ -405,3 +406,11 @@ select { cursor: pointer; }
   .span-2, .span-3 { grid-column: span 1; }
   .stats-grid { grid-template-columns: 1fr 1fr; }
 }
+
+
+/* ---- Clientes VIP (dourado escuro) ---- */
+.nome-vip { color: var(--vip) !important; font-weight: 700; }
+.nome-vip .vip-medalha { color: var(--vip); margin-right: 4px; font-size: .95em; }
+.badge-vip { background: #fdf3d7; color: var(--vip); border: 1px solid #e3c46a; font-weight: 700; }
+.perfil-vip .card, .perfil-vip .profile-header { border: 2px solid var(--vip) !important; }
+.card.card-vip { border: 2px solid var(--vip); }
