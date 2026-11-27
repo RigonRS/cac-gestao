@@ -1916,12 +1916,12 @@ async function renderClienteForm(id = null, importParams = {}) {
       <div class="form-body">
         <div class="form-grid">
           <div style="grid-column:1/-1"><label>Nome Completo *</label><input name="NomeCompleto" value="${val('Title')}" required /></div>
-          <div style="grid-column:1/-1">
+          ${isAdminUser() ? `<div style="grid-column:1/-1">
             <label class="checkbox-item" style="display:inline-flex;align-items:center;gap:6px;font-weight:600;color:var(--vip)">
               <input type="checkbox" name="VIP" ${clienteVIP(c) ? 'checked' : ''} /> <i class="bi bi-award-fill"></i> VIP?
             </label>
             <span style="font-size:12px;color:var(--text-muted);margin-left:6px">Cliente VIP ganha a medalha e o nome em dourado em todo o sistema.</span>
-          </div>
+          </div>` : ''}
           <div>
             <label>CPF</label>
             <input name="CPF" value="${val('CPF')}" oninput="this.value=fmtCPF(this.value);verificarCPFDuplicado(this.value,'${id||''}')" maxlength="14" />
@@ -2201,7 +2201,7 @@ async function salvarCliente(e, id) {
     CPF:              fd.get('CPF'),
     SenhaGOV:         fd.get('SenhaGOV'),
     VerificacaoEtapas: fd.get('VerificacaoEtapas') ? 'Sim' : 'Não',
-    VIP:              fd.get('VIP') ? 'sim' : null,
+    ...(isAdminUser() ? { VIP: fd.get('VIP') ? 'sim' : null } : {}),
     NumeroCR:         fd.get('NumeroCR'),
     DataValidadeCR:   fd.get('DataValidadeCR'),
     RG:               fd.get('RG'),
@@ -2282,6 +2282,7 @@ async function renderClientePerfil(id, tab = 'dados') {
   const documentos = todosDocumentos.filter(d => String(d.ClienteId) === String(id));
   const processos  = todosProcessos.filter(p => String(p.ClienteId) === String(id));
   document.getElementById('page-content').classList.toggle('perfil-vip', clienteVIP(cliente));
+  _perfilCarregarFoto(cliente);
 
   const isCacador = (cliente.Categoria || '').includes('Caçador');
   let numOrcamentos = 0;
@@ -2316,7 +2317,7 @@ async function renderClientePerfil(id, tab = 'dados') {
     ${inativo ? `<div style="background:#fee2e2;color:#991b1b;padding:10px 16px;border-radius:8px;margin-bottom:12px;font-size:13px;font-weight:600"><i class="bi bi-person-x me-1"></i>Cliente Inativado — ações de criação bloqueadas para este cliente</div>` : ''}
     ${portalBloqueado ? `<div style="background:#fef3c7;color:#92400e;padding:10px 16px;border-radius:8px;margin-bottom:12px;font-size:13px;font-weight:600"><i class="bi bi-shield-lock me-1"></i>Acesso ao Portal bloqueado${cliente.PortalBloqueadoAte ? ' até ' + fmtDate(cliente.PortalBloqueadoAte) : ' sem prazo definido'}</div>` : ''}
     <div class="profile-header">
-      <div class="profile-avatar">${getInitials(cliente.Title)}</div>
+      <div class="profile-avatar" id="perfil-avatar-${esc(String(id))}">${getInitials(cliente.Title)}</div>
       <div class="profile-info">
         <h2><span class="${clienteVIP(cliente) ? 'nome-vip' : ''}">${esc(cliente.Title)}</span>${clienteVIP(cliente) ? ' <span class="badge badge-vip" style="vertical-align:middle"><i class="bi bi-award-fill"></i> VIP</span>' : ''}${inativo ? ' <span class="badge badge-red" style="vertical-align:middle">Inativo</span>' : ''}</h2>
         <p>CPF: ${esc(cliente.CPF || '—')} &nbsp;·&nbsp; CR: ${esc(cliente.NumeroCR || '—')} &nbsp;·&nbsp; ${cats || '<span class="badge badge-gray">Sem categoria</span>'}</p>
@@ -16271,6 +16272,13 @@ async function renderOrcamentoForm(clienteId = null, orcId = null) {
             &nbsp;·&nbsp; Cartão: em até 10x com juros da máquina
           </div>
         </div>
+        <div style="border:1px solid var(--border);border-radius:8px;padding:12px 16px;margin-bottom:12px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+          <label class="checkbox-item" style="margin:0;font-weight:600"><input type="checkbox" id="orc-aviso-chk" onchange="document.getElementById('orc-aviso-wrap').style.display=this.checked?'inline-flex':'none';if(this.checked)document.getElementById('orc-aviso-data').focus()"> <i class="bi bi-bell me-1" style="color:#7c3aed"></i>Aviso Futuro</label>
+          <span id="orc-aviso-wrap" style="display:none;align-items:center;gap:8px">
+            <span style="font-size:13px">Avisar o cliente em</span>
+            <input type="date" id="orc-aviso-data" style="width:160px" />
+          </span>
+        </div>
         <div id="orc-pago-box" style="border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:16px">
           <label class="checkbox-item" style="margin:0;font-weight:600"><input type="checkbox" id="orc-pago-chk" onchange="onOrcPagoChange()"> Pago?</label>
           <div id="orc-pago-panel" style="display:none;margin-top:12px">${pagOrcFormHTML('orc', orcExistente?.pagamento)}</div>
@@ -16295,6 +16303,11 @@ async function renderOrcamentoForm(clienteId = null, orcId = null) {
   if (orcExistente) {
     const descontoEl = document.getElementById('orc-desconto');
     if (descontoEl && orcExistente.desconto) descontoEl.value = orcExistente.desconto;
+    if (orcExistente.avisoFuturo) {
+      const ch = document.getElementById('orc-aviso-chk');
+      if (ch) { ch.checked = true; document.getElementById('orc-aviso-wrap').style.display = 'inline-flex'; }
+      const dt = document.getElementById('orc-aviso-data'); if (dt) dt.value = orcExistente.dataAvisoFuturo || '';
+    }
     (orcExistente.itens || []).forEach(item => {
       const idx = TIPOS_PROCESSO.indexOf(item.tipo);
       if (idx < 0) return;
@@ -16765,6 +16778,9 @@ async function salvarOrcamento() {
   });
   if (!linhas.length) { toast('Selecione ao menos um serviço.', 'warning'); return; }
   const desconto = Math.max(0, parseFloat(document.getElementById('orc-desconto')?.value) || 0);
+  const avisoFuturo = !!document.getElementById('orc-aviso-chk')?.checked;
+  const dataAvisoFuturo = avisoFuturo ? (document.getElementById('orc-aviso-data')?.value || '') : '';
+  if (avisoFuturo && !dataAvisoFuturo) { toast('Informe a data para avisar o cliente (Aviso Futuro).', 'warning'); return; }
 
   // Crédito em haver a abater (limitado ao saldo disponível e ao total após desconto)
   let creditoAplicado = 0;
@@ -16813,6 +16829,8 @@ async function salvarOrcamento() {
           creditoHaver: creditoAplicado || undefined,
           total:   totalFinal,
           pagamento: pagamento || lista[idx].pagamento || undefined,
+          avisoFuturo: avisoFuturo || undefined,
+          dataAvisoFuturo: dataAvisoFuturo || undefined,
           ...statusPatch,
         };
         await App.graph._writeFile('orcamentos', lista);
@@ -16845,6 +16863,8 @@ async function salvarOrcamento() {
         creditoHaver: creditoAplicado || undefined,
         total:        totalFinal,
         pagamento:    pagamento || undefined,
+        avisoFuturo:  avisoFuturo || undefined,
+        dataAvisoFuturo: dataAvisoFuturo || undefined,
         criadoPor:    getCurrentUserName(),
         status:       'Pendente',
         dataAprovacao: null,
@@ -17203,6 +17223,40 @@ async function renderOrcamentos() {
       </div>`;
     }
 
+    // Orçamentos marcados com "Aviso Futuro" (data para avisar o cliente), do mais próximo ao mais distante
+    function cardAvisoFuturo(todosOrc) {
+      const lista = todosOrc.filter(o => o.avisoFuturo).sort((a, b) => (a.dataAvisoFuturo || '9999').localeCompare(b.dataAvisoFuturo || '9999'));
+      const hoje = hojeISO();
+      const rows = lista.map(o => {
+        const dias = o.dataAvisoFuturo ? daysBetween(o.dataAvisoFuturo) : null;
+        const sit = dias === null ? { c: 'badge-gray', t: 'Sem data' }
+          : dias < 0 ? { c: 'badge-red', t: `Atrasado ${-dias}d` }
+          : dias === 0 ? { c: 'badge-orange', t: 'Hoje' }
+          : { c: 'badge-blue', t: `Em ${dias}d` };
+        return `<tr style="${o.dataAvisoFuturo && o.dataAvisoFuturo <= hoje ? 'background:#fff7ed' : ''}">
+          <td style="white-space:nowrap;font-weight:600">${esc(o.numero || '—')}</td>
+          <td style="white-space:nowrap"><strong>${o.dataAvisoFuturo ? fmtDate(o.dataAvisoFuturo) : '—'}</strong> <span class="badge ${sit.c}">${sit.t}</span></td>
+          <td>${o.clienteId ? `<a href="javascript:void 0" onclick="navigate('clientes/perfil',{id:'${escJs(String(o.clienteId))}',tab:'orcamentos'})">${esc(o.clienteNome || '—')}</a>` : esc(o.clienteNome || '—')}</td>
+          <td style="font-size:12px">${(o.itens || []).map(i => `${i.qtd > 1 ? i.qtd + '× ' : ''}${esc(i.tipo)}`).join('<br>')}</td>
+          <td style="white-space:nowrap;font-weight:700">${fmtTotalOrc(o)}</td>
+          <td><span class="badge ${o.status === 'Aprovado' ? 'badge-green' : o.status === 'Rejeitado' ? 'badge-red' : 'badge-yellow'}">${esc(o.status || 'Pendente')}</span></td>
+          <td style="white-space:nowrap">
+            <button class="btn btn-ghost btn-sm" onclick="editarOrcamento('${o.id}','${escJs(String(o.clienteId))}')" title="Editar (muda a data do aviso)"><i class="bi bi-pencil" style="color:var(--accent)"></i></button>
+            <button class="btn btn-ghost btn-sm" onclick="concluirAvisoFuturo('${o.id}')" title="Cliente avisado — tirar da lista"><i class="bi bi-check2-circle" style="color:var(--success)"></i></button>
+          </td>
+        </tr>`;
+      }).join('');
+      return `<div class="card" style="margin-bottom:20px;border-left:4px solid #7c3aed">
+        <div class="card-header" style="display:flex;align-items:center;gap:10px">
+          <h3 style="margin:0"><i class="bi bi-bell me-2" style="color:#7c3aed"></i>Orçamentos com Aviso Futuro</h3>
+          <span class="badge" style="background:#ede9fe;color:#6d28d9;font-size:12px">${lista.length}</span>
+        </div>
+        <div class="card-body" style="padding:0">${lista.length
+          ? `<div class="table-wrapper"><table><thead><tr><th>Nº</th><th>Avisar em</th><th>Cliente</th><th>Serviços</th><th>Total</th><th>Status</th><th>Ações</th></tr></thead><tbody>${rows}</tbody></table></div>`
+          : `<div class="empty-state" style="padding:24px"><i class="bi bi-bell-slash"></i><p>Nenhum orçamento marcado com Aviso Futuro.</p></div>`}</div>
+      </div>`;
+    }
+
     function cardEmAberto(lista) {
       // Soma do título: total dos orçamentos e quanto ainda falta receber (mesma conta da impressão)
       const somaTotal = lista.reduce((n, o) => n + (Number(o.total) || 0), 0);
@@ -17238,6 +17292,7 @@ async function renderOrcamentos() {
     }
 
     document.getElementById('page-content').innerHTML =
+      cardAvisoFuturo(todos) +
       cardEmAberto(emAberto) +
       cardSecao('Orçamentos em Aberto', pendentes, pendentes.length,
         'background:#fef3c7;color:#92400e', 'Nenhum orçamento pendente.', 'pendente') +
@@ -20658,3 +20713,83 @@ function marcarNomesVIP(raiz) {
   const ligar = () => window._vipObserver.observe(document.body, { childList: true, subtree: true });
   if (document.body) ligar(); else document.addEventListener('DOMContentLoaded', ligar);
 })();
+
+
+// ============================================================
+// PERFIL DO CLIENTE — foto do contato do WhatsApp no lugar das iniciais
+// (quando o cliente tem contato vinculado: pelo celular do cadastro ou por vínculo manual).
+// ============================================================
+window._fotoClienteCache = window._fotoClienteCache || {};
+function _jidsCandidatosCliente(cliente, chats, vinculos) {
+  const jids = [];
+  const chaveCli = waChaveTel(cliente.Celular);
+  // vínculos manuais (número -> cliente) feitos na página do WhatsApp
+  const chavesVinc = Object.entries(vinculos || {}).filter(([, v]) => {
+    const vid = typeof v === 'string' ? v : (v && v.tipo === 'cliente' ? v.id : null);
+    return vid != null && String(vid) === String(cliente.id);
+  }).map(([k]) => k);
+  (chats || []).forEach(c => {
+    if (waEhGrupo(c)) return;
+    const k = waChaveDeChat(c);
+    if (k && (k === chaveCli || chavesVinc.includes(k))) jids.push(c.jid);
+  });
+  // número do cadastro (com e sem o 9 extra dos celulares antigos)
+  const d = String(cliente.Celular || '').replace(/\D/g, '');
+  if (d.length >= 10) {
+    const n = d.startsWith('55') && d.length >= 12 ? d : '55' + d;
+    jids.push(n + '@s.whatsapp.net');
+    if (n.length === 13 && n[4] === '9') jids.push(n.slice(0, 4) + n.slice(5) + '@s.whatsapp.net');
+  }
+  return [...new Set(jids)];
+}
+async function fotoWhatsAppCliente(cliente) {
+  if (!cliente || !CONFIG.waGatewayUrl || typeof waApi !== 'function') return '';
+  const cache = window._fotoClienteCache;
+  if (cache[cliente.id] !== undefined) return cache[cliente.id];
+  let vinculos = window._wa && window._wa.vinculos;
+  if (!vinculos) {
+    try { const v = await App.graph._readFile('whatsapp_vinculos'); vinculos = (v && !Array.isArray(v) && typeof v === 'object') ? v : {}; } catch (e) { vinculos = {}; }
+  }
+  let chats = (window._wa && window._wa.chats) || [];
+  const temVinculo = Object.values(vinculos).some(v => String(typeof v === 'string' ? v : (v && v.id)) === String(cliente.id));
+  if (!chats.length && temVinculo) { try { chats = (await waApi('/chats')).chats || []; } catch (e) {} }
+  for (const jid of _jidsCandidatosCliente(cliente, chats, vinculos)) {
+    try { const r = await waApi('/avatar?jid=' + encodeURIComponent(jid)); if (r && r.url) { cache[cliente.id] = r.url; return r.url; } } catch (e) {}
+  }
+  cache[cliente.id] = '';
+  return '';
+}
+async function _perfilCarregarFoto(cliente) {
+  const url = await fotoWhatsAppCliente(cliente);
+  if (!url) return;
+  for (let i = 0; i < 20; i++) {                       // espera o cabeçalho do perfil aparecer
+    const el = document.getElementById('perfil-avatar-' + cliente.id);
+    if (el) {
+      const iniciais = el.innerHTML;
+      el.innerHTML = `<img src="${esc(url)}" alt="" title="Foto do WhatsApp" style="width:100%;height:100%;border-radius:50%;object-fit:cover;display:block" />`;
+      el.style.background = 'transparent';
+      el.querySelector('img').onerror = () => { el.innerHTML = iniciais; el.style.background = ''; window._fotoClienteCache[cliente.id] = ''; };
+      return;
+    }
+    await new Promise(r => setTimeout(r, 100));
+  }
+}
+
+
+// Orçamento com Aviso Futuro: cliente já avisado — sai do card (fica registrado quando e por quem)
+async function concluirAvisoFuturo(orcId) {
+  if (!confirm('Marcar este orçamento como avisado? Ele sai da lista de Aviso Futuro.')) return;
+  showLoading();
+  try {
+    const todos = await App.graph._readFile('orcamentos').catch(() => []);
+    const lista = Array.isArray(todos) ? todos : [];
+    const o = lista.find(x => String(x.id) === String(orcId));
+    if (!o) throw new Error('Orçamento não encontrado.');
+    o.avisoFuturo = false;
+    o.avisoFuturoConcluido = { data: hojeISO(), por: getCurrentUserName(), dataAviso: o.dataAvisoFuturo || null };
+    await App.graph._writeFile('orcamentos', lista);
+    if (o.clienteId) registrarHistCliente(o.clienteId, `Orçamento ${o.numero || ''} — cliente avisado (Aviso Futuro)`.replace('  ', ' '), '');
+    toast('Aviso concluído.', 'success');
+    renderPage();
+  } catch (e) { toast(e.message, 'error'); } finally { hideLoading(); }
+}

@@ -412,5 +412,19 @@ select { cursor: pointer; }
 .nome-vip { color: var(--vip) !important; font-weight: 700; }
 .nome-vip .vip-medalha { color: var(--vip); margin-right: 4px; font-size: .95em; }
 .badge-vip { background: #fdf3d7; color: var(--vip); border: 1px solid #e3c46a; font-weight: 700; }
-.perfil-vip .card, .perfil-vip .profile-header { border: 2px solid var(--vip) !important; }
+.perfil-vip .card, .perfil-vip .profile-header, .perfil-vip .form-section { border: 2px solid var(--vip) !important; }
+/* Perfil VIP: todos os cards de todas as abas no padrão do card "Emissão de Documentos" */
+.perfil-vip .form-section {
+  border-radius: 10px; overflow: hidden;
+  box-shadow: 0 1px 3px rgba(178,142,54,.10), 0 0 0 1px rgba(178,142,54,.05);
+}
+.perfil-vip .form-section-title {
+  padding: 14px 20px; background: #f6f2e8; border-bottom: 1px solid #e8dec6;
+  font-size: 14px; font-weight: 600; color: #1f2937; border-radius: 0;
+  text-transform: none; letter-spacing: normal;
+}
+.perfil-vip .card-header { background: #f6f2e8; border-bottom: 1px solid #e8dec6; }
+.perfil-vip .card-header h3 { font-size: 14px; font-weight: 600; color: #1f2937; }
+/* card com o nome do cliente um pouco mais escuro */
+.perfil-vip .profile-header { background: #f1e9d6; }
 .card.card-vip { border: 2px solid var(--vip); }
